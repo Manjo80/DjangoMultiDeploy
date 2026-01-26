@@ -15,7 +15,7 @@ fi
 echo
 echo "DB-Setup wählen:"
 echo "  1) PostgreSQL lokal installieren + DB/User anlegen"
-echo "  2) Remote PostgreSQL nutzen (Modus B: Admin-User anlegen lassen, DB/User remote erstellen)"
+echo "  2) Remote PostgreSQL nutzen (Modus B: Admin-User darf DB + User anlegen)"
 read -p "Auswahl (1/2): " DBMODE
 
 DBNAME="gpsmgr"
@@ -23,7 +23,8 @@ DBUSER="gpsmgr_user"
 DBPORT="5432"
 
 apt update && apt upgrade -y
-apt install -y sudo curl git nano ca-certificates openssl net-tools nginx python3 python3-venv python3-pip build-essential libpq-dev
+apt install -y sudo curl git nano ca-certificates openssl net-tools nginx \
+               python3 python3-venv python3-pip build-essential libpq-dev
 
 if ! id "$APPUSER" &>/dev/null; then
   adduser "$APPUSER"
@@ -31,6 +32,8 @@ fi
 
 DBHOST="localhost"
 DBPASS=""
+
+cd /tmp   # <<< WICHTIG: verhindert psql Permission-Warnungen
 
 if [ "$DBMODE" = "1" ]; then
   echo "=== Lokale PostgreSQL Installation ==="
@@ -65,12 +68,10 @@ else
   apt install -y postgresql-client
   export PGPASSWORD="$PGADMINPASS"
 
-  echo "=== Remote DB anlegen (falls nicht vorhanden) ==="
   psql -h "$DBHOST" -p "$DBPORT" -U "$PGADMIN" -tAc \
     "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
     psql -h "$DBHOST" -p "$DBPORT" -U "$PGADMIN" -c "CREATE DATABASE $DBNAME;"
 
-  echo "=== Remote User anlegen/aktualisieren ==="
   psql -h "$DBHOST" -p "$DBPORT" -U "$PGADMIN" -tAc \
     "SELECT 1 FROM pg_roles WHERE rolname='$DBUSER'" | grep -q 1 || \
     psql -h "$DBHOST" -p "$DBPORT" -U "$PGADMIN" -c "CREATE USER $DBUSER;"
@@ -78,9 +79,9 @@ else
   psql -h "$DBHOST" -p "$DBPORT" -U "$PGADMIN" -c \
     "ALTER USER $DBUSER WITH ENCRYPTED PASSWORD '$DBPASS';"
 
-  echo "=== Rechte setzen ==="
   psql -h "$DBHOST" -p "$DBPORT" -U "$PGADMIN" -c \
     "ALTER DATABASE $DBNAME OWNER TO $DBUSER;"
+
   psql -h "$DBHOST" -p "$DBPORT" -U "$PGADMIN" -c \
     "GRANT ALL PRIVILEGES ON DATABASE $DBNAME TO $DBUSER;"
 
@@ -130,12 +131,8 @@ DEBUG = os.getenv("DEBUG","False") == "True"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS","*").split(",")
 
 INSTALLED_APPS = [
- "django.contrib.admin",
- "django.contrib.auth",
- "django.contrib.contenttypes",
- "django.contrib.sessions",
- "django.contrib.messages",
- "django.contrib.staticfiles",
+ "django.contrib.admin","django.contrib.auth","django.contrib.contenttypes",
+ "django.contrib.sessions","django.contrib.messages","django.contrib.staticfiles",
  "app",
 ]
 
