@@ -3,13 +3,8 @@ set -euo pipefail
 
 echo "=== GPS Manager Installer (Debian 12) ==="
 
-read -r -p "Linux-User für die App (z.B. gps): " APPUSER
-APPUSER="${APPUSER// /}"   # entfernt Leerzeichen
-
-if [[ -z "$APPUSER" || ! "$APPUSER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
-  echo "Ungültiger Benutzername: '$APPUSER' (nur a-z0-9_- , max 32, kein Leerzeichen)"
-  exit 1
-fi
+read -p "Linux-User für die App (z.B. gps): " APPUSER
+APPDIR="/srv/gpsmgr"
 
 read -s -p "Django SECRET_KEY (leer = automatisch generieren): " DJKEY
 echo
