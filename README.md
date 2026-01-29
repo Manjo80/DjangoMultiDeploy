@@ -1,12 +1,3 @@
-Hier ist die **saubere, funktionierende SSH-Key-Anleitung** für GitHub – ohne Umwege, ohne Theorie, genau so, wie du sie auf deinem Debian/LXC-Server brauchst, um dein Skript zu **clonen, pullen und später weiterzuverwenden**.
-
-Ich gehe davon aus:
-✔ du bist auf dem Server per SSH eingeloggt
-✔ du willst **ohne Passwort** auf **private Repos** zugreifen
-✔ du willst es stabil für Folgeprojekte
-
----
-
 # 🔐 GitHub SSH-Login einrichten (Debian / LXC)
 
 ## ✅ 1. Als der richtige User einloggen
