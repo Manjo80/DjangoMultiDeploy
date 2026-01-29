@@ -68,7 +68,11 @@ if ! id "$APPUSER" &>/dev/null; then
   adduser "$APPUSER"
 fi
 
-cd /tmp
+# >>> WICHTIG: sudo + systemctl erlauben
+usermod -aG sudo "$APPUSER"
+
+echo "$APPUSER ALL=(ALL) ALL" > /etc/sudoers.d/$APPUSER
+chmod 440 /etc/sudoers.d/$APPUSER
 
 # -------------------------------------------------------------------
 # PostgreSQL
