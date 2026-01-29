@@ -25,7 +25,7 @@ DBPASS=""
 # -------------------------------------------------------------------
 # Linux User
 # -------------------------------------------------------------------
-read -p "Linux-User für die App (z.B. gps): " APPUSER
+read -p "Linux-User für die App (wird erstellt, z.B. gps): " APPUSER
 if [ -z "${APPUSER:-}" ]; then
   echo "FEHLER: APPUSER darf nicht leer sein."
   exit 1
@@ -68,9 +68,8 @@ if ! id "$APPUSER" &>/dev/null; then
   adduser "$APPUSER"
 fi
 
-# >>> WICHTIG: sudo + systemctl erlauben
+# sudo + systemctl erlauben
 usermod -aG sudo "$APPUSER"
-
 echo "$APPUSER ALL=(ALL) ALL" > /etc/sudoers.d/$APPUSER
 chmod 440 /etc/sudoers.d/$APPUSER
 
@@ -134,11 +133,11 @@ chown "$APPUSER:$APPUSER" "$APPDIR"
 # -------------------------------------------------------------------
 # Django Setup
 # -------------------------------------------------------------------
-sudo -u "$APPUSER" env APPDIR="$APPDIR" bash <<'EOF'
-set -euo pipefail
+sudo -u "$APPUSER" bash <<EOF
+set -e
 cd "$APPDIR"
 python3 -m venv .venv
-source .venv/bin/activate
+. .venv/bin/activate
 pip install --upgrade pip
 pip install django gunicorn "psycopg[binary]" python-dotenv
 django-admin startproject core .
@@ -233,18 +232,14 @@ chown "$APPUSER:$APPUSER" "$APPDIR/core/settings.py"
 # -------------------------------------------------------------------
 # Migration
 # -------------------------------------------------------------------
-sudo -u "$APPUSER" bash <<EOF
-cd "$APPDIR"
-source .venv/bin/activate
-python manage.py migrate
-EOF
+sudo -u "$APPUSER" bash -c "cd $APPDIR && .venv/bin/python manage.py migrate"
 
 # -------------------------------------------------------------------
 # systemd
 # -------------------------------------------------------------------
-cat > /etc/systemd/system/gpsmgr.service <<EOF
+cat > /etc/systemd/system/${PROJECTNAME}.service <<EOF
 [Unit]
-Description=GPS Manager
+Description=$PROJECTNAME Django Service
 After=network.target
 
 [Service]
@@ -259,12 +254,12 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now gpsmgr
+systemctl enable --now $PROJECTNAME
 
 # -------------------------------------------------------------------
 # nginx
 # -------------------------------------------------------------------
-cat > /etc/nginx/sites-available/gpsmgr <<'EOF'
+cat > /etc/nginx/sites-available/$PROJECTNAME <<'EOF'
 server {
   listen 80;
   server_name _;
@@ -280,7 +275,7 @@ server {
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/gpsmgr /etc/nginx/sites-enabled/gpsmgr
+ln -sf /etc/nginx/sites-available/$PROJECTNAME /etc/nginx/sites-enabled/$PROJECTNAME
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
 
@@ -290,7 +285,9 @@ nginx -t && systemctl restart nginx
 echo "======================================"
 echo "FERTIG"
 echo "Projekt: $APPDIR"
-echo "Superuser anlegen:"
-echo "sudo -u $APPUSER bash -lc 'cd $APPDIR && source .venv/bin/activate && python manage.py createsuperuser'"
+echo
+echo "Superuser anlegen mit:"
+echo "sudo -u $APPUSER $APPDIR/.venv/bin/python $APPDIR/manage.py createsuperuser"
+echo
 echo "Dann öffnen: http://SERVER-IP/admin"
 echo "======================================"
