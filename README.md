@@ -1,10 +1,3 @@
-Hier ist ein fertiges GitHub-README für dein Installer-Skript.
-Du kannst das 1:1 als README.md in dein Repo legen.
-
-Ich habe alles drin, was dein Skript speziell macht, inkl. DEV/PROD-Modus, Reverse-Proxy-Support, Host-Tools, Mode-Switch, DB-Handling und Security-Hinweis zu Passwörtern.
-
-⸻
-
 📦 Django GPS Manager – Debian/LXC Installer
 
 Automatisches Installationsskript für einen Django + Gunicorn + nginx + PostgreSQL Stack auf Debian 12 (optimiert für Proxmox LXC).
