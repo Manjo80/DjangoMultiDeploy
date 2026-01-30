@@ -1,3 +1,17 @@
+Alles klar 👍
+Hier ist die aktualisierte, saubere README, passend zu deinem letzten finalen Installer, inkl.:
+	•	DB-User und Passwort-Abfrage
+	•	Trennung Linux-User ≠ DB-User
+	•	automatische CSRF_TRUSTED_ORIGINS
+	•	DEV / PROD
+	•	Update-Skript mit Logging
+	•	GitHub-SSH-Workflow
+	•	klare Security-Hinweise
+
+Du kannst das 1:1 als README.md in dein GitHub-Repo legen.
+
+⸻
+
 🚀 Django Installer (Debian & Ubuntu)
 
 Ein interaktives Installationsskript für einen Django-Server auf Debian oder Ubuntu, inkl.:
@@ -232,3 +246,12 @@ keyctl=1
 	•	Projekt- & Behörden-Systeme
 	•	LXC / VM / Bare-Metal
 	•	reproduzierbare Server-Setups
+
+⸻
+
+Wenn du willst, können wir als nächsten Schritt noch:
+	•	automatisches DB-Backup vor Update
+	•	getrennten Read-Only DB-User für PROD
+	•	oder eine Minimal-Prod-Hardening-Variante
+
+Sag einfach 👍
