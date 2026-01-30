@@ -21,10 +21,6 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
-if grep -qaE '(lxc|container)' /proc/1/environ 2>/dev/null || [ -f /run/systemd/container ]; then
-  echo "HINWEIS: Container erkannt. In Proxmox LXC ggf. nesting=1,keyctl=1 aktivieren."
-fi
-
 export DEBIAN_FRONTEND=noninteractive
 
 echo "=== Django Installer (${PRETTY_NAME:-$ID}) ==="
@@ -59,11 +55,27 @@ if [ "$MODESEL" = "1" ]; then MODE="dev"; DEBUG_VALUE="True"; else MODE="prod"; 
 # Hosts
 # -------------------------------------------------------------------
 DEFAULT_ALLOWED_HOSTS="${LOCAL_IP},127.0.0.1,localhost"
-[ "$MODE" = "prod" ] && echo "PROD: DNS-Namen eintragen (z.B. app.intern.lan, app.example.com)"
+[ "$MODE" = "prod" ] && echo "PROD: DNS-Namen eintragen (z.B. gps.famhub.eu, app.intern.lan)"
 read -p "ALLOWED_HOSTS (Komma-separiert) [${DEFAULT_ALLOWED_HOSTS}]: " ALLOWED_HOSTS
 ALLOWED_HOSTS="${ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS}"
 NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ' | xargs)"
 [ -z "${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
+
+# -------------------------------------------------------------------
+# CSRF_TRUSTED_ORIGINS automatisch bauen (nur PROD)
+# - überspringt localhost + IPs, weil meist nicht per https genutzt
+# - nimmt nur "echte" Hostnames -> https://hostname
+# -------------------------------------------------------------------
+CSRF_TRUSTED_ORIGINS_VALUE=""
+if [ "$MODE" = "prod" ]; then
+  CSRF_TRUSTED_ORIGINS_VALUE="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | awk '
+    function is_ip(x) { return (x ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) }
+    NF {
+      gsub(/^[ \t]+|[ \t]+$/, "", $0)
+      if ($0 == "" || $0 == "localhost" || is_ip($0)) next
+      print "https://" $0
+    }' | awk '!seen[$0]++' | paste -sd, -)"
+fi
 
 # -------------------------------------------------------------------
 # Defaults DB (Postgres: keine '-' in unquoted identifiers)
@@ -119,7 +131,7 @@ if ! id "$APPUSER" &>/dev/null; then
   adduser "$APPUSER"
 fi
 
-# Optional: du wolltest sudo generell; behalten wir, aber Update läuft trotzdem als App-User.
+# Optional: generelles sudo (wie du wolltest)
 usermod -aG sudo "$APPUSER"
 echo "$APPUSER ALL=(ALL) ALL" > /etc/sudoers.d/$APPUSER
 chmod 440 /etc/sudoers.d/$APPUSER
@@ -203,14 +215,14 @@ DB_PASS=$DBPASS
 DB_HOST=$DBHOST
 DB_PORT=$DBPORT
 ALLOWED_HOSTS=$ALLOWED_HOSTS
-CSRF_TRUSTED_ORIGINS=
+CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
 EOF
 
 chown "$APPUSER:$APPUSER" "$APPDIR/.env"
 chmod 600 "$APPDIR/.env"
 
 # -------------------------------------------------------------------
-# settings.py
+# settings.py (proxy/CSRF/Static korrekt)
 # -------------------------------------------------------------------
 cat > "$APPDIR/core/settings.py" <<'EOF'
 from pathlib import Path
@@ -220,62 +232,72 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-MODE = os.getenv("MODE","dev").lower()
-SECRET_KEY = os.getenv("SECRET_KEY","unsafe")
-DEBUG = os.getenv("DEBUG","False") == "True"
+MODE = os.getenv("MODE", "dev").lower()
+SECRET_KEY = os.getenv("SECRET_KEY", "unsafe")
+DEBUG = os.getenv("DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS","").split(",") if h.strip()]
-CSRF_TRUSTED_ORIGINS = [h.strip() for h in os.getenv("CSRF_TRUSTED_ORIGINS","").split(",") if h.strip()]
+def env_list(name: str):
+    return [x.strip() for x in os.getenv(name, "").split(",") if x.strip()]
+
+ALLOWED_HOSTS = env_list("ALLOWED_HOSTS")
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
 
 INSTALLED_APPS = [
- "django.contrib.admin","django.contrib.auth","django.contrib.contenttypes",
- "django.contrib.sessions","django.contrib.messages","django.contrib.staticfiles","app",
+    "django.contrib.admin","django.contrib.auth","django.contrib.contenttypes",
+    "django.contrib.sessions","django.contrib.messages","django.contrib.staticfiles",
+    "app",
 ]
 
 MIDDLEWARE = [
- "django.middleware.security.SecurityMiddleware",
- "django.contrib.sessions.middleware.SessionMiddleware",
- "django.middleware.common.CommonMiddleware",
- "django.middleware.csrf.CsrfViewMiddleware",
- "django.contrib.auth.middleware.AuthenticationMiddleware",
- "django.contrib.messages.middleware.MessageMiddleware",
- "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
 ROOT_URLCONF = "core.urls"
 
 TEMPLATES = [{
- "BACKEND": "django.template.backends.django.DjangoTemplates",
- "DIRS": [], "APP_DIRS": True,
- "OPTIONS": {"context_processors": [
-  "django.template.context_processors.request",
-  "django.contrib.auth.context_processors.auth",
-  "django.contrib.messages.context_processors.messages",
- ]},
+    "BACKEND": "django.template.backends.django.DjangoTemplates",
+    "DIRS": [],
+    "APP_DIRS": True,
+    "OPTIONS": {"context_processors": [
+        "django.template.context_processors.request",
+        "django.contrib.auth.context_processors.auth",
+        "django.contrib.messages.context_processors.messages",
+    ]},
 }]
 
 WSGI_APPLICATION = "core.wsgi.application"
 
 DATABASES = {"default": {
- "ENGINE": "django.db.backends.postgresql",
- "NAME": os.getenv("DB_NAME"),
- "USER": os.getenv("DB_USER"),
- "PASSWORD": os.getenv("DB_PASS"),
- "HOST": os.getenv("DB_HOST"),
- "PORT": os.getenv("DB_PORT"),
+    "ENGINE": "django.db.backends.postgresql",
+    "NAME": os.getenv("DB_NAME"),
+    "USER": os.getenv("DB_USER"),
+    "PASSWORD": os.getenv("DB_PASS"),
+    "HOST": os.getenv("DB_HOST", "localhost"),
+    "PORT": os.getenv("DB_PORT", "5432"),
 }}
 
-LANGUAGE_CODE="de-de"
-TIME_ZONE="Europe/Luxembourg"
-USE_I18N=True
-USE_TZ=True
+LANGUAGE_CODE = "de-de"
+TIME_ZONE = "Europe/Luxembourg"
+USE_I18N = True
+USE_TZ = True
 
-STATIC_URL="static/"
-DEFAULT_AUTO_FIELD="django.db.models.BigAutoField"
+STATIC_URL = "/static/"
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 if MODE == "prod":
-    SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO","https")
-    SESSION_COOKIE_HTTPONLY=True
+    USE_X_FORWARDED_HOST = True
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = True
 EOF
 
 chown "$APPUSER:$APPUSER" "$APPDIR/core/settings.py"
@@ -339,7 +361,7 @@ EOF
 chmod 440 /etc/sudoers.d/${PROJECTNAME}-service
 
 # -------------------------------------------------------------------
-# UPDATE-Skript (Lösung A): läuft als App-User (Git/venv ok), restart via sudo ohne Passwort
+# UPDATE-Skript (Lösung A) + migration check
 # -------------------------------------------------------------------
 cat > /usr/local/sbin/${PROJECTNAME}_update.sh <<EOF
 #!/bin/bash
@@ -362,6 +384,9 @@ else
   echo "-- requirements.txt nicht gefunden (überspringe pip install)"
 fi
 
+echo "-- migration check (warn if missing migrations)"
+"\$APPDIR/.venv/bin/python" "\$APPDIR/manage.py" makemigrations --check --dry-run
+
 echo "-- migrate"
 "\$APPDIR/.venv/bin/python" "\$APPDIR/manage.py" migrate
 
@@ -371,11 +396,10 @@ sudo systemctl restart "\$SERVICE"
 echo "=== UPDATE DONE ==="
 EOF
 
-# App-User soll es ausführen können
 chmod 755 /usr/local/sbin/${PROJECTNAME}_update.sh
 
 # -------------------------------------------------------------------
-# LOGIN-Hinweis: bei jedem Login die wichtigsten Kommandos anzeigen
+# LOGIN-Hinweis: bei jedem Login Kommandos anzeigen
 # -------------------------------------------------------------------
 cat > /etc/profile.d/${PROJECTNAME}_motd.sh <<EOF
 case "\$-" in
@@ -388,7 +412,7 @@ echo "=== $PROJECTNAME Commands ==="
 echo "Project dir: $APPDIR"
 echo "Service:     $PROJECTNAME"
 echo
-echo "Update (runs as current user; restart via sudo):"
+echo "Update (run as $APPUSER, no sudo needed):"
 echo "  ${PROJECTNAME}_update.sh"
 echo
 echo "Status/Logs:"
@@ -397,6 +421,9 @@ echo "  journalctl -u $PROJECTNAME -f"
 echo
 echo "Create Django superuser:"
 echo "  sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
+echo
+echo "CSRF_TRUSTED_ORIGINS in PROD auto:"
+echo "  $CSRF_TRUSTED_ORIGINS_VALUE"
 echo "============================="
 echo
 EOF
@@ -409,7 +436,8 @@ echo "======================================"
 echo "FERTIG: $APPDIR"
 echo "OS: ${PRETTY_NAME:-$ID}"
 echo "Mode: $MODE (DEBUG=$DEBUG_VALUE)"
-echo "nginx server_name: $NGINX_SERVER_NAMES"
+echo "ALLOWED_HOSTS: $ALLOWED_HOSTS"
+echo "CSRF_TRUSTED_ORIGINS: $CSRF_TRUSTED_ORIGINS_VALUE"
 echo
 echo "Update Script (run as $APPUSER):"
 echo "  ${PROJECTNAME}_update.sh"
@@ -418,5 +446,4 @@ echo "Superuser anlegen:"
 echo "  sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
 echo
 echo "Hinweis: Die Kommandos werden bei jedem Login angezeigt."
-echo "Dann öffnen: http://SERVER-IP/admin"
 echo "======================================"
