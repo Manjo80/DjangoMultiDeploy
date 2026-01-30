@@ -1,12 +1,12 @@
 Alles klar 👍
 Hier ist die aktualisierte, saubere README, passend zu deinem letzten finalen Installer, inkl.:
-	•	DB-User und Passwort-Abfrage
-	•	Trennung Linux-User ≠ DB-User
-	•	automatische CSRF_TRUSTED_ORIGINS
-	•	DEV / PROD
-	•	Update-Skript mit Logging
-	•	GitHub-SSH-Workflow
-	•	klare Security-Hinweise
+	- DB-User und Passwort-Abfrage
+	- Trennung Linux-User ≠ DB-User
+	- automatische CSRF_TRUSTED_ORIGINS
+	- DEV / PROD
+	- Update-Skript mit Logging
+	- GitHub-SSH-Workflow
+	- klare Security-Hinweise
 
 Du kannst das 1:1 als README.md in dein GitHub-Repo legen.
 
