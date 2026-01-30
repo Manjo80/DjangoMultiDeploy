@@ -66,24 +66,22 @@ NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ' | xargs)"
 [ -z "${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
 
 # -------------------------------------------------------------------
-# Defaults DB
+# Defaults DB (Postgres: keine '-' in unquoted identifiers)
 # -------------------------------------------------------------------
-# DBNAME darf in Postgres keine Bindestriche haben -> automatisch umwandeln
-DBNAME="${PROJECTNAME//-/_}"
-DBUSER="${PROJECTNAME//-/_}_user"
+DBNAME_DEFAULT="${PROJECTNAME//-/_}"
+DBUSER_DEFAULT="${PROJECTNAME//-/_}_user"
 DBPORT="5432"
 DBHOST="localhost"
 DBPASS=""
 
-# Optional: DBNAME/DBUSER manuell überschreiben
 echo
-read -p "DB Name [${DBNAME}]: " TMP_DBNAME
-DBNAME="${TMP_DBNAME:-$DBNAME}"
-DBNAME="${DBNAME//-/_}"   # nochmal absichern
+read -p "DB Name [${DBNAME_DEFAULT}]: " TMP_DBNAME
+DBNAME="${TMP_DBNAME:-$DBNAME_DEFAULT}"
+DBNAME="${DBNAME//-/_}"
 
-read -p "DB User [${DBUSER}]: " TMP_DBUSER
-DBUSER="${TMP_DBUSER:-$DBUSER}"
-DBUSER="${DBUSER//-/_}"   # absichern (Rolle ohne -)
+read -p "DB User [${DBUSER_DEFAULT}]: " TMP_DBUSER
+DBUSER="${TMP_DBUSER:-$DBUSER_DEFAULT}"
+DBUSER="${DBUSER//-/_}"
 
 # -------------------------------------------------------------------
 # Linux User
@@ -121,13 +119,13 @@ if ! id "$APPUSER" &>/dev/null; then
   adduser "$APPUSER"
 fi
 
-# (Dein Wunsch) voller sudo für App-User
+# Voller sudo für App-User (wie von dir gewollt)
 usermod -aG sudo "$APPUSER"
 echo "$APPUSER ALL=(ALL) ALL" > /etc/sudoers.d/$APPUSER
 chmod 440 /etc/sudoers.d/$APPUSER
 
 # -------------------------------------------------------------------
-# PostgreSQL (WICHTIG: neutrales Arbeitsverzeichnis, damit postgres-user nicht meckert)
+# PostgreSQL (WICHTIG: neutrales Arbeitsverzeichnis)
 # -------------------------------------------------------------------
 cd /tmp
 
@@ -136,31 +134,25 @@ if [ "$DBMODE" = "1" ]; then
   apt install -y postgresql postgresql-contrib
   systemctl enable --now postgresql
 
-  read -s -p "Passwort für lokalen DB-User (${DBUSER}): " DBPASS
-  echo
+  read -s -p "Passwort für lokalen DB-User (${DBUSER}): " DBPASS; echo
   [ -z "$DBPASS" ] && echo "FEHLER: Passwort leer." && exit 1
 
-  # DB anlegen wenn nicht vorhanden
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE DATABASE \"$DBNAME\";"
 
-  # User anlegen wenn nicht vorhanden
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DBUSER'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE USER \"$DBUSER\" WITH ENCRYPTED PASSWORD '$DBPASS';"
 
   sudo -u postgres psql -c "ALTER DATABASE \"$DBNAME\" OWNER TO \"$DBUSER\";"
   sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DBNAME\" TO \"$DBUSER\";"
-
 else
   echo "=== Remote PostgreSQL ==="
   read -p "Remote DB Host/IP: " DBHOST
   read -p "Remote DB Port [5432]: " TMPPORT
   DBPORT="${TMPPORT:-5432}"
   read -p "Remote Admin-User: " PGADMIN
-  read -s -p "Passwort Admin: " PGADMINPASS
-  echo
-  read -s -p "Passwort App-DB-User (${DBUSER}): " DBPASS
-  echo
+  read -s -p "Passwort Admin: " PGADMINPASS; echo
+  read -s -p "Passwort App-DB-User (${DBUSER}): " DBPASS; echo
 
   apt install -y postgresql-client
   export PGPASSWORD="$PGADMINPASS"
@@ -539,21 +531,98 @@ sed -i "s|__PROJECTNAME__|$PROJECTNAME|g" /usr/local/sbin/${PROJECTNAME}_set_hos
 chmod 750 /usr/local/sbin/${PROJECTNAME}_set_hosts.sh
 
 # -------------------------------------------------------------------
+# UPDATE-Skript: pull -> pip -> migrate -> restart (wird installiert, aber nicht automatisch ausgeführt)
+# -------------------------------------------------------------------
+cat > /usr/local/sbin/${PROJECTNAME}_update.sh <<EOF
+#!/bin/bash
+set -euo pipefail
+
+APPDIR="$APPDIR"
+SERVICE="$PROJECTNAME"
+APPUSER="$APPUSER"
+
+echo "=== UPDATE START (\$SERVICE) ==="
+cd "\$APPDIR"
+
+echo "-- git pull"
+git pull
+
+if [ -f "\$APPDIR/requirements.txt" ]; then
+  echo "-- install requirements"
+  . "\$APPDIR/.venv/bin/activate"
+  pip install -r "\$APPDIR/requirements.txt"
+else
+  echo "-- requirements.txt nicht gefunden (überspringe pip install)"
+fi
+
+echo "-- migrate"
+"\$APPDIR/.venv/bin/python" "\$APPDIR/manage.py" migrate
+
+echo "-- restart service"
+systemctl restart "\$SERVICE"
+
+echo "=== UPDATE DONE ==="
+EOF
+
+chmod 750 /usr/local/sbin/${PROJECTNAME}_update.sh
+
+# -------------------------------------------------------------------
+# LOGIN-Hinweis: bei jedem Login die wichtigsten Kommandos anzeigen
+# (zeigt sich nach Reboot beim nächsten SSH/Console Login)
+# -------------------------------------------------------------------
+cat > /etc/profile.d/${PROJECTNAME}_motd.sh <<EOF
+# Auto-generated help for $PROJECTNAME
+# Shown on interactive login shells.
+case "\$-" in
+  *i*) ;;
+  *) return ;;
+esac
+
+echo
+echo "=== $PROJECTNAME Short Commands ==="
+echo "Project dir: $APPDIR"
+echo "Service:     $PROJECTNAME"
+echo
+echo "Status/Logs:"
+echo "  systemctl status $PROJECTNAME"
+echo "  journalctl -u $PROJECTNAME -f"
+echo
+echo "Update (pull + pip + migrate + restart):"
+echo "  sudo ${PROJECTNAME}_update.sh"
+echo
+echo "Mode switch:"
+echo "  sudo ${PROJECTNAME}_switch_mode.sh dev"
+echo "  sudo ${PROJECTNAME}_switch_mode.sh prod"
+echo
+echo "Hosts / Domains:"
+echo "  sudo ${PROJECTNAME}_set_hosts.sh list"
+echo "  sudo ${PROJECTNAME}_set_hosts.sh add example.com --https"
+echo
+echo "Create Django superuser:"
+echo "  sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
+echo "==================================="
+echo
+EOF
+
+chmod 644 /etc/profile.d/${PROJECTNAME}_motd.sh
+
+# -------------------------------------------------------------------
 # Done
 # -------------------------------------------------------------------
 echo "======================================"
 echo "FERTIG: $APPDIR"
+echo "OS: ${PRETTY_NAME:-$ID}"
 echo "Mode: $MODE (DEBUG=$DEBUG_VALUE)"
 echo "nginx server_name: $NGINX_SERVER_NAMES"
 echo
+echo "Wichtige Tools wurden installiert:"
+echo "  /usr/local/sbin/${PROJECTNAME}_update.sh"
+echo "  /usr/local/sbin/${PROJECTNAME}_switch_mode.sh"
+echo "  /usr/local/sbin/${PROJECTNAME}_set_hosts.sh"
+echo
 echo "Superuser anlegen:"
-echo "sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
+echo "  sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
 echo
-echo "Mode wechseln:"
-echo "  sudo /usr/local/sbin/${PROJECTNAME}_switch_mode.sh dev"
-echo "  sudo /usr/local/sbin/${PROJECTNAME}_switch_mode.sh prod"
-echo
-echo "Hosts ändern:"
-echo "  sudo /usr/local/sbin/${PROJECTNAME}_set_hosts.sh list"
-echo "  sudo /usr/local/sbin/${PROJECTNAME}_set_hosts.sh add example.com --https"
+echo "Hinweis: Die Kommandos werden bei jedem Login automatisch angezeigt."
+echo "Dann öffnen: http://SERVER-IP/admin"
 echo "======================================"
