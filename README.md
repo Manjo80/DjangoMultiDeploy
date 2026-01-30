@@ -1,67 +1,120 @@
-# Django Debian/Ubuntu Installer (Gunicorn + nginx + PostgreSQL)
+🚀 Django Installer (Debian & Ubuntu)
 
-Automatisches Installationsskript für einen Django-Server auf **Debian oder Ubuntu**.
+Ein interaktives Installationsskript für einen Django-Server auf Debian oder Ubuntu, inkl.:
+	•	Python venv (projektgebunden)
+	•	Django + Gunicorn
+	•	PostgreSQL (lokal oder remote)
+	•	systemd Service
+	•	nginx Reverse Proxy
+	•	DEV / PROD Modus
+	•	automatische Host- & CSRF-Konfiguration
+	•	Update-Skript mit Fehler-Logging
 
-Enthält:
-- Python venv
-- Django Projekt + App
-- PostgreSQL (lokal oder remote)
-- Gunicorn + systemd Service
-- nginx Reverse Proxy
-- DEV / PROD Modus
-- Reverse-Proxy-Support (HTTPS extern möglich)
+Optimiert für:
+	•	Proxmox LXC
+	•	normale Debian/Ubuntu Server
+	•	Reverse-Proxy-Setups (HTTPS extern)
 
----
+⸻
 
-## Features
+✨ Features
+	•	Debian 12 & Ubuntu 22.04+ kompatibel
+	•	eigener Linux-App-User
+	•	separater PostgreSQL-User
+	•	.env-basierte Konfiguration
+	•	automatisches ALLOWED_HOSTS
+	•	automatisches CSRF_TRUSTED_ORIGINS
+	•	nginx server_name automatisch gesetzt
+	•	reproduzierbares Setup
+	•	Update-Skript mit Logs
 
-- Debian 12 / Ubuntu 22.04+ kompatibel
-- eigener App-User
-- `.env`-basierte Konfiguration
-- `ALLOWED_HOSTS` Abfrage + nginx `server_name`
-- vorbereitet für externen Reverse Proxy
-- DB automatisch anlegen (lokal oder remote)
+⸻
 
----
+🧠 Architektur (wichtig!)
 
-## Installation
+Bereich	Zweck
+Linux-User (APPUSER)	Startet Django, besitzt venv
+PostgreSQL-User (DBUSER)	DB-Zugriff für Django
+/srv/<projekt>	Projekt + venv
+.env	Einziger Ort für Secrets
 
-```bash
+👉 Linux-User ≠ DB-User (Absicht!)
+
+⸻
+
+📦 Installation
+
 chmod +x install.sh
 sudo ./install.sh
 
-Abgefragt werden u. a.:
-	•	Projektname → /srv/<name>
+Das Skript fragt u. a. ab:
+	•	Projektname → /srv/<projekt>
 	•	DEV oder PROD
-	•	ALLOWED_HOSTS (IP wird automatisch erkannt)
-	•	Linux App-User
-	•	DB Modus (lokal/remote)
-	•	DB-Passwörter
+	•	ALLOWED_HOSTS
+	•	Linux-App-User
+	•	PostgreSQL DB-Name
+	•	PostgreSQL DB-User
+	•	PostgreSQL Passwort
+	•	lokale oder Remote-DB
 	•	Django SECRET_KEY
 
 ⸻
 
-Nach der Installation
+🔧 DEV / PROD Modus
 
-Superuser anlegen:
+DEV
+	•	DEBUG=True
+	•	geeignet für LAN / Tests
 
-sudo -u <appuser> /srv/<projekt>/.venv/bin/python /srv/<projekt>/manage.py createsuperuser
+PROD
+	•	DEBUG=False
+	•	vorbereitet für Reverse Proxy (HTTPS)
+	•	SECURE_PROXY_SSL_HEADER aktiv
 
-Service prüfen:
+Modus wird in .env gespeichert:
 
-systemctl status <projekt>
+MODE=dev | prod
 
-Aufruf (intern):
-
-http://SERVER-IP/admin
-
-Extern über deinen Reverse Proxy (HTTPS).
 
 ⸻
 
-Daten & Sicherheit
+🌍 Hosts & CSRF (automatisch!)
 
-Alle Secrets liegen in:
+Du gibst nur ALLOWED_HOSTS an:
+
+ALLOWED_HOSTS=192.168.1.10,localhost,gps.example.com
+
+Das Skript erzeugt automatisch:
+
+CSRF_TRUSTED_ORIGINS=https://gps.example.com
+
+✔ IPs & localhost werden ignoriert
+✔ nur DNS-Namen → https://…
+✔ perfekt für Reverse-Proxy-Setups
+
+⸻
+
+🌐 nginx
+
+server_name wird automatisch aus ALLOWED_HOSTS gebaut:
+
+server_name gps.example.com 192.168.1.10 localhost;
+
+nginx kümmert sich nicht um CSRF – das ist rein Django.
+
+⸻
+
+🗄️ Datenbank
+
+Lokal
+	•	PostgreSQL wird installiert
+	•	DB + User werden angelegt
+
+Remote
+	•	DB-Zugangsdaten werden abgefragt
+	•	kein lokaler PostgreSQL nötig
+
+Alle DB-Zugangsdaten landen nur in:
 
 /srv/<projekt>/.env
 
@@ -70,12 +123,17 @@ Rechte:
 chmod 600 .env
 chown <appuser>:<appuser> .env
 
-✔ nicht im Code
-✔ nicht im systemd Service
-✔ nur root + App-User
-❌ darf nicht ins Git-Repo
 
-Empfohlen für .gitignore:
+⸻
+
+🔐 Security-Hinweise
+
+✔ keine Secrets im Code
+✔ keine Secrets im systemd-Service
+✔ .env nur für root + App-User
+❌ .env darf niemals ins Git-Repo
+
+Empfohlene .gitignore:
 
 .env
 .venv/
@@ -84,72 +142,51 @@ __pycache__/
 
 ⸻
 
-Reverse Proxy (externes HTTPS)
+▶️ Superuser anlegen
 
-Das Setup ist vorbereitet für:
-	•	HAProxy
-	•	nginx Proxy
-	•	Traefik
-	•	Cloudflare Tunnel
+sudo -u <appuser> /srv/<projekt>/.venv/bin/python /srv/<projekt>/manage.py createsuperuser
 
-In PROD wird automatisch gesetzt:
+Admin:
 
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+http://SERVER-IP/admin
 
-Bei externen Domains ggf. zusätzlich setzen:
-
-CSRF_TRUSTED_ORIGINS=https://deinedomain.tld
-
-(in .env)
+(Extern über deinen Reverse Proxy)
 
 ⸻
 
-Proxmox LXC Hinweis
+🔄 Update-Skript (mit Logging)
 
-Container braucht:
+Bei der Installation wird automatisch erstellt:
 
-nesting=1
-keyctl=1
+/usr/local/sbin/<projekt>_update.sh
+
+Update ausführen
+
+sudo /usr/local/sbin/<projekt>_update.sh
+
+Was macht es?
+	1.	git pull (wenn Repo vorhanden)
+	2.	pip install -r requirements.txt (optional)
+	3.	python manage.py migrate
+	4.	systemctl restart <projekt>
+	5.	Logging in /var/log/<projekt>/
+
+Logs ansehen
+
+ls -lah /var/log/<projekt>/
+tail -n 200 /var/log/<projekt>/update-*.log
 
 
 ⸻
 
-Was das Skript bewusst nicht macht
-	•	kein HTTPS (macht dein Proxy)
-	•	kein Firewall-Setup
-	•	kein Backup-System
-	•	kein Update-Automatismus
+🔑 GitHub SSH Setup (für private Repos)
 
-⸻
+SSH-Key erzeugen (als App-User!)
 
-Gedacht für
-	•	Proxmox / LXC
-	•	interne Web-Tools
-	•	Projekt- & Behörden-Systeme
-	•	reproduzierbare Server-Setups
-
----
-
-# ✅ 3) GitHub SSH-Anleitung (für dein README oder Wiki)
-
-```markdown
-## GitHub SSH Zugriff einrichten (für private Repos)
-
-### 1. Als Ziel-User einloggen
-```bash
-su - <user>
-
-2. SSH-Key erzeugen
-
+su - <appuser>
 ssh-keygen -t ed25519 -f ~/.ssh/github_ed25519 -C "github-$(hostname)"
 
-Rechte:
-
-chmod 700 ~/.ssh
-chmod 600 ~/.ssh/github_ed25519
-chmod 644 ~/.ssh/github_ed25519.pub
-
-3. SSH Config anlegen
+SSH Config
 
 nano ~/.ssh/config
 
@@ -159,38 +196,39 @@ Host github.com
   IdentityFile ~/.ssh/github_ed25519
   IdentitiesOnly yes
 
-chmod 600 ~/.ssh/config
-
-4. Public Key bei GitHub eintragen
-
-cat ~/.ssh/github_ed25519.pub
-
-GitHub → Settings → SSH and GPG keys → New SSH key
-
-⸻
-
-5. Testen
+Test
 
 ssh -T git@github.com
 
-Muss „authenticated“ melden.
+Repo klonen
 
-⸻
-
-6. Repo clonen
-
-git clone git@github.com:DEINUSER/DEINREPO.git
-
-7. Updates
-
-git pull
+git clone git@github.com:USER/REPO.git
 
 
 ⸻
 
-Hinweis
+⚠️ Proxmox LXC Hinweis
 
-SSH-Keys sind userbezogen.
-Root, App-User, Admin-User → jeweils eigener Key nötig.
+Container braucht:
 
----
+nesting=1
+keyctl=1
+
+
+⸻
+
+❌ Was das Skript bewusst NICHT macht
+	•	kein HTTPS (macht dein Reverse Proxy)
+	•	kein Firewall-Setup
+	•	kein Backup-System
+	•	kein Auto-Scaling
+
+➡️ Ziel: klarer, stabiler Unterbau, kein Hosting-Framework.
+
+⸻
+
+🎯 Gedacht für
+	•	interne Tools
+	•	Projekt- & Behörden-Systeme
+	•	LXC / VM / Bare-Metal
+	•	reproduzierbare Server-Setups
