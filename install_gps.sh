@@ -119,13 +119,13 @@ if ! id "$APPUSER" &>/dev/null; then
   adduser "$APPUSER"
 fi
 
-# Voller sudo für App-User (wie von dir gewollt)
+# Optional: du wolltest sudo generell; behalten wir, aber Update läuft trotzdem als App-User.
 usermod -aG sudo "$APPUSER"
 echo "$APPUSER ALL=(ALL) ALL" > /etc/sudoers.d/$APPUSER
 chmod 440 /etc/sudoers.d/$APPUSER
 
 # -------------------------------------------------------------------
-# PostgreSQL (WICHTIG: neutrales Arbeitsverzeichnis)
+# PostgreSQL (neutrales Arbeitsverzeichnis)
 # -------------------------------------------------------------------
 cd /tmp
 
@@ -273,7 +273,6 @@ USE_TZ=True
 STATIC_URL="static/"
 DEFAULT_AUTO_FIELD="django.db.models.BigAutoField"
 
-# Reverse Proxy friendly in PROD
 if MODE == "prod":
     SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO","https")
     SESSION_COOKIE_HTTPONLY=True
@@ -332,206 +331,15 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
 
 # -------------------------------------------------------------------
-# Switch-Skript: DEV <-> PROD (ändert MODE/DEBUG, patched nginx server_name)
+# Sudoers (Lösung A): App-User darf NUR Service restart/status/logs ohne Passwort
 # -------------------------------------------------------------------
-cat > /usr/local/sbin/${PROJECTNAME}_switch_mode.sh <<EOF
-#!/bin/bash
-set -euo pipefail
-
-APPDIR="$APPDIR"
-PROJECTNAME="$PROJECTNAME"
-
-if [ "\${1:-}" != "dev" ] && [ "\${1:-}" != "prod" ]; then
-  echo "Usage: \$0 dev|prod"
-  exit 1
-fi
-
-MODE="\$1"
-if [ "\$MODE" = "dev" ]; then
-  DEBUG_VALUE="True"
-else
-  DEBUG_VALUE="False"
-fi
-
-ALLOWED_HOSTS_LINE=\$(grep -E '^ALLOWED_HOSTS=' "\$APPDIR/.env" || true)
-ALLOWED_HOSTS=\${ALLOWED_HOSTS_LINE#ALLOWED_HOSTS=}
-[ -z "\${ALLOWED_HOSTS:-}" ] && ALLOWED_HOSTS="127.0.0.1,localhost"
-
-NGINX_SERVER_NAMES=\$(echo "\$ALLOWED_HOSTS" | tr ',' ' ' | xargs)
-[ -z "\${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
-
-if grep -q '^MODE=' "\$APPDIR/.env"; then
-  sed -i "s/^MODE=.*/MODE=\$MODE/" "\$APPDIR/.env"
-else
-  echo "MODE=\$MODE" >> "\$APPDIR/.env"
-fi
-
-if grep -q '^DEBUG=' "\$APPDIR/.env"; then
-  sed -i "s/^DEBUG=.*/DEBUG=\$DEBUG_VALUE/" "\$APPDIR/.env"
-else
-  echo "DEBUG=\$DEBUG_VALUE" >> "\$APPDIR/.env"
-fi
-
-CONF="/etc/nginx/sites-available/\$PROJECTNAME"
-if [ -f "\$CONF" ]; then
-  sed -i "s/^  server_name .*/  server_name \$NGINX_SERVER_NAMES;/" "\$CONF"
-fi
-
-nginx -t
-systemctl restart nginx
-systemctl restart "\$PROJECTNAME"
-
-echo "OK: switched to \$MODE (DEBUG=\$DEBUG_VALUE)"
-echo "nginx server_name: \$NGINX_SERVER_NAMES"
+cat > /etc/sudoers.d/${PROJECTNAME}-service <<EOF
+$APPUSER ALL=NOPASSWD: /bin/systemctl restart $PROJECTNAME, /bin/systemctl status $PROJECTNAME, /bin/journalctl -u $PROJECTNAME
 EOF
-
-chmod 750 /usr/local/sbin/${PROJECTNAME}_switch_mode.sh
-
-# -------------------------------------------------------------------
-# Hosts-Skript: schnell Hosts setzen/hinzufügen (+ optional CSRF https origins)
-# -------------------------------------------------------------------
-cat > /usr/local/sbin/${PROJECTNAME}_set_hosts.sh <<'EOF'
-#!/bin/bash
-set -euo pipefail
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "Bitte als root ausführen (oder mit sudo)."
-  exit 1
-fi
-
-APPDIR="__APPDIR__"
-PROJECTNAME="__PROJECTNAME__"
-
-ENVFILE="$APPDIR/.env"
-NGCONF="/etc/nginx/sites-available/$PROJECTNAME"
-
-if [ ! -f "$ENVFILE" ]; then
-  echo "FEHLER: $ENVFILE nicht gefunden."
-  exit 1
-fi
-
-usage() {
-  cat <<USAGE
-Usage:
-  $0 list
-  $0 set "host1,host2,ip,localhost"
-  $0 add "neuerhost"
-  $0 add "neuerhost" --https
-  $0 set "host1,host2" --https
-
-Hinweis:
-  --https generiert CSRF_TRUSTED_ORIGINS als https://<host> für alle Nicht-IP Hosts.
-USAGE
-}
-
-MODE="list"
-HTTPS_MODE="no"
-
-if [ "${1:-}" = "" ]; then
-  usage
-  exit 1
-fi
-
-case "$1" in
-  list) MODE="list" ;;
-  set)  MODE="set" ;;
-  add)  MODE="add" ;;
-  *) usage; exit 1 ;;
-esac
-
-shift || true
-VALUE="${1:-}"
-
-if [ "${2:-}" = "--https" ] || [ "${1:-}" = "--https" ]; then
-  HTTPS_MODE="yes"
-fi
-
-get_env_value() { local key="$1"; grep -E "^${key}=" "$ENVFILE" | tail -n 1 | sed "s/^${key}=//" || true; }
-
-set_env_value() {
-  local key="$1" val="$2"
-  if grep -qE "^${key}=" "$ENVFILE"; then
-    sed -i "s|^${key}=.*|${key}=${val}|" "$ENVFILE"
-  else
-    echo "${key}=${val}" >> "$ENVFILE"
-  fi
-}
-
-normalize_hosts() { echo "$1" | tr ' ' '\n' | tr ',' '\n' | awk 'NF{print $0}' | awk '!seen[$0]++' | paste -sd, -; }
-hosts_to_server_names() { echo "$1" | tr ',' ' ' | xargs; }
-
-hosts_to_csrf_https() {
-  echo "$1" | tr ',' '\n' | awk '
-    NF {
-      h=$0
-      gsub(/^[ \t]+|[ \t]+$/, "", h)
-      if (h == "" || h == "localhost" || h ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) next
-      print "https://"h
-    }' | awk '!seen[$0]++' | paste -sd, -
-}
-
-CURRENT_ALLOWED="$(get_env_value ALLOWED_HOSTS)"
-CURRENT_CSRF="$(get_env_value CSRF_TRUSTED_ORIGINS)"
-
-if [ "$MODE" = "list" ]; then
-  echo "ALLOWED_HOSTS=$CURRENT_ALLOWED"
-  echo "CSRF_TRUSTED_ORIGINS=$CURRENT_CSRF"
-  exit 0
-fi
-
-if [ "$MODE" = "set" ]; then
-  [ -z "${VALUE:-}" ] && echo "FEHLER: set braucht Hostliste." && usage && exit 1
-  NEW_ALLOWED="$(normalize_hosts "$VALUE")"
-fi
-
-if [ "$MODE" = "add" ]; then
-  [ -z "${VALUE:-}" ] && echo "FEHLER: add braucht Host." && usage && exit 1
-  if [ -z "${CURRENT_ALLOWED:-}" ]; then
-    NEW_ALLOWED="$VALUE"
-  else
-    NEW_ALLOWED="$CURRENT_ALLOWED,$VALUE"
-  fi
-  NEW_ALLOWED="$(normalize_hosts "$NEW_ALLOWED")"
-fi
-
-set_env_value "ALLOWED_HOSTS" "$NEW_ALLOWED"
-
-SERVER_NAMES="$(hosts_to_server_names "$NEW_ALLOWED")"
-[ -z "${SERVER_NAMES:-}" ] && SERVER_NAMES="_"
-
-if [ -f "$NGCONF" ]; then
-  if grep -qE '^\s*server_name ' "$NGCONF"; then
-    sed -i "s|^\s*server_name .*;|  server_name ${SERVER_NAMES};|" "$NGCONF"
-  else
-    sed -i "0,/listen 80;/s//listen 80;\n  server_name ${SERVER_NAMES};/" "$NGCONF"
-  fi
-else
-  echo "WARNUNG: nginx config $NGCONF nicht gefunden – nginx wird nicht gepatcht."
-fi
-
-if [ "$HTTPS_MODE" = "yes" ]; then
-  NEW_CSRF="$(hosts_to_csrf_https "$NEW_ALLOWED")"
-  [ -n "${NEW_CSRF:-}" ] && set_env_value "CSRF_TRUSTED_ORIGINS" "$NEW_CSRF"
-fi
-
-nginx -t
-systemctl restart nginx
-systemctl restart "$PROJECTNAME"
-
-echo "OK"
-echo "ALLOWED_HOSTS=$NEW_ALLOWED"
-echo "nginx server_name=$SERVER_NAMES"
-if [ "$HTTPS_MODE" = "yes" ]; then
-  echo "CSRF_TRUSTED_ORIGINS=$(get_env_value CSRF_TRUSTED_ORIGINS)"
-fi
-EOF
-
-sed -i "s|__APPDIR__|$APPDIR|g" /usr/local/sbin/${PROJECTNAME}_set_hosts.sh
-sed -i "s|__PROJECTNAME__|$PROJECTNAME|g" /usr/local/sbin/${PROJECTNAME}_set_hosts.sh
-chmod 750 /usr/local/sbin/${PROJECTNAME}_set_hosts.sh
+chmod 440 /etc/sudoers.d/${PROJECTNAME}-service
 
 # -------------------------------------------------------------------
-# UPDATE-Skript: pull -> pip -> migrate -> restart (wird installiert, aber nicht automatisch ausgeführt)
+# UPDATE-Skript (Lösung A): läuft als App-User (Git/venv ok), restart via sudo ohne Passwort
 # -------------------------------------------------------------------
 cat > /usr/local/sbin/${PROJECTNAME}_update.sh <<EOF
 #!/bin/bash
@@ -539,7 +347,6 @@ set -euo pipefail
 
 APPDIR="$APPDIR"
 SERVICE="$PROJECTNAME"
-APPUSER="$APPUSER"
 
 echo "=== UPDATE START (\$SERVICE) ==="
 cd "\$APPDIR"
@@ -558,52 +365,41 @@ fi
 echo "-- migrate"
 "\$APPDIR/.venv/bin/python" "\$APPDIR/manage.py" migrate
 
-echo "-- restart service"
-systemctl restart "\$SERVICE"
+echo "-- restart service (sudo, nopasswd)"
+sudo systemctl restart "\$SERVICE"
 
 echo "=== UPDATE DONE ==="
 EOF
 
-chmod 750 /usr/local/sbin/${PROJECTNAME}_update.sh
+# App-User soll es ausführen können
+chmod 755 /usr/local/sbin/${PROJECTNAME}_update.sh
 
 # -------------------------------------------------------------------
 # LOGIN-Hinweis: bei jedem Login die wichtigsten Kommandos anzeigen
-# (zeigt sich nach Reboot beim nächsten SSH/Console Login)
 # -------------------------------------------------------------------
 cat > /etc/profile.d/${PROJECTNAME}_motd.sh <<EOF
-# Auto-generated help for $PROJECTNAME
-# Shown on interactive login shells.
 case "\$-" in
   *i*) ;;
   *) return ;;
 esac
 
 echo
-echo "=== $PROJECTNAME Short Commands ==="
+echo "=== $PROJECTNAME Commands ==="
 echo "Project dir: $APPDIR"
 echo "Service:     $PROJECTNAME"
+echo
+echo "Update (runs as current user; restart via sudo):"
+echo "  ${PROJECTNAME}_update.sh"
 echo
 echo "Status/Logs:"
 echo "  systemctl status $PROJECTNAME"
 echo "  journalctl -u $PROJECTNAME -f"
 echo
-echo "Update (pull + pip + migrate + restart):"
-echo "  sudo ${PROJECTNAME}_update.sh"
-echo
-echo "Mode switch:"
-echo "  sudo ${PROJECTNAME}_switch_mode.sh dev"
-echo "  sudo ${PROJECTNAME}_switch_mode.sh prod"
-echo
-echo "Hosts / Domains:"
-echo "  sudo ${PROJECTNAME}_set_hosts.sh list"
-echo "  sudo ${PROJECTNAME}_set_hosts.sh add example.com --https"
-echo
 echo "Create Django superuser:"
 echo "  sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
-echo "==================================="
+echo "============================="
 echo
 EOF
-
 chmod 644 /etc/profile.d/${PROJECTNAME}_motd.sh
 
 # -------------------------------------------------------------------
@@ -615,14 +411,12 @@ echo "OS: ${PRETTY_NAME:-$ID}"
 echo "Mode: $MODE (DEBUG=$DEBUG_VALUE)"
 echo "nginx server_name: $NGINX_SERVER_NAMES"
 echo
-echo "Wichtige Tools wurden installiert:"
-echo "  /usr/local/sbin/${PROJECTNAME}_update.sh"
-echo "  /usr/local/sbin/${PROJECTNAME}_switch_mode.sh"
-echo "  /usr/local/sbin/${PROJECTNAME}_set_hosts.sh"
+echo "Update Script (run as $APPUSER):"
+echo "  ${PROJECTNAME}_update.sh"
 echo
 echo "Superuser anlegen:"
 echo "  sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
 echo
-echo "Hinweis: Die Kommandos werden bei jedem Login automatisch angezeigt."
+echo "Hinweis: Die Kommandos werden bei jedem Login angezeigt."
 echo "Dann öffnen: http://SERVER-IP/admin"
 echo "======================================"
