@@ -65,6 +65,65 @@ if [[ -f "/etc/nginx/sites-available/${PROJECTNAME}" ]]; then
 fi
 
 # -------------------------------------------------------------------
+# GitHub Repository Option
+# -------------------------------------------------------------------
+echo
+echo "GitHub Repository:"
+echo "  • Öffentliches Repo: https://github.com/user/repo.git oder git@github.com:user/repo.git"
+echo "  • Privates Repo:     git@github.com:user/repo.git (SSH erforderlich)"
+echo "  • Leer lassen für neues Django-Projekt"
+read -p "GitHub URL (leer für neues Projekt): " GITHUB_REPO_URL
+USE_GITHUB="${GITHUB_REPO_URL:+true}"
+
+# SSH-Key Setup (nur bei GitHub-Repo)
+if [[ "$USE_GITHUB" == "true" ]]; then
+  echo
+  echo "🔐 SSH-Key Konfiguration für GitHub"
+  echo "  • Wenn leer: Neuer SSH-Key wird erstellt"
+  echo "  • Wenn vorhanden: Pfad zum bestehenden SSH-Key angeben (z.B. /root/.ssh/id_ed25519)"
+  read -p "Pfad zum SSH-Key (leer für neuen Key): " SSH_KEY_PATH
+  
+  # SSH-Key erstellen oder verwenden
+  if [ -z "$SSH_KEY_PATH" ]; then
+    SSH_KEY_PATH="/root/.ssh/id_ed25519_github_${PROJECTNAME}"
+    
+    if [ -f "$SSH_KEY_PATH" ]; then
+      echo "⚠️  SSH-Key $SSH_KEY_PATH existiert bereits. Überschreiben? (j/N): "
+      read -r OVERWRITE_KEY
+      if [[ ! "$OVERWRITE_KEY" =~ ^[Jj]$ ]]; then
+        echo "❌ Abbruch."
+        exit 1
+      fi
+    fi
+    
+    echo "🔑 Erstelle neuen SSH-Key für GitHub..."
+    mkdir -p /root/.ssh
+    ssh-keygen -t ed25519 -C "github-${PROJECTNAME}@$(hostname)" -f "$SSH_KEY_PATH" -N "" -q
+    echo "✅ SSH-Key erstellt: $SSH_KEY_PATH"
+    echo "   Öffentlicher Key (für GitHub Settings → SSH Keys):"
+    cat "${SSH_KEY_PATH}.pub"
+    echo
+    echo "⚠️  WICHTIG: Füge den öffentlichen Key oben zu deinem GitHub-Account hinzu!"
+    echo "   Settings → SSH and GPG keys → New SSH key"
+    read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
+    [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
+  else
+    # Bestehenden Key verwenden
+    if [ ! -f "$SSH_KEY_PATH" ]; then
+      echo "❌ FEHLER: SSH-Key $SSH_KEY_PATH nicht gefunden!"
+      exit 1
+    fi
+    echo "✅ Verwende bestehenden SSH-Key: $SSH_KEY_PATH"
+  fi
+  
+  # SSH known_hosts für github.com einrichten
+  echo "🔗 Konfiguriere SSH known_hosts für github.com..."
+  mkdir -p /root/.ssh
+  ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+  ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+fi
+
+# -------------------------------------------------------------------
 # Local IP (Default Hosts)
 # -------------------------------------------------------------------
 LOCAL_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
@@ -209,8 +268,13 @@ read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
 [[ "${UPGRADE:-J}" =~ ^[Jj]$ ]] && apt upgrade -y
 
 # Basis-Pakete
+echo "📦 Installiere Basis-Pakete..."
 apt install -y curl git nano ca-certificates openssl net-tools nginx \
                python3 python3-venv python3-pip build-essential iproute2
+
+# Bildverarbeitung (Pillow) - Empfohlen für fast alle Projekte
+echo "🖼️  Installiere Pillow für Bildunterstützung (ImageField)..."
+apt install -y libjpeg-dev zlib1g-dev libpng-dev libwebp-dev
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
@@ -284,16 +348,93 @@ mkdir -p "$APPDIR"
 chown "$APPUSER:$APPUSER" "$APPDIR"
 
 # -------------------------------------------------------------------
-# Django Setup
+# Django Setup (Neu oder GitHub)
 # -------------------------------------------------------------------
-echo "🚀 Django Setup..."
-sudo -u "$APPUSER" bash <<EOF
+if [[ "$USE_GITHUB" == "true" ]]; then
+  echo "📥 Klonen GitHub Repository: $GITHUB_REPO_URL"
+  
+  # SSH-Agent für git clone einrichten
+  if [ -n "${SSH_KEY_PATH:-}" ]; then
+    echo "🔑 Konfiguriere SSH-Agent für git clone..."
+    
+    # SSH-Key für APPUSER kopieren
+    sudo -u "$APPUSER" mkdir -p "/home/$APPUSER/.ssh"
+    sudo -u "$APPUSER" cp "$SSH_KEY_PATH" "/home/$APPUSER/.ssh/id_ed25519"
+    sudo -u "$APPUSER" cp "${SSH_KEY_PATH}.pub" "/home/$APPUSER/.ssh/id_ed25519.pub"
+    sudo -u "$APPUSER" chmod 600 "/home/$APPUSER/.ssh/id_ed25519"
+    sudo -u "$APPUSER" chmod 644 "/home/$APPUSER/.ssh/id_ed25519.pub"
+    chown -R "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh"
+    
+    # known_hosts für APPUSER
+    sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
+    
+    # Git clone mit SSH
+    sudo -u "$APPUSER" GIT_SSH_COMMAND="ssh -i /home/$APPUSER/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
+      git clone "$GITHUB_REPO_URL" "$APPDIR"
+  else
+    # HTTPS clone (für öffentliche Repos)
+    sudo -u "$APPUSER" git clone "$GITHUB_REPO_URL" "$APPDIR"
+  fi
+  
+  echo "✅ Repository geklont nach $APPDIR"
+  
+  # .env erstellen (falls nicht im Repo vorhanden)
+  if [ ! -f "$APPDIR/.env" ]; then
+    echo "🔐 Erstelle .env Datei (nicht im Repository gefunden)..."
+    cat > "$APPDIR/.env" <<EOF
+MODE=$MODE
+DEBUG=$DEBUG_VALUE
+SECRET_KEY=$DJKEY
+DB_ENGINE=$DB_ENGINE
+DB_NAME=$DBNAME
+DB_USER=$DBUSER
+DB_PASS=$DBPASS
+DB_HOST=$DBHOST
+DB_PORT=$DBPORT
+ALLOWED_HOSTS=$ALLOWED_HOSTS
+CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
+EOF
+    chown "$APPUSER:$APPUSER" "$APPDIR/.env"
+    chmod 600 "$APPDIR/.env"
+    echo "✅ .env erstellt"
+  else
+    echo "⚠️  .env bereits im Repository vorhanden (wird NICHT überschrieben)"
+    echo "   Stelle sicher, dass die DB-Zugangsdaten korrekt sind!"
+  fi
+  
+  # Virtual Environment erstellen
+  echo "🐍 Erstelle Python Virtual Environment..."
+  sudo -u "$APPUSER" bash <<EOF
+cd "$APPDIR"
+python3 -m venv .venv
+. .venv/bin/activate
+pip install --upgrade pip
+pip install django gunicorn python-dotenv pillow
+
+# DB-spezifische Pakete
+if [ "$DBTYPE" = "postgresql" ]; then
+  pip install "psycopg[binary]"
+elif [ "$DBTYPE" = "mysql" ]; then
+  pip install mysqlclient
+fi
+
+# Requirements installieren (falls vorhanden)
+if [ -f "$APPDIR/requirements.txt" ]; then
+  echo "📦 Installiere requirements.txt..."
+  pip install -r "$APPDIR/requirements.txt"
+fi
+EOF
+
+else
+  # NEUES PROJEKT erstellen (wie bisher)
+  echo "🚀 Django Setup (neues Projekt)..."
+  sudo -u "$APPUSER" bash <<EOF
 set -e
 cd "$APPDIR"
 python3 -m venv .venv
 . .venv/bin/activate
 pip install --upgrade pip
-pip install django gunicorn python-dotenv
+pip install django gunicorn python-dotenv pillow
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
@@ -306,12 +447,14 @@ fi
 django-admin startproject core .
 python manage.py startapp app
 EOF
+fi
 
 # -------------------------------------------------------------------
-# .env Datei (sicher!)
+# .env Datei (nur bei neuem Projekt oder falls nicht vorhanden)
 # -------------------------------------------------------------------
-echo "🔐 Erstelle .env Datei..."
-cat > "$APPDIR/.env" <<EOF
+if [[ "$USE_GITHUB" != "true" ]] || [ ! -f "$APPDIR/.env" ]; then
+  echo "🔐 Erstelle .env Datei..."
+  cat > "$APPDIR/.env" <<EOF
 MODE=$MODE
 DEBUG=$DEBUG_VALUE
 SECRET_KEY=$DJKEY
@@ -325,13 +468,15 @@ ALLOWED_HOSTS=$ALLOWED_HOSTS
 CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
 EOF
 
-chown "$APPUSER:$APPUSER" "$APPDIR/.env"
-chmod 600 "$APPDIR/.env"  # Nur App-User darf lesen/schreiben!
+  chown "$APPUSER:$APPUSER" "$APPDIR/.env"
+  chmod 600 "$APPDIR/.env"  # Nur App-User darf lesen/schreiben!
+fi
 
 # -------------------------------------------------------------------
-# .gitignore
+# .gitignore (nur bei neuem Projekt)
 # -------------------------------------------------------------------
-cat > "$APPDIR/.gitignore" <<EOF
+if [[ "$USE_GITHUB" != "true" ]]; then
+  cat > "$APPDIR/.gitignore" <<EOF
 .env
 __pycache__/
 *.py[cod]
@@ -348,13 +493,15 @@ media/
 db.sqlite3
 EOF
 
-chown "$APPUSER:$APPUSER" "$APPDIR/.gitignore"
+  chown "$APPUSER:$APPUSER" "$APPDIR/.gitignore"
+fi
 
 # -------------------------------------------------------------------
-# settings.py (universell für alle DBs + PROD-Ready)
+# settings.py (nur bei neuem Projekt)
 # -------------------------------------------------------------------
-echo "⚙️  Konfiguriere Django settings.py..."
-cat > "$APPDIR/core/settings.py" <<'EOF'
+if [[ "$USE_GITHUB" != "true" ]]; then
+  echo "⚙️  Konfiguriere Django settings.py..."
+  cat > "$APPDIR/core/settings.py" <<'EOF'
 from pathlib import Path
 from dotenv import load_dotenv
 import os
@@ -454,7 +601,8 @@ if MODE == "prod":
     X_FRAME_OPTIONS = "DENY"
 EOF
 
-chown "$APPUSER:$APPUSER" "$APPDIR/core/settings.py"
+  chown "$APPUSER:$APPUSER" "$APPDIR/core/settings.py"
+fi
 
 # -------------------------------------------------------------------
 # Migration + Static Files
@@ -571,10 +719,16 @@ echo "╚═══════════════════════�
 
 cd "$APPDIR"
 
-# Git Pull
+# Git Pull (mit SSH-Key falls vorhanden)
 if [ -d "$APPDIR/.git" ]; then
   echo "📥 Git Pull..."
-  git pull
+  
+  # SSH-Key für git vorhanden?
+  if [ -f "/home/${APPUSER}/.ssh/id_ed25519" ]; then
+    GIT_SSH_COMMAND="ssh -i /home/${APPUSER}/.ssh/id_ed25519 -o IdentitiesOnly=yes" git pull
+  else
+    git pull
+  fi
 else
   echo "⚠️  Kein Git-Repository gefunden (überspringe git pull)"
 fi
@@ -637,6 +791,13 @@ echo "╚═══════════════════════�
 echo "📁 Projektverzeichnis: $APPDIR"
 echo "⚙️  Service:           $PROJECTNAME"
 echo "🌐 Modus:              $MODE (DEBUG=$DEBUG_VALUE)"
+EOF
+
+if [[ "$USE_GITHUB" == "true" ]]; then
+  echo "📦 GitHub Repo:       $GITHUB_REPO_URL"
+fi
+
+cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<EOF
 echo
 echo "📦 Update (als $APPUSER, kein sudo nötig):"
 echo "   ${PROJECTNAME}_update.sh"
@@ -684,6 +845,19 @@ echo "   DB-Engine:          $DB_ENGINE"
 echo "   DB-Name:            $DBNAME"
 echo "   DB-Host:            $DBHOST"
 echo "   DB-Port:            $DBPORT"
+echo
+echo "🖼️  Pillow installiert: Ja (für ImageField/Bildverarbeitung)"
+echo
+
+if [[ "$USE_GITHUB" == "true" ]]; then
+  echo "📦 GitHub Repository: $GITHUB_REPO_URL"
+  echo "   SSH-Key: $SSH_KEY_PATH"
+  echo
+  echo "⚠️  WICHTIG für private Repos:"
+  echo "   • Öffentlicher Key wurde angezeigt - zu GitHub hinzufügen!"
+  echo "   • Settings → SSH and GPG keys → New SSH key"
+fi
+
 echo
 echo "🌐 ALLOWED_HOSTS:      $ALLOWED_HOSTS"
 echo "🔐 CSRF_TRUSTED_ORIGINS: $CSRF_TRUSTED_ORIGINS_VALUE"
