@@ -69,59 +69,11 @@ fi
 # -------------------------------------------------------------------
 echo
 echo "GitHub Repository:"
-echo "  • Öffentliches Repo: https://github.com/user/repo.git oder git@github.com:user/repo.git"
-echo "  • Privates Repo:     git@github.com:user/repo.git (SSH erforderlich)"
+echo "  • Öffentliches Repo: https://github.com/user/repo.git"
+echo "  • Privates Repo:     git@github.com:user/repo.git (SSH-Key wird erstellt)"
 echo "  • Leer lassen für neues Django-Projekt"
 read -p "GitHub URL (leer für neues Projekt): " GITHUB_REPO_URL
 USE_GITHUB="${GITHUB_REPO_URL:+true}"
-
-# SSH-Key Setup (nur bei GitHub-Repo)
-if [[ "$USE_GITHUB" == "true" ]]; then
-  echo
-  echo "🔐 SSH-Key Konfiguration für GitHub"
-  echo "  • Wenn leer: Neuer SSH-Key wird erstellt"
-  echo "  • Wenn vorhanden: Pfad zum bestehenden SSH-Key angeben (z.B. /root/.ssh/id_ed25519)"
-  read -p "Pfad zum SSH-Key (leer für neuen Key): " SSH_KEY_PATH
-  
-  # SSH-Key erstellen oder verwenden
-  if [ -z "$SSH_KEY_PATH" ]; then
-    SSH_KEY_PATH="/root/.ssh/id_ed25519_github_${PROJECTNAME}"
-    
-    if [ -f "$SSH_KEY_PATH" ]; then
-      echo "⚠️  SSH-Key $SSH_KEY_PATH existiert bereits. Überschreiben? (j/N): "
-      read -r OVERWRITE_KEY
-      if [[ ! "$OVERWRITE_KEY" =~ ^[Jj]$ ]]; then
-        echo "❌ Abbruch."
-        exit 1
-      fi
-    fi
-    
-    echo "🔑 Erstelle neuen SSH-Key für GitHub..."
-    mkdir -p /root/.ssh
-    ssh-keygen -t ed25519 -C "github-${PROJECTNAME}@$(hostname)" -f "$SSH_KEY_PATH" -N "" -q
-    echo "✅ SSH-Key erstellt: $SSH_KEY_PATH"
-    echo "   Öffentlicher Key (für GitHub Settings → SSH Keys):"
-    cat "${SSH_KEY_PATH}.pub"
-    echo
-    echo "⚠️  WICHTIG: Füge den öffentlichen Key oben zu deinem GitHub-Account hinzu!"
-    echo "   Settings → SSH and GPG keys → New SSH key"
-    read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
-    [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
-  else
-    # Bestehenden Key verwenden
-    if [ ! -f "$SSH_KEY_PATH" ]; then
-      echo "❌ FEHLER: SSH-Key $SSH_KEY_PATH nicht gefunden!"
-      exit 1
-    fi
-    echo "✅ Verwende bestehenden SSH-Key: $SSH_KEY_PATH"
-  fi
-  
-  # SSH known_hosts für github.com einrichten
-  echo "🔗 Konfiguriere SSH known_hosts für github.com..."
-  mkdir -p /root/.ssh
-  ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
-  ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
-fi
 
 # -------------------------------------------------------------------
 # Local IP (Default Hosts)
@@ -129,6 +81,8 @@ fi
 LOCAL_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
 [ -z "${LOCAL_IP:-}" ] && LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -z "${LOCAL_IP:-}" ] && LOCAL_IP="127.0.0.1"
+
+HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo "$LOCAL_IP")"
 
 # -------------------------------------------------------------------
 # Mode: DEV vs PROD
@@ -145,7 +99,7 @@ if [ "$MODESEL" = "1" ]; then MODE="dev"; DEBUG_VALUE="True"; else MODE="prod"; 
 # -------------------------------------------------------------------
 # Hosts
 # -------------------------------------------------------------------
-DEFAULT_ALLOWED_HOSTS="${LOCAL_IP},127.0.0.1,localhost"
+DEFAULT_ALLOWED_HOSTS="${LOCAL_IP},127.0.0.1,localhost,${HOSTNAME_FQDN}"
 [ "$MODE" = "prod" ] && echo "PROD: DNS-Namen eintragen (z.B. app.intern.lan)"
 read -p "ALLOWED_HOSTS (Komma-separiert) [${DEFAULT_ALLOWED_HOSTS}]: " ALLOWED_HOSTS
 ALLOWED_HOSTS="${ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS}"
@@ -260,6 +214,83 @@ read -s -p "Django SECRET_KEY (leer = auto): " DJKEY; echo
 [ -z "${DJKEY:-}" ] && DJKEY="$(openssl rand -hex 32)"
 
 # -------------------------------------------------------------------
+# SSH-Key für App-User erstellen (für GitHub + SSH-Login)
+# -------------------------------------------------------------------
+echo
+echo "🔐 SSH-Key Konfiguration"
+echo "   Dieser Key wird für BEIDES verwendet:"
+echo "   • SSH-Login (WinSCP/PuTTY)"
+echo "   • GitHub-Zugriff (für private Repos)"
+echo
+read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
+
+SSH_KEY_PATH="/home/${APPUSER}/.ssh/id_ed25519"
+
+echo "🔑 Erstelle SSH-Key für Benutzer $APPUSER..."
+sudo -u "$APPUSER" mkdir -p "/home/$APPUSER/.ssh"
+
+# SSH-Key erstellen
+if [ -z "$SSH_KEY_PASSPHRASE" ]; then
+  # Ohne Passphrase
+  sudo -u "$APPUSER" ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
+    -f "$SSH_KEY_PATH" -N "" -q
+else
+  # Mit Passphrase (interaktiv)
+  sudo -u "$APPUSER" ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
+    -f "$SSH_KEY_PATH" -N "$SSH_KEY_PASSPHRASE" -q
+fi
+
+# Berechtigungen setzen
+sudo -u "$APPUSER" chmod 700 "/home/$APPUSER/.ssh"
+sudo -u "$APPUSER" chmod 600 "${SSH_KEY_PATH}"
+sudo -u "$APPUSER" chmod 644 "${SSH_KEY_PATH}.pub"
+chown -R "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh"
+
+echo "✅ SSH-Key erstellt: $SSH_KEY_PATH"
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔐 ÖFFENTLICHER KEY (für GitHub und SSH authorized_keys):"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+sudo -u "$APPUSER" cat "${SSH_KEY_PATH}.pub"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+
+# GitHub Setup (wenn Repo angegeben)
+if [[ "$USE_GITHUB" == "true" ]]; then
+  echo "📦 GitHub Repository erkannt: $GITHUB_REPO_URL"
+  echo
+  echo "⚠️  WICHTIG FÜR PRIVATE REPOS:"
+  echo "   1. Kopiere den öffentlichen Key oben"
+  echo "   2. Gehe zu: GitHub → Settings → SSH and GPG keys → New SSH key"
+  echo "   3. Titel: '${PROJECTNAME} - $(hostname -f || echo 'server')'"
+  echo "   4. Key einfügen und speichern"
+  echo
+  read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
+  [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
+  
+  # known_hosts für github.com
+  echo "🔗 Konfiguriere SSH known_hosts für github.com..."
+  sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
+  sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
+  chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh/known_hosts"
+fi
+
+# SSH-Zugriff für App-User ermöglichen
+echo "🔓 Konfiguriere SSH-Zugriff für $APPUSER..."
+echo "   • Anmeldung per SSH-Key erlaubt"
+echo "   • Anmeldung per Passwort: deaktiviert (sicher)"
+echo
+
+# Prüfen, ob SSHD PasswordAuthentication deaktiviert ist
+if grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config 2>/dev/null; then
+  echo "✅ SSH-Passwort-Login ist bereits deaktiviert (sicher)"
+elif grep -q "^PasswordAuthentication yes" /etc/ssh/sshd_config 2>/dev/null; then
+  echo "⚠️  WARNUNG: SSH-Passwort-Login ist aktiviert!"
+  echo "    Empfehlung: In /etc/ssh/sshd_config 'PasswordAuthentication no' setzen"
+  echo "    Danach: sudo systemctl restart sshd"
+fi
+
+# -------------------------------------------------------------------
 # System-Pakete (optional upgrade)
 # -------------------------------------------------------------------
 apt update
@@ -330,14 +361,6 @@ elif [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "2" ]; then
   # Remote-DB: Nur Client installieren
   echo "🌐 Installiere ${DBTYPE^^} Client für Remote-Verbindung..."
   apt install -y $DB_PACKAGE_CLIENT
-  
-  # Optional: Verbindungstest (kommentiert, da Passwort-Abfrage)
-  # echo "🔍 Teste Remote-Verbindung..."
-  # if [ "$DBTYPE" = "postgresql" ]; then
-  #   PGPASSWORD="$DBPASS" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -c "SELECT 1" &>/dev/null && echo "✅ Verbindung OK"
-  # elif [ "$DBTYPE" = "mysql" ]; then
-  #   mysql -h "$DBHOST" -P "$DBPORT" -u "$DBUSER" -p"$DBPASS" -e "SELECT 1" &>/dev/null && echo "✅ Verbindung OK"
-  # fi
 fi
 
 # -------------------------------------------------------------------
@@ -353,28 +376,9 @@ chown "$APPUSER:$APPUSER" "$APPDIR"
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📥 Klonen GitHub Repository: $GITHUB_REPO_URL"
   
-  # SSH-Agent für git clone einrichten
-  if [ -n "${SSH_KEY_PATH:-}" ]; then
-    echo "🔑 Konfiguriere SSH-Agent für git clone..."
-    
-    # SSH-Key für APPUSER kopieren
-    sudo -u "$APPUSER" mkdir -p "/home/$APPUSER/.ssh"
-    sudo -u "$APPUSER" cp "$SSH_KEY_PATH" "/home/$APPUSER/.ssh/id_ed25519"
-    sudo -u "$APPUSER" cp "${SSH_KEY_PATH}.pub" "/home/$APPUSER/.ssh/id_ed25519.pub"
-    sudo -u "$APPUSER" chmod 600 "/home/$APPUSER/.ssh/id_ed25519"
-    sudo -u "$APPUSER" chmod 644 "/home/$APPUSER/.ssh/id_ed25519.pub"
-    chown -R "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh"
-    
-    # known_hosts für APPUSER
-    sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
-    
-    # Git clone mit SSH
-    sudo -u "$APPUSER" GIT_SSH_COMMAND="ssh -i /home/$APPUSER/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
-      git clone "$GITHUB_REPO_URL" "$APPDIR"
-  else
-    # HTTPS clone (für öffentliche Repos)
-    sudo -u "$APPUSER" git clone "$GITHUB_REPO_URL" "$APPDIR"
-  fi
+  # Git clone mit SSH-Key
+  sudo -u "$APPUSER" GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes" \
+    git clone "$GITHUB_REPO_URL" "$APPDIR"
   
   echo "✅ Repository geklont nach $APPDIR"
   
@@ -719,16 +723,10 @@ echo "╚═══════════════════════�
 
 cd "$APPDIR"
 
-# Git Pull (mit SSH-Key falls vorhanden)
+# Git Pull (mit SSH-Key)
 if [ -d "$APPDIR/.git" ]; then
   echo "📥 Git Pull..."
-  
-  # SSH-Key für git vorhanden?
-  if [ -f "/home/${APPUSER}/.ssh/id_ed25519" ]; then
-    GIT_SSH_COMMAND="ssh -i /home/${APPUSER}/.ssh/id_ed25519 -o IdentitiesOnly=yes" git pull
-  else
-    git pull
-  fi
+  GIT_SSH_COMMAND="ssh -i /home/${APPUSER}/.ssh/id_ed25519 -o IdentitiesOnly=yes" git pull
 else
   echo "⚠️  Kein Git-Repository gefunden (überspringe git pull)"
 fi
@@ -799,6 +797,11 @@ fi
 
 cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<EOF
 echo
+echo "🔐 SSH-Zugriff für $APPUSER:"
+echo "   IP:          ssh $APPUSER@${LOCAL_IP}"
+echo "   Hostname:    ssh $APPUSER@${HOSTNAME_FQDN}"
+echo "   Private Key: ${SSH_KEY_PATH}"
+echo
 echo "📦 Update (als $APPUSER, kein sudo nötig):"
 echo "   ${PROJECTNAME}_update.sh"
 echo
@@ -825,8 +828,9 @@ chmod 644 /etc/profile.d/${PROJECTNAME}_motd.sh
 # -------------------------------------------------------------------
 if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
   echo "⚠️  Firewall aktiviert! Ports ggf. freigeben:"
-  echo "   sudo ufw allow 80/tcp"
-  echo "   sudo ufw allow 443/tcp"
+  echo "   sudo ufw allow 22/tcp    # SSH"
+  echo "   sudo ufw allow 80/tcp    # HTTP"
+  echo "   sudo ufw allow 443/tcp   # HTTPS"
 fi
 
 # -------------------------------------------------------------------
@@ -848,17 +852,54 @@ echo "   DB-Port:            $DBPORT"
 echo
 echo "🖼️  Pillow installiert: Ja (für ImageField/Bildverarbeitung)"
 echo
+echo "🔐 SSH-ZUGRIFF:"
+echo "   Benutzer:     $APPUSER"
+echo "   IP-Adresse:   $LOCAL_IP"
+echo "   Hostname:     $HOSTNAME_FQDN"
+echo "   Private Key:  $SSH_KEY_PATH"
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "⚠️  WICHTIG: Private Key herunterladen für WinSCP/PuTTY!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+echo "📥 SO LÄDTST DU DEN PRIVATE KEY HERUNTER:"
+echo
+echo "   Methode 1 - WinSCP (empfohlen):"
+echo "   1. WinSCP öffnen"
+echo "   2. Neue Verbindung erstellen"
+echo "   3. Datei-Protokoll: SCP"
+echo "   4. Hostname: $LOCAL_IP oder $HOSTNAME_FQDN"
+echo "   5. Benutzername: $APPUSER"
+echo "   6. Authentifizierung: SSH-Schlüssel"
+echo "   7. Privater Schlüssel: ${SSH_KEY_PATH}"
+echo "   8. Verbindung testen"
+echo
+echo "   Methode 2 - PuTTY:"
+echo "   1. Private Key herunterladen: scp root@${LOCAL_IP}:${SSH_KEY_PATH} C:\\temp\\id_ed25519"
+echo "   2. PuTTYgen öffnen"
+echo "   3. 'Load' → Private Key laden (id_ed25519)"
+echo "   4. 'Save private key' → id_ed25519.ppk speichern"
+echo "   5. PuTTY öffnen → Connection → SSH → Auth → Browse (id_ed25519.ppk)"
+echo "   6. Hostname: $LOCAL_IP oder $HOSTNAME_FQDN"
+echo "   7. Login: $APPUSER"
+echo
+echo "   Methode 3 - Direkt vom Server kopieren:"
+echo "   sudo cat ${SSH_KEY_PATH}"
+echo "   (Den gesamten Key kopieren und lokal speichern)"
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
 
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📦 GitHub Repository: $GITHUB_REPO_URL"
-  echo "   SSH-Key: $SSH_KEY_PATH"
   echo
-  echo "⚠️  WICHTIG für private Repos:"
-  echo "   • Öffentlicher Key wurde angezeigt - zu GitHub hinzufügen!"
-  echo "   • Settings → SSH and GPG keys → New SSH key"
+  echo "⚠️  WICHTIG FÜR PRIVATE REPOS:"
+  echo "   • Öffentlicher Key wurde oben angezeigt"
+  echo "   • Zu GitHub hinzufügen: Settings → SSH and GPG keys → New SSH key"
+  echo "   • Titel: '${PROJECTNAME} - ${HOSTNAME_FQDN}'"
+  echo
 fi
 
-echo
 echo "🌐 ALLOWED_HOSTS:      $ALLOWED_HOSTS"
 echo "🔐 CSRF_TRUSTED_ORIGINS: $CSRF_TRUSTED_ORIGINS_VALUE"
 echo
