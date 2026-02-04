@@ -68,12 +68,18 @@ fi
 # GitHub Repository Option
 # -------------------------------------------------------------------
 echo
-echo "GitHub Repository:"
+echo "GitHub Repository (optional):"
 echo "  • Öffentliches Repo: https://github.com/user/repo.git"
-echo "  • Privates Repo:     git@github.com:user/repo.git (SSH-Key wird erstellt)"
-echo "  • Leer lassen für neues Django-Projekt"
+echo "  • Privates Repo:     git@github.com:user/repo.git"
+echo "  • Leer lassen für neues Django-Projekt (ohne GitHub)"
 read -p "GitHub URL (leer für neues Projekt): " GITHUB_REPO_URL
 USE_GITHUB="${GITHUB_REPO_URL:+true}"
+
+if [[ "$USE_GITHUB" == "true" ]]; then
+  echo "✅ GitHub-Modus aktiviert: Repository wird geklont"
+else
+  echo "✅ Lokaler Modus: Neues Django-Projekt wird erstellt"
+fi
 
 # -------------------------------------------------------------------
 # Local IP (Default Hosts)
@@ -214,13 +220,11 @@ read -s -p "Django SECRET_KEY (leer = auto): " DJKEY; echo
 [ -z "${DJKEY:-}" ] && DJKEY="$(openssl rand -hex 32)"
 
 # -------------------------------------------------------------------
-# SSH-Key für App-User erstellen (für GitHub + SSH-Login)
+# SSH-Key für App-User erstellen (IMMER für SSH-Login)
 # -------------------------------------------------------------------
 echo
-echo "🔐 SSH-Key Konfiguration"
-echo "   Dieser Key wird für BEIDES verwendet:"
-echo "   • SSH-Login (WinSCP/PuTTY)"
-echo "   • GitHub-Zugriff (für private Repos)"
+echo "🔐 SSH-Key für SSH-Zugriff (WinSCP/PuTTY)"
+echo "   Dieser Key ermöglicht SSH-Login als $APPUSER"
 echo
 read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
 
@@ -249,13 +253,13 @@ chown -R "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh"
 echo "✅ SSH-Key erstellt: $SSH_KEY_PATH"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔐 ÖFFENTLICHER KEY (für GitHub und SSH authorized_keys):"
+echo "🔐 ÖFFENTLICHER KEY (für SSH authorized_keys):"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 sudo -u "$APPUSER" cat "${SSH_KEY_PATH}.pub"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 
-# GitHub Setup (wenn Repo angegeben)
+# GitHub Setup (NUR wenn Repo angegeben)
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📦 GitHub Repository erkannt: $GITHUB_REPO_URL"
   echo
@@ -273,6 +277,8 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
   sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
   chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh/known_hosts"
+else
+  echo "⏭️  GitHub nicht genutzt - überspringe GitHub-Setup"
 fi
 
 # SSH-Zugriff für App-User ermöglichen
@@ -312,6 +318,29 @@ if [ "$DBTYPE" = "postgresql" ]; then
   apt install -y libpq-dev
 elif [ "$DBTYPE" = "mysql" ]; then
   apt install -y libmysqlclient-dev python3-dev default-libmysqlclient-dev
+fi
+
+# -------------------------------------------------------------------
+# Sicherheit: fail2ban gegen SSH-Brute-Force
+# -------------------------------------------------------------------
+read -p "fail2ban installieren (schützt SSH)? [J/n]: " INSTALL_FAIL2BAN
+INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-J}"
+if [[ "$INSTALL_FAIL2BAN" =~ ^[Jj]$ ]]; then
+  echo "🛡️  Installiere fail2ban..."
+  apt install -y fail2ban
+  cat > /etc/fail2ban/jail.local <<EOF
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 3
+bantime = 3600
+EOF
+  systemctl restart fail2ban
+  echo "✅ fail2ban aktiviert"
+else
+  echo "⏭️  fail2ban übersprungen"
 fi
 
 # -------------------------------------------------------------------
@@ -430,8 +459,8 @@ fi
 EOF
 
 else
-  # NEUES PROJEKT erstellen (wie bisher)
-  echo "🚀 Django Setup (neues Projekt)..."
+  # NEUES PROJEKT erstellen (ohne GitHub)
+  echo "🚀 Django Setup (neues Projekt ohne GitHub)..."
   sudo -u "$APPUSER" bash <<EOF
 set -e
 cd "$APPDIR"
@@ -477,7 +506,7 @@ EOF
 fi
 
 # -------------------------------------------------------------------
-# .gitignore (nur bei neuem Projekt)
+# .gitignore (nur bei neuem Projekt ohne GitHub)
 # -------------------------------------------------------------------
 if [[ "$USE_GITHUB" != "true" ]]; then
   cat > "$APPDIR/.gitignore" <<EOF
@@ -501,7 +530,7 @@ EOF
 fi
 
 # -------------------------------------------------------------------
-# settings.py (nur bei neuem Projekt)
+# settings.py (nur bei neuem Projekt ohne GitHub)
 # -------------------------------------------------------------------
 if [[ "$USE_GITHUB" != "true" ]]; then
   echo "⚙️  Konfiguriere Django settings.py..."
@@ -643,6 +672,29 @@ systemctl daemon-reload
 systemctl enable --now "$PROJECTNAME"
 
 # -------------------------------------------------------------------
+# Log-Rotation für Django/Gunicorn
+# -------------------------------------------------------------------
+mkdir -p "/var/log/${PROJECTNAME}"
+chown "$APPUSER:adm" "/var/log/${PROJECTNAME}"
+chmod 750 "/var/log/${PROJECTNAME}"
+
+cat > /etc/logrotate.d/${PROJECTNAME} <<EOF
+/var/log/${PROJECTNAME}/*.log {
+  daily
+  missingok
+  rotate 14
+  compress
+  delaycompress
+  notifempty
+  create 640 ${APPUSER} adm
+  sharedscripts
+  postrotate
+    systemctl reload ${PROJECTNAME} > /dev/null 2>&1 || true
+  endscript
+}
+EOF
+
+# -------------------------------------------------------------------
 # nginx Konfiguration (mit static/media)
 # -------------------------------------------------------------------
 echo "🌐 Konfiguriere Nginx..."
@@ -723,12 +775,12 @@ echo "╚═══════════════════════�
 
 cd "$APPDIR"
 
-# Git Pull (mit SSH-Key)
+# Git Pull (mit SSH-Key) - NUR wenn GitHub genutzt wird
 if [ -d "$APPDIR/.git" ]; then
   echo "📥 Git Pull..."
   GIT_SSH_COMMAND="ssh -i /home/${APPUSER}/.ssh/id_ed25519 -o IdentitiesOnly=yes" git pull
 else
-  echo "⚠️  Kein Git-Repository gefunden (überspringe git pull)"
+  echo "⏭️  Kein Git-Repository gefunden (überspringe git pull)"
 fi
 
 # Requirements installieren
@@ -765,6 +817,86 @@ echo "╚═══════════════════════�
 EOF
 
 chmod 755 /usr/local/bin/${PROJECTNAME}_update.sh
+
+# -------------------------------------------------------------------
+# Backup-Skript
+# -------------------------------------------------------------------
+BACKUP_DIR="/var/backups/${PROJECTNAME}"
+mkdir -p "$BACKUP_DIR"
+chown "$APPUSER:$APPUSER" "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
+
+cat > /usr/local/bin/${PROJECTNAME}_backup.sh <<'BACKUP_EOF'
+#!/bin/bash
+set -euo pipefail
+PROJECT="${PROJECTNAME}"
+APPUSER="${APPUSER}"
+APPDIR="${APPDIR}"
+DBTYPE="${DBTYPE}"
+DBNAME="${DBNAME}"
+BACKUP_DIR="${BACKUP_DIR}"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+echo "📦 Backup startet für $PROJECT..."
+
+# DB-Dump
+if [ "$DBTYPE" = "postgresql" ]; then
+  sudo -u postgres pg_dump -Fc "$DBNAME" > "$BACKUP_DIR/db_${TIMESTAMP}.dump" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
+elif [ "$DBTYPE" = "mysql" ]; then
+  mysqldump -u root "$DBNAME" > "$BACKUP_DIR/db_${TIMESTAMP}.sql" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
+fi
+
+# .env sichern
+cp "$APPDIR/.env" "$BACKUP_DIR/env_${TIMESTAMP}.backup" 2>/dev/null && chmod 600 "$BACKUP_DIR/env_${TIMESTAMP}.backup"
+
+# Projekt sichern (ohne .venv/__pycache__)
+tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
+    -czf "$BACKUP_DIR/project_${TIMESTAMP}.tar.gz" -C /srv "$PROJECT" 2>/dev/null || echo "⚠️ Projekt-Backup fehlgeschlagen"
+
+# Alte Backups bereinigen (>14 Tage)
+find "$BACKUP_DIR" -type f -mtime +14 -delete 2>/dev/null
+
+echo "✅ Backup fertig in $BACKUP_DIR"
+BACKUP_EOF
+
+chmod 755 /usr/local/bin/${PROJECTNAME}_backup.sh
+echo "💾 Backup-Skript erstellt: /usr/local/bin/${PROJECTNAME}_backup.sh"
+
+# -------------------------------------------------------------------
+# Health-Check Endpoint (nur bei neuem Projekt ohne GitHub)
+# -------------------------------------------------------------------
+if [[ "$USE_GITHUB" != "true" ]]; then
+  sudo -u "$APPUSER" bash <<'HEALTH_EOF'
+cd "$APPDIR"
+cat >> core/views.py <<'PYEOF'
+
+from django.http import JsonResponse
+from django.db import connection
+import os
+
+def health_check(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        db_ok = True
+    except:
+        db_ok = False
+    
+    return JsonResponse({
+        "status": "ok" if db_ok else "degraded",
+        "database": "ok" if db_ok else "error",
+        "mode": os.getenv("MODE", "unknown")
+    })
+PYEOF
+
+# URL hinzufügen
+if ! grep -q "health_check" core/urls.py; then
+  sed -i "/^from django.urls import path/a from . import views" core/urls.py
+  sed -i "/^urlpatterns = \[/a\    path('health/', views.health_check)," core/urls.py
+fi
+HEALTH_EOF
+  echo "✅ Health-Check Endpoint erstellt: /health/"
+fi
 
 # -------------------------------------------------------------------
 # LOGIN-Hinweis (MOTD)
@@ -805,6 +937,9 @@ echo
 echo "📦 Update (als $APPUSER, kein sudo nötig):"
 echo "   ${PROJECTNAME}_update.sh"
 echo
+echo "💾 Backup (als $APPUSER):"
+echo "   ${PROJECTNAME}_backup.sh"
+echo
 echo "📊 Status/Logs:"
 echo "   systemctl status $PROJECTNAME"
 echo "   journalctl -u $PROJECTNAME -f"
@@ -831,6 +966,23 @@ if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
   echo "   sudo ufw allow 22/tcp    # SSH"
   echo "   sudo ufw allow 80/tcp    # HTTP"
   echo "   sudo ufw allow 443/tcp   # HTTPS"
+fi
+
+# -------------------------------------------------------------------
+# Finaler Security-Check
+# -------------------------------------------------------------------
+echo
+echo "🔍 Finaler Security-Check:"
+if command -v fail2ban-client &>/dev/null && fail2ban-client status sshd &>/dev/null; then
+  echo "✅ fail2ban: AKTIV"
+else
+  echo "⚠️  fail2ban: NICHT AKTIV (empfohlen für Internet-Server!)"
+fi
+
+if grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config 2>/dev/null; then
+  echo "✅ SSH-Passwort-Login: DEAKTIVIERT"
+else
+  echo "⚠️  SSH-Passwort-Login: AKTIV (empfohlen: 'PasswordAuthentication no' in /etc/ssh/sshd_config)"
 fi
 
 # -------------------------------------------------------------------
@@ -898,6 +1050,8 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   echo "   • Zu GitHub hinzufügen: Settings → SSH and GPG keys → New SSH key"
   echo "   • Titel: '${PROJECTNAME} - ${HOSTNAME_FQDN}'"
   echo
+else
+  echo "⏭️  GitHub nicht genutzt - lokales Django-Projekt erstellt"
 fi
 
 echo "🌐 ALLOWED_HOSTS:      $ALLOWED_HOSTS"
@@ -905,6 +1059,9 @@ echo "🔐 CSRF_TRUSTED_ORIGINS: $CSRF_TRUSTED_ORIGINS_VALUE"
 echo
 echo "🔄 Update-Skript (als $APPUSER):"
 echo "   ${PROJECTNAME}_update.sh"
+echo
+echo "💾 Backup-Skript (als $APPUSER):"
+echo "   ${PROJECTNAME}_backup.sh"
 echo
 echo "👑 Superuser erstellen:"
 echo "   sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
