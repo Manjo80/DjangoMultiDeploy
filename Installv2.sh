@@ -32,6 +32,18 @@ echo "║         Django Installer (${PRETTY_NAME:-$ID})                ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 
 # -------------------------------------------------------------------
+# Sicherstellen: Kein sudo nötig (Container-optimiert)
+# -------------------------------------------------------------------
+echo "🔧 Prüfe Systemumgebung..."
+if [ "$(id -u)" -ne 0 ]; then
+  echo "❌ FEHLER: Skript muss als root ausgeführt werden!"
+  exit 1
+fi
+
+# In Containern oft kein sudo – wir nutzen stattdessen 'su'
+echo "✅ Ausführung als root bestätigt (sudo nicht erforderlich)"
+
+# -------------------------------------------------------------------
 # Projektname -> /srv/<name> (mit Validierung!)
 # -------------------------------------------------------------------
 read -p "Projektname (Ordner unter /srv, z.B. gpsmgr): " PROJECTNAME
@@ -226,36 +238,38 @@ echo
 echo "🔐 SSH-Key für SSH-Zugriff (WinSCP/PuTTY)"
 echo "   Dieser Key ermöglicht SSH-Login als $APPUSER"
 echo
-read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
+read -p -r "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
 
 SSH_KEY_PATH="/home/${APPUSER}/.ssh/id_ed25519"
 
 echo "🔑 Erstelle SSH-Key für Benutzer $APPUSER..."
-sudo -u "$APPUSER" mkdir -p "/home/$APPUSER/.ssh"
+# Benutzer-Home vorbereiten (ohne sudo!)
+mkdir -p "/home/$APPUSER/.ssh"
+chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh"
+chmod 700 "/home/$APPUSER/.ssh"
 
-# SSH-Key erstellen
+# SSH-Key erstellen (als root, aber Besitzer ändern)
 if [ -z "$SSH_KEY_PASSPHRASE" ]; then
-  # Ohne Passphrase
-  sudo -u "$APPUSER" ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
+  ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
     -f "$SSH_KEY_PATH" -N "" -q
 else
-  # Mit Passphrase (interaktiv)
-  sudo -u "$APPUSER" ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
+  # Mit Passphrase (interaktiv – muss manuell eingegeben werden)
+  ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
     -f "$SSH_KEY_PATH" -N "$SSH_KEY_PASSPHRASE" -q
 fi
 
 # Berechtigungen setzen
-sudo -u "$APPUSER" chmod 700 "/home/$APPUSER/.ssh"
-sudo -u "$APPUSER" chmod 600 "${SSH_KEY_PATH}"
-sudo -u "$APPUSER" chmod 644 "${SSH_KEY_PATH}.pub"
-chown -R "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh"
+chmod 600 "$SSH_KEY_PATH"
+chmod 644 "${SSH_KEY_PATH}.pub"
+chown "$APPUSER:$APPUSER" "$SSH_KEY_PATH"
+chown "$APPUSER:$APPUSER" "${SSH_KEY_PATH}.pub"
 
 echo "✅ SSH-Key erstellt: $SSH_KEY_PATH"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔐 ÖFFENTLICHER KEY (für SSH authorized_keys):"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-sudo -u "$APPUSER" cat "${SSH_KEY_PATH}.pub"
+cat "${SSH_KEY_PATH}.pub"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 
@@ -272,11 +286,11 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
   [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
   
-  # known_hosts für github.com
-  echo "🔗 Konfiguriere SSH known_hosts für github.com..."
-  sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
-  sudo -u "$APPUSER" ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
+  # known_hosts für github.com (als root erstellen, dann Besitzer ändern)
+  ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
+  ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
   chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh/known_hosts"
+  chmod 644 "/home/$APPUSER/.ssh/known_hosts"
 else
   echo "⏭️  GitHub nicht genutzt - überspringe GitHub-Setup"
 fi
@@ -293,7 +307,7 @@ if grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config 2>/dev/null; then
 elif grep -q "^PasswordAuthentication yes" /etc/ssh/sshd_config 2>/dev/null; then
   echo "⚠️  WARNUNG: SSH-Passwort-Login ist aktiviert!"
   echo "    Empfehlung: In /etc/ssh/sshd_config 'PasswordAuthentication no' setzen"
-  echo "    Danach: sudo systemctl restart sshd"
+  echo "    Danach: systemctl restart sshd"
 fi
 
 # -------------------------------------------------------------------
@@ -349,6 +363,12 @@ fi
 if ! id "$APPUSER" &>/dev/null; then
   echo "👤 Erstelle Benutzer: $APPUSER"
   adduser --disabled-password --gecos "" "$APPUSER" || adduser --disabled-password "$APPUSER"
+  
+  # Home-Verzeichnis korrigieren (manchmal nicht erstellt)
+  if [ ! -d "/home/$APPUSER" ]; then
+    mkdir -p "/home/$APPUSER"
+    chown "$APPUSER:$APPUSER" "/home/$APPUSER"
+  fi
 fi
 
 # ⚠️ KEIN sudo für APPUSER! Nur spezifische Befehle erlauben (siehe unten)
@@ -405,9 +425,8 @@ chown "$APPUSER:$APPUSER" "$APPDIR"
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📥 Klonen GitHub Repository: $GITHUB_REPO_URL"
   
-  # Git clone mit SSH-Key
-  sudo -u "$APPUSER" GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes" \
-    git clone "$GITHUB_REPO_URL" "$APPDIR"
+  # Git clone mit SSH-Key (als APPUSER via su)
+  su - "$APPUSER" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes' git clone '$GITHUB_REPO_URL' '$APPDIR'" 
   
   echo "✅ Repository geklont nach $APPDIR"
   
@@ -437,7 +456,7 @@ EOF
   
   # Virtual Environment erstellen
   echo "🐍 Erstelle Python Virtual Environment..."
-  sudo -u "$APPUSER" bash <<EOF
+  su - "$APPUSER" -s /bin/bash <<EOF
 cd "$APPDIR"
 python3 -m venv .venv
 . .venv/bin/activate
@@ -461,7 +480,7 @@ EOF
 else
   # NEUES PROJEKT erstellen (ohne GitHub)
   echo "🚀 Django Setup (neues Projekt ohne GitHub)..."
-  sudo -u "$APPUSER" bash <<EOF
+  su - "$APPUSER" -s /bin/bash <<EOF
 set -e
 cd "$APPDIR"
 python3 -m venv .venv
@@ -641,10 +660,10 @@ fi
 # Migration + Static Files
 # -------------------------------------------------------------------
 echo "📊 Führe Migrationen aus..."
-sudo -u "$APPUSER" bash -c "cd $APPDIR && .venv/bin/python manage.py migrate"
+su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py migrate"
 
 echo "📦 Sammle statische Dateien..."
-sudo -u "$APPUSER" bash -c "cd $APPDIR && .venv/bin/python manage.py collectstatic --noinput"
+su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py collectstatic --noinput"
 
 # -------------------------------------------------------------------
 # systemd Service
@@ -778,7 +797,7 @@ cd "$APPDIR"
 # Git Pull (mit SSH-Key) - NUR wenn GitHub genutzt wird
 if [ -d "$APPDIR/.git" ]; then
   echo "📥 Git Pull..."
-  GIT_SSH_COMMAND="ssh -i /home/${APPUSER}/.ssh/id_ed25519 -o IdentitiesOnly=yes" git pull
+  su - "${APPUSER}" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i /home/${APPUSER}/.ssh/id_ed25519 -o IdentitiesOnly=yes' git pull"
 else
   echo "⏭️  Kein Git-Repository gefunden (überspringe git pull)"
 fi
@@ -786,26 +805,25 @@ fi
 # Requirements installieren
 if [ -f "$APPDIR/requirements.txt" ]; then
   echo "📦 Installiere Requirements..."
-  . "$APPDIR/.venv/bin/activate"
-  pip install -r "$APPDIR/requirements.txt"
+  su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && . .venv/bin/activate && pip install -r requirements.txt"
 else
   echo "⚠️  requirements.txt nicht gefunden (überspringe pip install)"
 fi
 
 # Migrationen prüfen
 echo "🔍 Prüfe auf fehlende Migrationen..."
-"$APPDIR/.venv/bin/python" "$APPDIR/manage.py" makemigrations --check --dry-run || {
+su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py makemigrations --check --dry-run" || {
   echo "⚠️  Neue Migrationen gefunden. Führe makemigrations aus..."
-  "$APPDIR/.venv/bin/python" "$APPDIR/manage.py" makemigrations
+  su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py makemigrations"
 }
 
 # Migrationen ausführen
 echo "📊 Führe Migrationen aus..."
-"$APPDIR/.venv/bin/python" "$APPDIR/manage.py" migrate
+su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py migrate"
 
 # Statische Dateien sammeln
 echo "📦 Sammle statische Dateien..."
-"$APPDIR/.venv/bin/python" "$APPDIR/manage.py" collectstatic --noinput
+su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py collectstatic --noinput"
 
 # Service neustarten
 echo "🔄 Neustart Service (sudo, nopasswd)..."
@@ -866,7 +884,7 @@ echo "💾 Backup-Skript erstellt: /usr/local/bin/${PROJECTNAME}_backup.sh"
 # Health-Check Endpoint (nur bei neuem Projekt ohne GitHub)
 # -------------------------------------------------------------------
 if [[ "$USE_GITHUB" != "true" ]]; then
-  sudo -u "$APPUSER" bash <<'HEALTH_EOF'
+  su - "$APPUSER" -s /bin/bash <<'HEALTH_EOF'
 cd "$APPDIR"
 cat >> core/views.py <<'PYEOF'
 
@@ -963,9 +981,9 @@ chmod 644 /etc/profile.d/${PROJECTNAME}_motd.sh
 # -------------------------------------------------------------------
 if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
   echo "⚠️  Firewall aktiviert! Ports ggf. freigeben:"
-  echo "   sudo ufw allow 22/tcp    # SSH"
-  echo "   sudo ufw allow 80/tcp    # HTTP"
-  echo "   sudo ufw allow 443/tcp   # HTTPS"
+  echo "   ufw allow 22/tcp    # SSH"
+  echo "   ufw allow 80/tcp    # HTTP"
+  echo "   ufw allow 443/tcp   # HTTPS"
 fi
 
 # -------------------------------------------------------------------
@@ -1036,7 +1054,7 @@ echo "   6. Hostname: $LOCAL_IP oder $HOSTNAME_FQDN"
 echo "   7. Login: $APPUSER"
 echo
 echo "   Methode 3 - Direkt vom Server kopieren:"
-echo "   sudo cat ${SSH_KEY_PATH}"
+echo "   cat ${SSH_KEY_PATH}"
 echo "   (Den gesamten Key kopieren und lokal speichern)"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1067,8 +1085,8 @@ echo "👑 Superuser erstellen:"
 echo "   sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
 echo
 echo "📊 Service-Befehle:"
-echo "   sudo systemctl status $PROJECTNAME"
-echo "   sudo systemctl restart $PROJECTNAME"
+echo "   systemctl status $PROJECTNAME"
+echo "   systemctl restart $PROJECTNAME"
 echo "   journalctl -u $PROJECTNAME -f"
 echo
 echo "💡 Wichtige Hinweise:"
