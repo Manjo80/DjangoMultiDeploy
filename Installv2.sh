@@ -3,6 +3,7 @@ set -euo pipefail
 
 # ===================================================================
 # Django Installer - Secure & Flexible (LXC/Container ready)
+# Version: 2.0 - Improved & Optimized
 # ===================================================================
 
 # -------------------------------------------------------------------
@@ -32,7 +33,7 @@ echo "║         Django Installer (${PRETTY_NAME:-$ID})                ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 
 # -------------------------------------------------------------------
-# Sicherstellen: Kein sudo nötig (Container-optimiert)
+# Root-Check
 # -------------------------------------------------------------------
 echo "🔧 Prüfe Systemumgebung..."
 if [ "$(id -u)" -ne 0 ]; then
@@ -40,8 +41,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# In Containern oft kein sudo – wir nutzen stattdessen 'su'
-echo "✅ Ausführung als root bestätigt (sudo nicht erforderlich)"
+echo "✅ Ausführung als root bestätigt"
 
 # -------------------------------------------------------------------
 # Projektname -> /srv/<name> (mit Validierung!)
@@ -126,8 +126,6 @@ NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ' | xargs)"
 
 # -------------------------------------------------------------------
 # CSRF_TRUSTED_ORIGINS automatisch bauen (nur PROD)
-# - überspringt localhost + IPs, weil meist nicht per https genutzt
-# - nimmt nur "echte" Hostnames -> https://hostname
 # -------------------------------------------------------------------
 CSRF_TRUSTED_ORIGINS_VALUE=""
 if [ "$MODE" = "prod" ]; then
@@ -213,7 +211,7 @@ else
 fi
 
 # -------------------------------------------------------------------
-# Linux User (ohne sudo!)
+# Linux User
 # -------------------------------------------------------------------
 read -p "Linux-User für App (wird erstellt, z.B. gps): " APPUSER
 [ -z "${APPUSER:-}" ] && echo "❌ FEHLER: APPUSER leer." && exit 1
@@ -232,29 +230,89 @@ read -s -p "Django SECRET_KEY (leer = auto): " DJKEY; echo
 [ -z "${DJKEY:-}" ] && DJKEY="$(openssl rand -hex 32)"
 
 # -------------------------------------------------------------------
-# SSH-Key für App-User erstellen (IMMER für SSH-Login)
+# SSH-Key für App-User erstellen
 # -------------------------------------------------------------------
 echo
 echo "🔐 SSH-Key für SSH-Zugriff (WinSCP/PuTTY)"
 echo "   Dieser Key ermöglicht SSH-Login als $APPUSER"
 echo
-read -p -r "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
+read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
 
 SSH_KEY_PATH="/home/${APPUSER}/.ssh/id_ed25519"
 
+# -------------------------------------------------------------------
+# System-Pakete aktualisieren
+# -------------------------------------------------------------------
+apt update
+
+read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
+[[ "${UPGRADE:-J}" =~ ^[Jj]$ ]] && apt upgrade -y
+
+# Basis-Pakete
+echo "📦 Installiere Basis-Pakete..."
+apt install -y curl git nano ca-certificates openssl net-tools nginx \
+               python3 python3-venv python3-pip build-essential iproute2
+
+# Bildverarbeitung (Pillow)
+echo "🖼️  Installiere Pillow-Abhängigkeiten..."
+apt install -y libjpeg-dev zlib1g-dev libpng-dev libwebp-dev
+
+# DB-spezifische Pakete
+if [ "$DBTYPE" = "postgresql" ]; then
+  apt install -y libpq-dev
+elif [ "$DBTYPE" = "mysql" ]; then
+  apt install -y libmysqlclient-dev python3-dev default-libmysqlclient-dev
+fi
+
+# -------------------------------------------------------------------
+# fail2ban installieren
+# -------------------------------------------------------------------
+read -p "fail2ban installieren (schützt SSH)? [J/n]: " INSTALL_FAIL2BAN
+INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-J}"
+if [[ "$INSTALL_FAIL2BAN" =~ ^[Jj]$ ]]; then
+  echo "🛡️  Installiere fail2ban..."
+  apt install -y fail2ban
+  cat > /etc/fail2ban/jail.local <<EOF
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 3
+bantime = 3600
+EOF
+  systemctl enable --now fail2ban
+  echo "✅ fail2ban aktiviert"
+else
+  echo "⏭️  fail2ban übersprungen"
+fi
+
+# -------------------------------------------------------------------
+# App-User erstellen
+# -------------------------------------------------------------------
+if ! id "$APPUSER" &>/dev/null; then
+  echo "👤 Erstelle Benutzer: $APPUSER"
+  adduser --disabled-password --gecos "" "$APPUSER" 2>/dev/null || adduser --disabled-password "$APPUSER"
+  
+  # Home-Verzeichnis sicherstellen
+  if [ ! -d "/home/$APPUSER" ]; then
+    mkdir -p "/home/$APPUSER"
+    chown "$APPUSER:$APPUSER" "/home/$APPUSER"
+  fi
+fi
+
+# SSH-Verzeichnis erstellen
 echo "🔑 Erstelle SSH-Key für Benutzer $APPUSER..."
-# Benutzer-Home vorbereiten (ohne sudo!)
 mkdir -p "/home/$APPUSER/.ssh"
 chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh"
 chmod 700 "/home/$APPUSER/.ssh"
 
-# SSH-Key erstellen (als root, aber Besitzer ändern)
+# SSH-Key erstellen
 if [ -z "$SSH_KEY_PASSPHRASE" ]; then
-  ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
+  ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f 2>/dev/null || echo 'server')" \
     -f "$SSH_KEY_PATH" -N "" -q
 else
-  # Mit Passphrase (interaktiv – muss manuell eingegeben werden)
-  ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f || echo 'server')" \
+  ssh-keygen -t ed25519 -C "${APPUSER}@$(hostname -f 2>/dev/null || echo 'server')" \
     -f "$SSH_KEY_PATH" -N "$SSH_KEY_PASSPHRASE" -q
 fi
 
@@ -273,105 +331,27 @@ cat "${SSH_KEY_PATH}.pub"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 
-# GitHub Setup (NUR wenn Repo angegeben)
+# GitHub Setup
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📦 GitHub Repository erkannt: $GITHUB_REPO_URL"
   echo
   echo "⚠️  WICHTIG FÜR PRIVATE REPOS:"
   echo "   1. Kopiere den öffentlichen Key oben"
   echo "   2. Gehe zu: GitHub → Settings → SSH and GPG keys → New SSH key"
-  echo "   3. Titel: '${PROJECTNAME} - $(hostname -f || echo 'server')'"
+  echo "   3. Titel: '${PROJECTNAME} - $(hostname -f 2>/dev/null || echo 'server')'"
   echo "   4. Key einfügen und speichern"
   echo
   read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
   [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
   
-  # known_hosts für github.com (als root erstellen, dann Besitzer ändern)
-  ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
+  # known_hosts für github.com
+  mkdir -p "/home/$APPUSER/.ssh"
   ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
   chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh/known_hosts"
   chmod 644 "/home/$APPUSER/.ssh/known_hosts"
 else
   echo "⏭️  GitHub nicht genutzt - überspringe GitHub-Setup"
 fi
-
-# SSH-Zugriff für App-User ermöglichen
-echo "🔓 Konfiguriere SSH-Zugriff für $APPUSER..."
-echo "   • Anmeldung per SSH-Key erlaubt"
-echo "   • Anmeldung per Passwort: deaktiviert (sicher)"
-echo
-
-# Prüfen, ob SSHD PasswordAuthentication deaktiviert ist
-if grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config 2>/dev/null; then
-  echo "✅ SSH-Passwort-Login ist bereits deaktiviert (sicher)"
-elif grep -q "^PasswordAuthentication yes" /etc/ssh/sshd_config 2>/dev/null; then
-  echo "⚠️  WARNUNG: SSH-Passwort-Login ist aktiviert!"
-  echo "    Empfehlung: In /etc/ssh/sshd_config 'PasswordAuthentication no' setzen"
-  echo "    Danach: systemctl restart sshd"
-fi
-
-# -------------------------------------------------------------------
-# System-Pakete (optional upgrade)
-# -------------------------------------------------------------------
-apt update
-
-read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
-[[ "${UPGRADE:-J}" =~ ^[Jj]$ ]] && apt upgrade -y
-
-# Basis-Pakete
-echo "📦 Installiere Basis-Pakete..."
-apt install -y curl git nano ca-certificates openssl net-tools nginx \
-               python3 python3-venv python3-pip build-essential iproute2
-
-# Bildverarbeitung (Pillow) - Empfohlen für fast alle Projekte
-echo "🖼️  Installiere Pillow für Bildunterstützung (ImageField)..."
-apt install -y libjpeg-dev zlib1g-dev libpng-dev libwebp-dev
-
-# DB-spezifische Pakete
-if [ "$DBTYPE" = "postgresql" ]; then
-  apt install -y libpq-dev
-elif [ "$DBTYPE" = "mysql" ]; then
-  apt install -y libmysqlclient-dev python3-dev default-libmysqlclient-dev
-fi
-
-# -------------------------------------------------------------------
-# Sicherheit: fail2ban gegen SSH-Brute-Force
-# -------------------------------------------------------------------
-read -p "fail2ban installieren (schützt SSH)? [J/n]: " INSTALL_FAIL2BAN
-INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-J}"
-if [[ "$INSTALL_FAIL2BAN" =~ ^[Jj]$ ]]; then
-  echo "🛡️  Installiere fail2ban..."
-  apt install -y fail2ban
-  cat > /etc/fail2ban/jail.local <<EOF
-[sshd]
-enabled = true
-port = ssh
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 3
-bantime = 3600
-EOF
-  systemctl restart fail2ban
-  echo "✅ fail2ban aktiviert"
-else
-  echo "⏭️  fail2ban übersprungen"
-fi
-
-# -------------------------------------------------------------------
-# App-User erstellen (OHNE sudo!)
-# -------------------------------------------------------------------
-if ! id "$APPUSER" &>/dev/null; then
-  echo "👤 Erstelle Benutzer: $APPUSER"
-  adduser --disabled-password --gecos "" "$APPUSER" || adduser --disabled-password "$APPUSER"
-  
-  # Home-Verzeichnis korrigieren (manchmal nicht erstellt)
-  if [ ! -d "/home/$APPUSER" ]; then
-    mkdir -p "/home/$APPUSER"
-    chown "$APPUSER:$APPUSER" "/home/$APPUSER"
-  fi
-fi
-
-# ⚠️ KEIN sudo für APPUSER! Nur spezifische Befehle erlauben (siehe unten)
 
 # -------------------------------------------------------------------
 # PostgreSQL / MySQL Installation (lokal)
@@ -385,6 +365,15 @@ if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
     apt install -y $DB_PACKAGE_LOCAL
     systemctl enable --now postgresql
     
+    # Warten bis PostgreSQL läuft
+    for i in {1..10}; do
+      if systemctl is-active --quiet postgresql; then
+        break
+      fi
+      echo "Warte auf PostgreSQL..."
+      sleep 2
+    done
+    
     echo "🔐 Erstelle PostgreSQL Benutzer und Datenbank..."
     sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
       sudo -u postgres psql -c "CREATE DATABASE \"$DBNAME\";"
@@ -394,9 +383,21 @@ if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
     
     sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DBNAME\" TO \"$DBUSER\";"
     
+    # PostgreSQL 15+ compatibility
+    sudo -u postgres psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null || true
+    
   elif [ "$DBTYPE" = "mysql" ]; then
     apt install -y $DB_PACKAGE_LOCAL
     systemctl enable --now mariadb
+    
+    # Warten bis MariaDB läuft
+    for i in {1..10}; do
+      if systemctl is-active --quiet mariadb; then
+        break
+      fi
+      echo "Warte auf MariaDB..."
+      sleep 2
+    done
     
     echo "🔐 Erstelle MySQL/MariaDB Benutzer und Datenbank..."
     mysql -u root <<SQL
@@ -407,7 +408,6 @@ FLUSH PRIVILEGES;
 SQL
   fi
 elif [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "2" ]; then
-  # Remote-DB: Nur Client installieren
   echo "🌐 Installiere ${DBTYPE^^} Client für Remote-Verbindung..."
   apt install -y $DB_PACKAGE_CLIENT
 fi
@@ -425,41 +425,18 @@ chown "$APPUSER:$APPUSER" "$APPDIR"
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📥 Klonen GitHub Repository: $GITHUB_REPO_URL"
   
-  # Git clone mit SSH-Key (als APPUSER via su)
-  su - "$APPUSER" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes' git clone '$GITHUB_REPO_URL' '$APPDIR'" 
+  # Git clone als APPUSER
+  su - "$APPUSER" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new' git clone '$GITHUB_REPO_URL' '$APPDIR'" 
   
   echo "✅ Repository geklont nach $APPDIR"
-  
-  # .env erstellen (falls nicht im Repo vorhanden)
-  if [ ! -f "$APPDIR/.env" ]; then
-    echo "🔐 Erstelle .env Datei (nicht im Repository gefunden)..."
-    cat > "$APPDIR/.env" <<EOF
-MODE=$MODE
-DEBUG=$DEBUG_VALUE
-SECRET_KEY=$DJKEY
-DB_ENGINE=$DB_ENGINE
-DB_NAME=$DBNAME
-DB_USER=$DBUSER
-DB_PASS=$DBPASS
-DB_HOST=$DBHOST
-DB_PORT=$DBPORT
-ALLOWED_HOSTS=$ALLOWED_HOSTS
-CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
-EOF
-    chown "$APPUSER:$APPUSER" "$APPDIR/.env"
-    chmod 600 "$APPDIR/.env"
-    echo "✅ .env erstellt"
-  else
-    echo "⚠️  .env bereits im Repository vorhanden (wird NICHT überschrieben)"
-    echo "   Stelle sicher, dass die DB-Zugangsdaten korrekt sind!"
-  fi
   
   # Virtual Environment erstellen
   echo "🐍 Erstelle Python Virtual Environment..."
   su - "$APPUSER" -s /bin/bash <<EOF
+set -e
 cd "$APPDIR"
 python3 -m venv .venv
-. .venv/bin/activate
+source .venv/bin/activate
 pip install --upgrade pip
 pip install django gunicorn python-dotenv pillow
 
@@ -478,13 +455,13 @@ fi
 EOF
 
 else
-  # NEUES PROJEKT erstellen (ohne GitHub)
+  # NEUES PROJEKT erstellen
   echo "🚀 Django Setup (neues Projekt ohne GitHub)..."
   su - "$APPUSER" -s /bin/bash <<EOF
 set -e
 cd "$APPDIR"
 python3 -m venv .venv
-. .venv/bin/activate
+source .venv/bin/activate
 pip install --upgrade pip
 pip install django gunicorn python-dotenv pillow
 
@@ -502,7 +479,7 @@ EOF
 fi
 
 # -------------------------------------------------------------------
-# .env Datei (nur bei neuem Projekt oder falls nicht vorhanden)
+# .env Datei
 # -------------------------------------------------------------------
 if [[ "$USE_GITHUB" != "true" ]] || [ ! -f "$APPDIR/.env" ]; then
   echo "🔐 Erstelle .env Datei..."
@@ -521,18 +498,18 @@ CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
 EOF
 
   chown "$APPUSER:$APPUSER" "$APPDIR/.env"
-  chmod 600 "$APPDIR/.env"  # Nur App-User darf lesen/schreiben!
+  chmod 600 "$APPDIR/.env"
 fi
 
 # -------------------------------------------------------------------
-# .gitignore (nur bei neuem Projekt ohne GitHub)
+# .gitignore
 # -------------------------------------------------------------------
-if [[ "$USE_GITHUB" != "true" ]]; then
+if [[ "$USE_GITHUB" != "true" ]] && [ ! -f "$APPDIR/.gitignore" ]; then
   cat > "$APPDIR/.gitignore" <<EOF
 .env
 __pycache__/
 *.py[cod]
-*$py.class
+*\$py.class
 *.so
 .Python
 .venv/
@@ -543,13 +520,14 @@ staticfiles/
 media/
 *.sqlite3
 db.sqlite3
+*.log
 EOF
 
   chown "$APPUSER:$APPUSER" "$APPDIR/.gitignore"
 fi
 
 # -------------------------------------------------------------------
-# settings.py (nur bei neuem Projekt ohne GitHub)
+# settings.py (nur bei neuem Projekt)
 # -------------------------------------------------------------------
 if [[ "$USE_GITHUB" != "true" ]]; then
   echo "⚙️  Konfiguriere Django settings.py..."
@@ -557,7 +535,6 @@ if [[ "$USE_GITHUB" != "true" ]]; then
 from pathlib import Path
 from dotenv import load_dotenv
 import os
-import time
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -610,11 +587,14 @@ TEMPLATES = [{
 
 WSGI_APPLICATION = "core.wsgi.application"
 
-# Universelle DB-Konfiguration (PostgreSQL/MySQL/SQLite)
+# Datenbank-Konfiguration
+db_engine = os.getenv("DB_ENGINE", "django.db.backends.sqlite3")
+db_name = os.getenv("DB_NAME", str(BASE_DIR / "db.sqlite3"))
+
 DATABASES = {
     "default": {
-        "ENGINE": os.getenv("DB_ENGINE", "django.db.backends.sqlite3"),
-        "NAME": os.getenv("DB_NAME", BASE_DIR / "db.sqlite3"),
+        "ENGINE": db_engine,
+        "NAME": db_name,
         "USER": os.getenv("DB_USER", ""),
         "PASSWORD": os.getenv("DB_PASS", ""),
         "HOST": os.getenv("DB_HOST", ""),
@@ -630,7 +610,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "de-de"
-TIME_ZONE = time.tzname[0] if hasattr(time, 'tzname') and time.tzname[0] else "Europe/Luxembourg"
+TIME_ZONE = "Europe/Luxembourg"
 USE_I18N = True
 USE_TZ = True
 
@@ -651,19 +631,46 @@ if MODE == "prod":
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
+    
+# Logging-Konfiguration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'file': {
+            'level': 'ERROR',
+            'class': 'logging.FileHandler',
+            'filename': f'/var/log/{os.getenv("PROJECTNAME", "django")}/django.log',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['file'],
+            'level': 'ERROR',
+            'propagate': True,
+        },
+    },
+}
 EOF
 
   chown "$APPUSER:$APPUSER" "$APPDIR/core/settings.py"
 fi
 
 # -------------------------------------------------------------------
-# Migration + Static Files
+# Migrationen + Static Files
 # -------------------------------------------------------------------
 echo "📊 Führe Migrationen aus..."
-su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py migrate"
+su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py migrate"
 
 echo "📦 Sammle statische Dateien..."
-su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py collectstatic --noinput"
+su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
+
+# -------------------------------------------------------------------
+# Log-Verzeichnis
+# -------------------------------------------------------------------
+mkdir -p "/var/log/${PROJECTNAME}"
+chown "$APPUSER:adm" "/var/log/${PROJECTNAME}"
+chmod 750 "/var/log/${PROJECTNAME}"
 
 # -------------------------------------------------------------------
 # systemd Service
@@ -679,7 +686,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn core.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120
+ExecStart=$APPDIR/.venv/bin/gunicorn core.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
 Restart=always
 RestartSec=10
 
@@ -690,13 +697,16 @@ EOF
 systemctl daemon-reload
 systemctl enable --now "$PROJECTNAME"
 
-# -------------------------------------------------------------------
-# Log-Rotation für Django/Gunicorn
-# -------------------------------------------------------------------
-mkdir -p "/var/log/${PROJECTNAME}"
-chown "$APPUSER:adm" "/var/log/${PROJECTNAME}"
-chmod 750 "/var/log/${PROJECTNAME}"
+# Kurz warten und Status prüfen
+sleep 2
+if ! systemctl is-active --quiet "$PROJECTNAME"; then
+  echo "⚠️  WARNUNG: Service konnte nicht gestartet werden!"
+  journalctl -u "$PROJECTNAME" -n 20 --no-pager
+fi
 
+# -------------------------------------------------------------------
+# Log-Rotation
+# -------------------------------------------------------------------
 cat > /etc/logrotate.d/${PROJECTNAME} <<EOF
 /var/log/${PROJECTNAME}/*.log {
   daily
@@ -714,7 +724,7 @@ cat > /etc/logrotate.d/${PROJECTNAME} <<EOF
 EOF
 
 # -------------------------------------------------------------------
-# nginx Konfiguration (mit static/media)
+# nginx Konfiguration
 # -------------------------------------------------------------------
 echo "🌐 Konfiguriere Nginx..."
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
@@ -728,7 +738,7 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
 
-    # Static Files (direkt via Nginx)
+    # Static Files
     location /static/ {
         alias $APPDIR/staticfiles/;
         expires 1y;
@@ -743,7 +753,7 @@ server {
         access_log off;
     }
 
-    # Django App (via Gunicorn)
+    # Django App
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
@@ -769,7 +779,7 @@ fi
 systemctl restart nginx
 
 # -------------------------------------------------------------------
-# Sudoers: App-User darf NUR Service-Befehle ohne Passwort
+# Sudoers
 # -------------------------------------------------------------------
 echo "🔐 Konfiguriere sudoers für $APPUSER..."
 cat > /etc/sudoers.d/${PROJECTNAME}-service <<EOF
@@ -778,61 +788,60 @@ EOF
 chmod 440 /etc/sudoers.d/${PROJECTNAME}-service
 
 # -------------------------------------------------------------------
-# UPDATE-Skript (in /usr/local/bin für besseren PATH-Zugriff)
+# Update-Skript
 # -------------------------------------------------------------------
 echo "🔄 Erstelle Update-Skript..."
-cat > /usr/local/bin/${PROJECTNAME}_update.sh <<'EOF'
+cat > /usr/local/bin/${PROJECTNAME}_update.sh <<UPDATEEOF
 #!/bin/bash
 set -euo pipefail
 
-APPDIR="${APPDIR}"
-SERVICE="${PROJECTNAME}"
+APPDIR="$APPDIR"
+SERVICE="$PROJECTNAME"
+APPUSER="$APPUSER"
+SSH_KEY_PATH="$SSH_KEY_PATH"
 
 echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║                  UPDATE START ($SERVICE)                      ║"
+echo "║                  UPDATE START (\$SERVICE)                      ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 
-cd "$APPDIR"
+cd "\$APPDIR"
 
-# Git Pull (mit SSH-Key) - NUR wenn GitHub genutzt wird
-if [ -d "$APPDIR/.git" ]; then
+# Git Pull (falls Git-Repo vorhanden)
+if [ -d "\$APPDIR/.git" ]; then
   echo "📥 Git Pull..."
-  su - "${APPUSER}" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i /home/${APPUSER}/.ssh/id_ed25519 -o IdentitiesOnly=yes' git pull"
+  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && GIT_SSH_COMMAND='ssh -i \$SSH_KEY_PATH -o IdentitiesOnly=yes' git pull"
 else
   echo "⏭️  Kein Git-Repository gefunden (überspringe git pull)"
 fi
 
 # Requirements installieren
-if [ -f "$APPDIR/requirements.txt" ]; then
+if [ -f "\$APPDIR/requirements.txt" ]; then
   echo "📦 Installiere Requirements..."
-  su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && . .venv/bin/activate && pip install -r requirements.txt"
-else
-  echo "⚠️  requirements.txt nicht gefunden (überspringe pip install)"
+  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && pip install -r requirements.txt"
 fi
 
-# Migrationen prüfen
-echo "🔍 Prüfe auf fehlende Migrationen..."
-su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py makemigrations --check --dry-run" || {
+# Migrationen prüfen und ausführen
+echo "🔍 Prüfe auf neue Migrationen..."
+su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py makemigrations --check --dry-run" || {
   echo "⚠️  Neue Migrationen gefunden. Führe makemigrations aus..."
-  su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py makemigrations"
+  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py makemigrations"
 }
 
-# Migrationen ausführen
 echo "📊 Führe Migrationen aus..."
-su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py migrate"
+su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py migrate"
 
 # Statische Dateien sammeln
 echo "📦 Sammle statische Dateien..."
-su - "${APPUSER}" -s /bin/bash -c "cd $APPDIR && .venv/bin/python manage.py collectstatic --noinput"
+su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
 
 # Service neustarten
-echo "🔄 Neustart Service (sudo, nopasswd)..."
-sudo systemctl restart "$SERVICE"
+echo "🔄 Neustart Service..."
+sudo systemctl restart "\$SERVICE"
 
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║                     UPDATE DONE ✅                            ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
-EOF
+UPDATEEOF
 
 chmod 755 /usr/local/bin/${PROJECTNAME}_update.sh
 
@@ -844,50 +853,49 @@ mkdir -p "$BACKUP_DIR"
 chown "$APPUSER:$APPUSER" "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
 
-cat > /usr/local/bin/${PROJECTNAME}_backup.sh <<'BACKUP_EOF'
+cat > /usr/local/bin/${PROJECTNAME}_backup.sh <<BACKUPEOF
 #!/bin/bash
 set -euo pipefail
-PROJECT="${PROJECTNAME}"
-APPUSER="${APPUSER}"
-APPDIR="${APPDIR}"
-DBTYPE="${DBTYPE}"
-DBNAME="${DBNAME}"
-BACKUP_DIR="${BACKUP_DIR}"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+PROJECT="$PROJECTNAME"
+APPUSER="$APPUSER"
+APPDIR="$APPDIR"
+DBTYPE="$DBTYPE"
+DBNAME="$DBNAME"
+BACKUP_DIR="$BACKUP_DIR"
+TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
 
-echo "📦 Backup startet für $PROJECT..."
+echo "📦 Backup startet für \$PROJECT..."
 
 # DB-Dump
-if [ "$DBTYPE" = "postgresql" ]; then
-  sudo -u postgres pg_dump -Fc "$DBNAME" > "$BACKUP_DIR/db_${TIMESTAMP}.dump" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
-elif [ "$DBTYPE" = "mysql" ]; then
-  mysqldump -u root "$DBNAME" > "$BACKUP_DIR/db_${TIMESTAMP}.sql" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
+if [ "\$DBTYPE" = "postgresql" ]; then
+  sudo -u postgres pg_dump -Fc "\$DBNAME" > "\$BACKUP_DIR/db_\${TIMESTAMP}.dump" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
+elif [ "\$DBTYPE" = "mysql" ]; then
+  mysqldump -u root "\$DBNAME" > "\$BACKUP_DIR/db_\${TIMESTAMP}.sql" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
+elif [ "\$DBTYPE" = "sqlite" ] && [ -f "\$APPDIR/db.sqlite3" ]; then
+  cp "\$APPDIR/db.sqlite3" "\$BACKUP_DIR/db_\${TIMESTAMP}.sqlite3"
 fi
 
 # .env sichern
-cp "$APPDIR/.env" "$BACKUP_DIR/env_${TIMESTAMP}.backup" 2>/dev/null && chmod 600 "$BACKUP_DIR/env_${TIMESTAMP}.backup"
+[ -f "\$APPDIR/.env" ] && cp "\$APPDIR/.env" "\$BACKUP_DIR/env_\${TIMESTAMP}.backup" && chmod 600 "\$BACKUP_DIR/env_\${TIMESTAMP}.backup"
 
-# Projekt sichern (ohne .venv/__pycache__)
-tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
-    -czf "$BACKUP_DIR/project_${TIMESTAMP}.tar.gz" -C /srv "$PROJECT" 2>/dev/null || echo "⚠️ Projekt-Backup fehlgeschlagen"
+# Projekt sichern
+tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.log' \\
+    -czf "\$BACKUP_DIR/project_\${TIMESTAMP}.tar.gz" -C /srv "\$PROJECT" 2>/dev/null || echo "⚠️ Projekt-Backup fehlgeschlagen"
 
 # Alte Backups bereinigen (>14 Tage)
-find "$BACKUP_DIR" -type f -mtime +14 -delete 2>/dev/null
+find "\$BACKUP_DIR" -type f -mtime +14 -delete 2>/dev/null
 
-echo "✅ Backup fertig in $BACKUP_DIR"
-BACKUP_EOF
+echo "✅ Backup fertig in \$BACKUP_DIR"
+BACKUPEOF
 
 chmod 755 /usr/local/bin/${PROJECTNAME}_backup.sh
 echo "💾 Backup-Skript erstellt: /usr/local/bin/${PROJECTNAME}_backup.sh"
 
 # -------------------------------------------------------------------
-# Health-Check Endpoint (nur bei neuem Projekt ohne GitHub)
+# Health-Check (nur bei neuem Projekt)
 # -------------------------------------------------------------------
 if [[ "$USE_GITHUB" != "true" ]]; then
-  su - "$APPUSER" -s /bin/bash <<'HEALTH_EOF'
-cd "$APPDIR"
-cat >> core/views.py <<'PYEOF'
-
+  cat > "$APPDIR/core/views.py" <<'HEALTHEOF'
 from django.http import JsonResponse
 from django.db import connection
 import os
@@ -897,7 +905,7 @@ def health_check(request):
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
         db_ok = True
-    except:
+    except Exception as e:
         db_ok = False
     
     return JsonResponse({
@@ -905,29 +913,57 @@ def health_check(request):
         "database": "ok" if db_ok else "error",
         "mode": os.getenv("MODE", "unknown")
     })
-PYEOF
+HEALTHEOF
+  chown "$APPUSER:$APPUSER" "$APPDIR/core/views.py"
 
-# URL hinzufügen
-if ! grep -q "health_check" core/urls.py; then
-  sed -i "/^from django.urls import path/a from . import views" core/urls.py
-  sed -i "/^urlpatterns = \[/a\    path('health/', views.health_check)," core/urls.py
-fi
-HEALTH_EOF
+  # URL Pattern hinzufügen
+  if [ -f "$APPDIR/core/urls.py" ]; then
+    if ! grep -q "health_check" "$APPDIR/core/urls.py"; then
+      su - "$APPUSER" -s /bin/bash <<'URLEOF'
+cd "$APPDIR"
+python3 << 'PYEOF'
+import re
+
+with open("core/urls.py", "r") as f:
+    content = f.read()
+
+# Import hinzufügen
+if "from . import views" not in content:
+    content = re.sub(
+        r"(from django\.urls import.*)",
+        r"\1\nfrom . import views",
+        content
+    )
+
+# URL Pattern hinzufügen
+if "health/" not in content:
+    content = re.sub(
+        r"(urlpatterns = \[)",
+        r"\1\n    path('health/', views.health_check),",
+        content
+    )
+
+with open("core/urls.py", "w") as f:
+    f.write(content)
+PYEOF
+URLEOF
+    fi
+  fi
   echo "✅ Health-Check Endpoint erstellt: /health/"
 fi
 
 # -------------------------------------------------------------------
-# LOGIN-Hinweis (MOTD)
+# MOTD
 # -------------------------------------------------------------------
-cat > /etc/profile.d/${PROJECTNAME}_motd.sh <<EOF
-# Zeige nur bei interaktiven Shells
-case "\$-" in
+cat > /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
+# Nur bei interaktiven Shells
+case "\\\$-" in
   *i*) ;;
   *) return ;;
 esac
 
-# Zeige nur beim ersten Login pro Session
-if [ -n "\${MOTD_${PROJECTNAME}_SHOWN:-}" ]; then
+# Nur einmal pro Session
+if [ -n "\\\${MOTD_${PROJECTNAME}_SHOWN:-}" ]; then
   return
 fi
 export MOTD_${PROJECTNAME}_SHOWN=1
@@ -939,88 +975,49 @@ echo "╚═══════════════════════�
 echo "📁 Projektverzeichnis: $APPDIR"
 echo "⚙️  Service:           $PROJECTNAME"
 echo "🌐 Modus:              $MODE (DEBUG=$DEBUG_VALUE)"
-EOF
+MOTDEOF
 
 if [[ "$USE_GITHUB" == "true" ]]; then
-  echo "📦 GitHub Repo:       $GITHUB_REPO_URL"
+  cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
+echo "📦 GitHub Repo:       $GITHUB_REPO_URL"
+MOTDEOF
 fi
 
-cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<EOF
+cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
 echo
-echo "🔐 SSH-Zugriff für $APPUSER:"
-echo "   IP:          ssh $APPUSER@${LOCAL_IP}"
-echo "   Hostname:    ssh $APPUSER@${HOSTNAME_FQDN}"
+echo "🔐 SSH-Zugriff:"
+echo "   ssh $APPUSER@${LOCAL_IP}"
 echo "   Private Key: ${SSH_KEY_PATH}"
 echo
-echo "📦 Update (als $APPUSER, kein sudo nötig):"
-echo "   ${PROJECTNAME}_update.sh"
+echo "📦 Update:     ${PROJECTNAME}_update.sh"
+echo "💾 Backup:     ${PROJECTNAME}_backup.sh"
 echo
-echo "💾 Backup (als $APPUSER):"
-echo "   ${PROJECTNAME}_backup.sh"
+echo "📊 Status:     systemctl status $PROJECTNAME"
+echo "📋 Logs:       journalctl -u $PROJECTNAME -f"
 echo
-echo "📊 Status/Logs:"
-echo "   systemctl status $PROJECTNAME"
-echo "   journalctl -u $PROJECTNAME -f"
-echo
-echo "👑 Superuser erstellen:"
-echo "   sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
-echo
-echo "💾 Backup-Tipp:"
-echo "   DB: pg_dump/mysqldump -u $DBUSER -h $DBHOST $DBNAME > backup.sql"
-echo "   .env: cp $APPDIR/.env /sicherer/ort/"
-echo
-echo "🔐 CSRF_TRUSTED_ORIGINS (PROD):"
-echo "   $CSRF_TRUSTED_ORIGINS_VALUE"
+echo "👑 Superuser:  sudo -u $APPUSER bash -c 'cd $APPDIR && source .venv/bin/activate && python manage.py createsuperuser'"
 echo "═══════════════════════════════════════════════════════════════"
 echo
-EOF
+MOTDEOF
 chmod 644 /etc/profile.d/${PROJECTNAME}_motd.sh
 
 # -------------------------------------------------------------------
-# Firewall-Hinweis (falls aktiv)
-# -------------------------------------------------------------------
-if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
-  echo "⚠️  Firewall aktiviert! Ports ggf. freigeben:"
-  echo "   ufw allow 22/tcp    # SSH"
-  echo "   ufw allow 80/tcp    # HTTP"
-  echo "   ufw allow 443/tcp   # HTTPS"
-fi
-
-# -------------------------------------------------------------------
-# Finaler Security-Check
-# -------------------------------------------------------------------
-echo
-echo "🔍 Finaler Security-Check:"
-if command -v fail2ban-client &>/dev/null && fail2ban-client status sshd &>/dev/null; then
-  echo "✅ fail2ban: AKTIV"
-else
-  echo "⚠️  fail2ban: NICHT AKTIV (empfohlen für Internet-Server!)"
-fi
-
-if grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config 2>/dev/null; then
-  echo "✅ SSH-Passwort-Login: DEAKTIVIERT"
-else
-  echo "⚠️  SSH-Passwort-Login: AKTIV (empfohlen: 'PasswordAuthentication no' in /etc/ssh/sshd_config)"
-fi
-
-# -------------------------------------------------------------------
-# Done
+# Abschluss
 # -------------------------------------------------------------------
 echo
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║                      INSTALLATION FERTIG ✅                   ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo "📁 Projektverzeichnis: $APPDIR"
-echo "👤 App-Benutzer:       $APPUSER (kein sudo!)"
-echo "🌐 OS:                 ${PRETTY_NAME:-$ID}"
-echo "⚙️  Modus:             $MODE (DEBUG=$DEBUG_VALUE)"
+echo "👤 App-Benutzer:       $APPUSER"
+echo "🌐 Modus:              $MODE (DEBUG=$DEBUG_VALUE)"
 echo "🗄️  Datenbank:         ${DBTYPE^^}"
-echo "   DB-Engine:          $DB_ENGINE"
-echo "   DB-Name:            $DBNAME"
-echo "   DB-Host:            $DBHOST"
-echo "   DB-Port:            $DBPORT"
-echo
-echo "🖼️  Pillow installiert: Ja (für ImageField/Bildverarbeitung)"
+if [ "$DBTYPE" != "sqlite" ]; then
+  echo "   DB-Engine:          $DB_ENGINE"
+  echo "   DB-Name:            $DBNAME"
+  echo "   DB-Host:            $DBHOST"
+  echo "   DB-Port:            $DBPORT"
+fi
 echo
 echo "🔐 SSH-ZUGRIFF:"
 echo "   Benutzer:     $APPUSER"
@@ -1029,71 +1026,12 @@ echo "   Hostname:     $HOSTNAME_FQDN"
 echo "   Private Key:  $SSH_KEY_PATH"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "⚠️  WICHTIG: Private Key herunterladen für WinSCP/PuTTY!"
+echo "📥 Private Key für WinSCP/PuTTY herunterladen:"
+echo "   scp root@${LOCAL_IP}:${SSH_KEY_PATH} ."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
-echo "📥 SO LÄDTST DU DEN PRIVATE KEY HERUNTER:"
-echo
-echo "   Methode 1 - WinSCP (empfohlen):"
-echo "   1. WinSCP öffnen"
-echo "   2. Neue Verbindung erstellen"
-echo "   3. Datei-Protokoll: SCP"
-echo "   4. Hostname: $LOCAL_IP oder $HOSTNAME_FQDN"
-echo "   5. Benutzername: $APPUSER"
-echo "   6. Authentifizierung: SSH-Schlüssel"
-echo "   7. Privater Schlüssel: ${SSH_KEY_PATH}"
-echo "   8. Verbindung testen"
-echo
-echo "   Methode 2 - PuTTY:"
-echo "   1. Private Key herunterladen: scp root@${LOCAL_IP}:${SSH_KEY_PATH} C:\\temp\\id_ed25519"
-echo "   2. PuTTYgen öffnen"
-echo "   3. 'Load' → Private Key laden (id_ed25519)"
-echo "   4. 'Save private key' → id_ed25519.ppk speichern"
-echo "   5. PuTTY öffnen → Connection → SSH → Auth → Browse (id_ed25519.ppk)"
-echo "   6. Hostname: $LOCAL_IP oder $HOSTNAME_FQDN"
-echo "   7. Login: $APPUSER"
-echo
-echo "   Methode 3 - Direkt vom Server kopieren:"
-echo "   cat ${SSH_KEY_PATH}"
-echo "   (Den gesamten Key kopieren und lokal speichern)"
-echo
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo
-
-if [[ "$USE_GITHUB" == "true" ]]; then
-  echo "📦 GitHub Repository: $GITHUB_REPO_URL"
-  echo
-  echo "⚠️  WICHTIG FÜR PRIVATE REPOS:"
-  echo "   • Öffentlicher Key wurde oben angezeigt"
-  echo "   • Zu GitHub hinzufügen: Settings → SSH and GPG keys → New SSH key"
-  echo "   • Titel: '${PROJECTNAME} - ${HOSTNAME_FQDN}'"
-  echo
-else
-  echo "⏭️  GitHub nicht genutzt - lokales Django-Projekt erstellt"
-fi
-
-echo "🌐 ALLOWED_HOSTS:      $ALLOWED_HOSTS"
-echo "🔐 CSRF_TRUSTED_ORIGINS: $CSRF_TRUSTED_ORIGINS_VALUE"
-echo
-echo "🔄 Update-Skript (als $APPUSER):"
-echo "   ${PROJECTNAME}_update.sh"
-echo
-echo "💾 Backup-Skript (als $APPUSER):"
-echo "   ${PROJECTNAME}_backup.sh"
-echo
-echo "👑 Superuser erstellen:"
-echo "   sudo -u $APPUSER bash -c 'cd $APPDIR && .venv/bin/python manage.py createsuperuser'"
-echo
-echo "📊 Service-Befehle:"
-echo "   systemctl status $PROJECTNAME"
-echo "   systemctl restart $PROJECTNAME"
-echo "   journalctl -u $PROJECTNAME -f"
-echo
-echo "💡 Wichtige Hinweise:"
-echo "   • .env ist mit chmod 600 gesichert (nur $APPUSER)"
-echo "   • SSL wird extern vom Reverse Proxy terminiert"
-echo "   • Statische Dateien werden direkt von Nginx ausgeliefert"
-echo "   • Bei Login werden alle Befehle angezeigt"
+echo "📦 Update:     ${PROJECTNAME}_update.sh"
+echo "💾 Backup:     ${PROJECTNAME}_backup.sh"
 echo
 echo "✅ FERTIG! Viel Erfolg mit deinem Django-Projekt! 🚀"
 echo "═══════════════════════════════════════════════════════════════"
