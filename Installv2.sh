@@ -94,11 +94,15 @@ else
 fi
 
 # -------------------------------------------------------------------
-# Local IP (Default Hosts)
+# Local IPs (Default Hosts) - ALLE Netzwerk-IPs erkennen
 # -------------------------------------------------------------------
 LOCAL_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
 [ -z "${LOCAL_IP:-}" ] && LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -z "${LOCAL_IP:-}" ] && LOCAL_IP="127.0.0.1"
+
+# Alle IPs sammeln (für ALLOWED_HOSTS)
+ALL_LOCAL_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
+[ -z "${ALL_LOCAL_IPS:-}" ] && ALL_LOCAL_IPS="$LOCAL_IP"
 
 HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo "$LOCAL_IP")"
 
@@ -117,7 +121,7 @@ if [ "$MODESEL" = "1" ]; then MODE="dev"; DEBUG_VALUE="True"; else MODE="prod"; 
 # -------------------------------------------------------------------
 # Hosts
 # -------------------------------------------------------------------
-DEFAULT_ALLOWED_HOSTS="${LOCAL_IP},127.0.0.1,localhost,${HOSTNAME_FQDN}"
+DEFAULT_ALLOWED_HOSTS="${ALL_LOCAL_IPS},127.0.0.1,localhost,${HOSTNAME_FQDN}"
 [ "$MODE" = "prod" ] && echo "PROD: DNS-Namen eintragen (z.B. app.intern.lan)"
 read -p "ALLOWED_HOSTS (Komma-separiert) [${DEFAULT_ALLOWED_HOSTS}]: " ALLOWED_HOSTS
 ALLOWED_HOSTS="${ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS}"
@@ -331,13 +335,30 @@ fi
 if ! id "$APPUSER" &>/dev/null; then
   echo "👤 Erstelle Benutzer: $APPUSER"
   adduser --disabled-password --gecos "" "$APPUSER" 2>/dev/null || adduser --disabled-password "$APPUSER"
-  
+
   # Home-Verzeichnis sicherstellen
   if [ ! -d "/home/$APPUSER" ]; then
     mkdir -p "/home/$APPUSER"
     chown "$APPUSER:$APPUSER" "/home/$APPUSER"
   fi
 fi
+
+# Passwort für App-User setzen (für SSH-Login + Django Admin)
+echo
+echo "🔑 Passwort für Linux-Benutzer '$APPUSER' setzen"
+echo "   (Wird auch für SSH/SCP-Login benötigt)"
+while true; do
+  read -s -p "Passwort für $APPUSER: " APPUSER_PASS; echo
+  [ -z "$APPUSER_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
+  read -s -p "Passwort bestätigen: " APPUSER_PASS2; echo
+  if [ "$APPUSER_PASS" = "$APPUSER_PASS2" ]; then
+    echo "$APPUSER:$APPUSER_PASS" | chpasswd
+    echo "✅ Passwort für $APPUSER gesetzt"
+    break
+  else
+    echo "❌ Passwörter stimmen nicht überein. Erneut versuchen."
+  fi
+done
 
 # SSH-Verzeichnis erstellen
 echo "🔑 Erstelle SSH-Key für Benutzer $APPUSER..."
@@ -717,6 +738,37 @@ su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && pyth
 
 echo "📦 Sammle statische Dateien..."
 su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
+
+# -------------------------------------------------------------------
+# Django Superuser erstellen
+# -------------------------------------------------------------------
+echo
+echo "👑 Django Superuser erstellen (Admin-Login für /admin/)"
+read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
+DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
+
+read -p "Admin-Email [admin@localhost]: " DJANGO_ADMIN_EMAIL
+DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
+
+while true; do
+  read -s -p "Admin-Passwort: " DJANGO_ADMIN_PASS; echo
+  [ -z "$DJANGO_ADMIN_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
+  read -s -p "Admin-Passwort bestätigen: " DJANGO_ADMIN_PASS2; echo
+  if [ "$DJANGO_ADMIN_PASS" = "$DJANGO_ADMIN_PASS2" ]; then
+    break
+  else
+    echo "❌ Passwörter stimmen nicht überein. Erneut versuchen."
+  fi
+done
+
+su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
+  DJANGO_SUPERUSER_PASSWORD='$DJANGO_ADMIN_PASS' \
+  python manage.py createsuperuser --noinput \
+    --username '$DJANGO_ADMIN_USER' \
+    --email '$DJANGO_ADMIN_EMAIL'"
+
+echo "✅ Django Superuser '$DJANGO_ADMIN_USER' erstellt"
+echo "   Login unter: http://${LOCAL_IP}/admin/"
 
 # -------------------------------------------------------------------
 # systemd Service
