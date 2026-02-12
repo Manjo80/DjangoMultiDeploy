@@ -86,7 +86,7 @@ ALLOWED_HOSTS=192.168.1.10,localhost,gps.example.com
 
 Das Skript erzeugt automatisch:
 
-CSRF_TRUSTED_ORIGINS=https://gps.example.com
+CSRF_TRUSTED_ORIGINS=https://abc.example.com
 
 ✔ IPs & localhost werden ignoriert
 ✔ nur DNS-Namen → https://…
