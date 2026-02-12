@@ -288,6 +288,44 @@ else
 fi
 
 # -------------------------------------------------------------------
+# SSH-Server: PasswordAuthentication + PermitRootLogin sicherstellen
+# -------------------------------------------------------------------
+echo "🔐 Prüfe SSH-Server Konfiguration..."
+SSHD_CONFIG="/etc/ssh/sshd_config"
+SSHD_CHANGED=false
+
+# PasswordAuthentication aktivieren (nötig für SCP Key-Download mit Passwort)
+if grep -qE '^\s*PasswordAuthentication\s+no' "$SSHD_CONFIG" 2>/dev/null; then
+  sed -i 's/^\s*PasswordAuthentication\s\+no/PasswordAuthentication yes/' "$SSHD_CONFIG"
+  SSHD_CHANGED=true
+  echo "  ✅ PasswordAuthentication auf 'yes' gesetzt"
+elif ! grep -qE '^\s*PasswordAuthentication\s+yes' "$SSHD_CONFIG" 2>/dev/null; then
+  echo "PasswordAuthentication yes" >> "$SSHD_CONFIG"
+  SSHD_CHANGED=true
+  echo "  ✅ PasswordAuthentication hinzugefügt"
+else
+  echo "  ✅ PasswordAuthentication bereits aktiv"
+fi
+
+# PermitRootLogin aktivieren (nötig für scp root@...)
+if grep -qE '^\s*PermitRootLogin\s+(no|prohibit-password|forced-commands-only)' "$SSHD_CONFIG" 2>/dev/null; then
+  sed -i 's/^\s*PermitRootLogin\s\+\(no\|prohibit-password\|forced-commands-only\)/PermitRootLogin yes/' "$SSHD_CONFIG"
+  SSHD_CHANGED=true
+  echo "  ✅ PermitRootLogin auf 'yes' gesetzt"
+elif ! grep -qE '^\s*PermitRootLogin' "$SSHD_CONFIG" 2>/dev/null; then
+  echo "PermitRootLogin yes" >> "$SSHD_CONFIG"
+  SSHD_CHANGED=true
+  echo "  ✅ PermitRootLogin hinzugefügt"
+else
+  echo "  ✅ PermitRootLogin bereits aktiv"
+fi
+
+if [ "$SSHD_CHANGED" = true ]; then
+  systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
+  echo "  🔄 SSH-Server neu gestartet"
+fi
+
+# -------------------------------------------------------------------
 # App-User erstellen
 # -------------------------------------------------------------------
 if ! id "$APPUSER" &>/dev/null; then
@@ -321,6 +359,11 @@ chmod 600 "$SSH_KEY_PATH"
 chmod 644 "${SSH_KEY_PATH}.pub"
 chown "$APPUSER:$APPUSER" "$SSH_KEY_PATH"
 chown "$APPUSER:$APPUSER" "${SSH_KEY_PATH}.pub"
+
+# Public Key in authorized_keys eintragen (ermöglicht SSH-Login mit diesem Key)
+cat "${SSH_KEY_PATH}.pub" >> "/home/$APPUSER/.ssh/authorized_keys"
+chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh/authorized_keys"
+chmod 600 "/home/$APPUSER/.ssh/authorized_keys"
 
 echo "✅ SSH-Key erstellt: $SSH_KEY_PATH"
 echo
