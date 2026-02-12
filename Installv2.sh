@@ -973,12 +973,22 @@ export MOTD_${PROJECTNAME}_SHOWN=1
 
 echo
 echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║              $PROJECTNAME - Quick Reference                   ║"
+echo "║              $PROJECTNAME - Serverübersicht                   ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo "📁 Projektverzeichnis: $APPDIR"
-echo "⚙️  Service:           $PROJECTNAME"
+echo "👤 App-Benutzer:       $APPUSER"
 echo "🌐 Modus:              $MODE (DEBUG=$DEBUG_VALUE)"
+echo "🗄️  Datenbank:         ${DBTYPE^^}"
 MOTDEOF
+
+if [ "$DBTYPE" != "sqlite" ]; then
+  cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
+echo "   DB-Engine:          $DB_ENGINE"
+echo "   DB-Name:            $DBNAME"
+echo "   DB-Host:            $DBHOST"
+echo "   DB-Port:            $DBPORT"
+MOTDEOF
+fi
 
 if [[ "$USE_GITHUB" == "true" ]]; then
   cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
@@ -988,9 +998,16 @@ fi
 
 cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
 echo
-echo "🔐 SSH-Zugriff:"
-echo "   ssh $APPUSER@${LOCAL_IP}"
-echo "   Private Key: ${SSH_KEY_PATH}"
+echo "🔐 SSH-ZUGRIFF:"
+echo "   Benutzer:     $APPUSER"
+echo "   IP-Adresse:   $LOCAL_IP"
+echo "   Hostname:     $HOSTNAME_FQDN"
+echo "   Private Key:  $SSH_KEY_PATH"
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📥 Private Key für WinSCP/PuTTY herunterladen:"
+echo "   scp root@${LOCAL_IP}:${SSH_KEY_PATH} ."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 echo "📦 Update:     ${PROJECTNAME}_update.sh"
 echo "💾 Backup:     ${PROJECTNAME}_backup.sh"
