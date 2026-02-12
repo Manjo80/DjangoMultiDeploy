@@ -251,7 +251,7 @@ read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
 # Basis-Pakete
 echo "📦 Installiere Basis-Pakete..."
 apt install -y curl git nano ca-certificates openssl net-tools nginx \
-               python3 python3-venv python3-pip build-essential iproute2
+               python3 python3-venv python3-pip build-essential iproute2 sudo
 
 # Bildverarbeitung (Pillow)
 echo "🖼️  Installiere Pillow-Abhängigkeiten..."
@@ -375,16 +375,18 @@ if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
     done
     
     echo "🔐 Erstelle PostgreSQL Benutzer und Datenbank..."
-    sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
-      sudo -u postgres psql -c "CREATE DATABASE \"$DBNAME\";"
-    
-    sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DBUSER'" | grep -q 1 || \
-      sudo -u postgres psql -c "CREATE USER \"$DBUSER\" WITH ENCRYPTED PASSWORD '$DBPASS';"
-    
-    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DBNAME\" TO \"$DBUSER\";"
-    
-    # PostgreSQL 15+ compatibility
-    sudo -u postgres psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null || true
+    su -s /bin/bash postgres <<PGEOF
+psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
+  psql -c "CREATE DATABASE \"$DBNAME\";"
+
+psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DBUSER'" | grep -q 1 || \
+  psql -c "CREATE USER \"$DBUSER\" WITH ENCRYPTED PASSWORD '$DBPASS';"
+
+psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DBNAME\" TO \"$DBUSER\";"
+
+# PostgreSQL 15+ compatibility
+psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null || true
+PGEOF
     
   elif [ "$DBTYPE" = "mysql" ]; then
     apt install -y $DB_PACKAGE_LOCAL
@@ -868,7 +870,7 @@ echo "📦 Backup startet für \$PROJECT..."
 
 # DB-Dump
 if [ "\$DBTYPE" = "postgresql" ]; then
-  sudo -u postgres pg_dump -Fc "\$DBNAME" > "\$BACKUP_DIR/db_\${TIMESTAMP}.dump" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
+  su -s /bin/sh postgres -c "pg_dump -Fc \$DBNAME" > "\$BACKUP_DIR/db_\${TIMESTAMP}.dump" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
 elif [ "\$DBTYPE" = "mysql" ]; then
   mysqldump -u root "\$DBNAME" > "\$BACKUP_DIR/db_\${TIMESTAMP}.sql" 2>/dev/null || echo "⚠️ DB-Dump fehlgeschlagen"
 elif [ "\$DBTYPE" = "sqlite" ] && [ -f "\$APPDIR/db.sqlite3" ]; then
