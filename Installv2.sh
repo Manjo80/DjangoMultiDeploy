@@ -486,6 +486,7 @@ fi
 if [[ "$USE_GITHUB" != "true" ]] || [ ! -f "$APPDIR/.env" ]; then
   echo "🔐 Erstelle .env Datei..."
   cat > "$APPDIR/.env" <<EOF
+PROJECTNAME=$PROJECTNAME
 MODE=$MODE
 DEBUG=$DEBUG_VALUE
 SECRET_KEY=$DJKEY
@@ -659,6 +660,13 @@ EOF
 fi
 
 # -------------------------------------------------------------------
+# Log-Verzeichnis (muss vor Migrationen existieren, da settings.py darauf zugreift)
+# -------------------------------------------------------------------
+mkdir -p "/var/log/${PROJECTNAME}"
+chown "$APPUSER:adm" "/var/log/${PROJECTNAME}"
+chmod 750 "/var/log/${PROJECTNAME}"
+
+# -------------------------------------------------------------------
 # Migrationen + Static Files
 # -------------------------------------------------------------------
 echo "📊 Führe Migrationen aus..."
@@ -666,13 +674,6 @@ su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && pyth
 
 echo "📦 Sammle statische Dateien..."
 su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
-
-# -------------------------------------------------------------------
-# Log-Verzeichnis
-# -------------------------------------------------------------------
-mkdir -p "/var/log/${PROJECTNAME}"
-chown "$APPUSER:adm" "/var/log/${PROJECTNAME}"
-chmod 750 "/var/log/${PROJECTNAME}"
 
 # -------------------------------------------------------------------
 # systemd Service
@@ -921,7 +922,7 @@ HEALTHEOF
   # URL Pattern hinzufügen
   if [ -f "$APPDIR/core/urls.py" ]; then
     if ! grep -q "health_check" "$APPDIR/core/urls.py"; then
-      su - "$APPUSER" -s /bin/bash <<'URLEOF'
+      su - "$APPUSER" -s /bin/bash <<URLEOF
 cd "$APPDIR"
 python3 << 'PYEOF'
 import re
