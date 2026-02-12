@@ -740,6 +740,37 @@ echo "📦 Sammle statische Dateien..."
 su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
 
 # -------------------------------------------------------------------
+# Django Superuser erstellen
+# -------------------------------------------------------------------
+echo
+echo "👑 Django Superuser erstellen (Admin-Login für /admin/)"
+read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
+DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
+
+read -p "Admin-Email [admin@localhost]: " DJANGO_ADMIN_EMAIL
+DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
+
+while true; do
+  read -s -p "Admin-Passwort: " DJANGO_ADMIN_PASS; echo
+  [ -z "$DJANGO_ADMIN_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
+  read -s -p "Admin-Passwort bestätigen: " DJANGO_ADMIN_PASS2; echo
+  if [ "$DJANGO_ADMIN_PASS" = "$DJANGO_ADMIN_PASS2" ]; then
+    break
+  else
+    echo "❌ Passwörter stimmen nicht überein. Erneut versuchen."
+  fi
+done
+
+su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
+  DJANGO_SUPERUSER_PASSWORD='$DJANGO_ADMIN_PASS' \
+  python manage.py createsuperuser --noinput \
+    --username '$DJANGO_ADMIN_USER' \
+    --email '$DJANGO_ADMIN_EMAIL'"
+
+echo "✅ Django Superuser '$DJANGO_ADMIN_USER' erstellt"
+echo "   Login unter: http://${LOCAL_IP}/admin/"
+
+# -------------------------------------------------------------------
 # systemd Service
 # -------------------------------------------------------------------
 echo "🔧 Erstelle systemd Service..."
