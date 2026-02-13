@@ -129,18 +129,19 @@ NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ' | xargs)"
 [ -z "${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
 
 # -------------------------------------------------------------------
-# CSRF_TRUSTED_ORIGINS automatisch bauen (nur PROD)
+# CSRF_TRUSTED_ORIGINS automatisch bauen (für alle Modi)
 # -------------------------------------------------------------------
-CSRF_TRUSTED_ORIGINS_VALUE=""
-if [ "$MODE" = "prod" ]; then
-  CSRF_TRUSTED_ORIGINS_VALUE="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | awk '
-    function is_ip(x) { return (x ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) }
-    NF {
-      gsub(/^[ \t]+|[ \t]+$/, "", $0)
-      if ($0 == "" || $0 == "localhost" || is_ip($0)) next
+CSRF_TRUSTED_ORIGINS_VALUE="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | awk '
+  NF {
+    gsub(/^[ \t]+|[ \t]+$/, "", $0)
+    if ($0 == "") next
+    if ($0 == "localhost" || $0 == "127.0.0.1") {
+      print "http://" $0
       print "https://" $0
-    }' | awk '!seen[$0]++' | paste -sd, -)"
-fi
+    } else {
+      print "https://" $0
+    }
+  }' | awk '!seen[$0]++' | paste -sd, -)"
 
 # -------------------------------------------------------------------
 # Datenbank-Typ auswählen
