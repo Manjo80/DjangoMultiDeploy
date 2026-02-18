@@ -583,6 +583,9 @@ fi
 # Django Projekt erstellen
 django-admin startproject core .
 python manage.py startapp app
+
+# Admin-URL auf /djadmin/ umbenennen
+sed -i "s|path('admin/', admin.site.urls)|path('djadmin/', admin.site.urls)|g" core/urls.py
 EOF
 fi
 
@@ -785,7 +788,7 @@ su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && pyth
 # Django Superuser erstellen
 # -------------------------------------------------------------------
 echo
-echo "👑 Django Superuser erstellen (Admin-Login für /admin/)"
+echo "👑 Django Superuser erstellen (Admin-Login für /djadmin/)"
 read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
 DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
 
@@ -810,7 +813,7 @@ su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
     --email '$DJANGO_ADMIN_EMAIL'"
 
 echo "✅ Django Superuser '$DJANGO_ADMIN_USER' erstellt"
-echo "   Login unter: http://${LOCAL_IP}/admin/"
+echo "   Login unter: http://${LOCAL_IP}/djadmin/"
 
 # -------------------------------------------------------------------
 # systemd Service
@@ -1151,6 +1154,8 @@ echo "💾 Backup:     ${PROJECTNAME}_backup.sh"
 echo
 echo "📊 Status:     systemctl status $PROJECTNAME"
 echo "📋 Logs:       journalctl -u $PROJECTNAME -f"
+echo
+echo "🌐 Django Admin: http://$LOCAL_IP/djadmin/"
 echo
 echo "👑 Superuser:  sudo -u $APPUSER bash -c 'cd $APPDIR && source .venv/bin/activate && python manage.py createsuperuser'"
 echo "═══════════════════════════════════════════════════════════════"
