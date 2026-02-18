@@ -397,6 +397,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo
 
 # GitHub Setup
+GITHUB_SSH_OPTS="-o ConnectTimeout=30"
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📦 GitHub Repository erkannt: $GITHUB_REPO_URL"
   echo
@@ -408,12 +409,52 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   echo
   read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
   [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
-  
+
   # known_hosts für github.com
   mkdir -p "/home/$APPUSER/.ssh"
   ssh-keyscan -H github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
   chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh/known_hosts"
   chmod 644 "/home/$APPUSER/.ssh/known_hosts"
+
+  # SSH-Verbindung zu GitHub testen (mit Timeout - verhindert endloses Hängen)
+  echo "🔍 Teste SSH-Verbindung zu GitHub (Port 22)..."
+  SSH_TEST_RESULT=$(su - "$APPUSER" -s /bin/bash -c \
+    "timeout 15 ssh -i '$SSH_KEY_PATH' -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
+     -o ConnectTimeout=10 -T git@github.com 2>&1" || true)
+
+  if echo "$SSH_TEST_RESULT" | grep -q "successfully authenticated"; then
+    echo "✅ SSH Port 22 erfolgreich verbunden"
+  else
+    # Port 22 hängt oder blockiert - Fallback auf Port 443
+    echo "⚠️  SSH Port 22 nicht erreichbar oder hängt - teste Port 443 (ssh.github.com)..."
+    ssh-keyscan -H -p 443 ssh.github.com >> "/home/$APPUSER/.ssh/known_hosts" 2>/dev/null || true
+
+    SSH_TEST_443=$(su - "$APPUSER" -s /bin/bash -c \
+      "timeout 15 ssh -i '$SSH_KEY_PATH' -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
+       -o ConnectTimeout=10 -p 443 -T git@ssh.github.com 2>&1" || true)
+
+    if echo "$SSH_TEST_443" | grep -q "successfully authenticated"; then
+      echo "✅ GitHub SSH über Port 443 erreichbar - erstelle SSH-Config..."
+      # SSH-Config erstellen: github.com wird automatisch über Port 443 geleitet
+      cat > "/home/$APPUSER/.ssh/config" <<SSHCONFIGEOF
+Host github.com
+    Hostname ssh.github.com
+    Port 443
+    User git
+    IdentityFile ${SSH_KEY_PATH}
+    IdentitiesOnly yes
+SSHCONFIGEOF
+      chown "$APPUSER:$APPUSER" "/home/$APPUSER/.ssh/config"
+      chmod 600 "/home/$APPUSER/.ssh/config"
+      echo "✅ SSH-Config für GitHub Port 443 erstellt (/home/$APPUSER/.ssh/config)"
+    else
+      echo "⚠️  SSH zu GitHub nicht erreichbar (Port 22 + Port 443 fehlgeschlagen)"
+      echo "   Mögliche Ursachen:"
+      echo "   - SSH-Key wurde noch nicht korrekt zu GitHub hinzugefügt"
+      echo "   - Firewall blockiert ausgehende SSH-Verbindungen"
+      echo "   Klonen wird trotzdem versucht (mit 30s Timeout)..."
+    fi
+  fi
 else
   echo "⏭️  GitHub nicht genutzt - überspringe GitHub-Setup"
 fi
@@ -492,8 +533,8 @@ chown "$APPUSER:$APPUSER" "$APPDIR"
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📥 Klonen GitHub Repository: $GITHUB_REPO_URL"
   
-  # Git clone als APPUSER
-  su - "$APPUSER" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new' git clone '$GITHUB_REPO_URL' '$APPDIR'" 
+  # Git clone als APPUSER (mit ConnectTimeout um endloses Hängen bei SSH-Problemen zu verhindern)
+  su - "$APPUSER" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new ${GITHUB_SSH_OPTS}' git clone '$GITHUB_REPO_URL' '$APPDIR'"
   
   echo "✅ Repository geklont nach $APPDIR"
   
@@ -908,7 +949,7 @@ cd "\$APPDIR"
 # Git Pull (falls Git-Repo vorhanden)
 if [ -d "\$APPDIR/.git" ]; then
   echo "📥 Git Pull..."
-  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && GIT_SSH_COMMAND='ssh -i \$SSH_KEY_PATH -o IdentitiesOnly=yes' git pull"
+  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && GIT_SSH_COMMAND='ssh -i \$SSH_KEY_PATH -o IdentitiesOnly=yes -o ConnectTimeout=30' git pull"
 else
   echo "⏭️  Kein Git-Repository gefunden (überspringe git pull)"
 fi
