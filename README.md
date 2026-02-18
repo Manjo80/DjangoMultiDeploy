@@ -148,7 +148,7 @@ sudo -u <appuser> /srv/<projekt>/.venv/bin/python /srv/<projekt>/manage.py creat
 
 Admin:
 
-http://SERVER-IP/admin
+http://SERVER-IP/djadmin
 
 (Extern über deinen Reverse Proxy)
 
