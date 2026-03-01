@@ -594,17 +594,19 @@ fi
 # -------------------------------------------------------------------
 if [[ "$USE_GITHUB" != "true" ]] || [ ! -f "$APPDIR/.env" ]; then
   echo "🔐 Erstelle .env Datei..."
+  # Doppelte Anführungszeichen im Passwort escapen
+  DBPASS_ESCAPED="${DBPASS//\"/\\\"}"
   cat > "$APPDIR/.env" <<EOF
-PROJECTNAME=$PROJECTNAME
-MODE=$MODE
+PROJECTNAME="$PROJECTNAME"
+MODE="$MODE"
 DEBUG=$DEBUG_VALUE
-SECRET_KEY=$DJKEY
-DB_ENGINE=$DB_ENGINE
-DB_NAME=$DBNAME
-DB_USER=$DBUSER
-DB_PASS=$DBPASS
-DB_HOST=$DBHOST
-DB_PORT=$DBPORT
+SECRET_KEY="$DJKEY"
+DB_ENGINE="$DB_ENGINE"
+DB_NAME="$DBNAME"
+DB_USER="$DBUSER"
+DB_PASS="$DBPASS_ESCAPED"
+DB_HOST="$DBHOST"
+DB_PORT="$DBPORT"
 ALLOWED_HOSTS=$ALLOWED_HOSTS
 CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
 EOF
