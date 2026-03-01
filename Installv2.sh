@@ -6,6 +6,57 @@ set -euo pipefail
 # Version: 2.0 - Improved & Optimized
 # ===================================================================
 
+# ===================================================================
+# Checkpoint / Resume System
+# ===================================================================
+_RESUME=false
+
+# Prüft ob ein Schritt bereits abgeschlossen wurde
+is_done() {
+  grep -q "^STEP_${1}=\"done\"" "${STATE_FILE:-/dev/null}" 2>/dev/null || return 1
+}
+
+# Markiert einen Schritt als abgeschlossen und speichert in State-Datei
+mark_done() {
+  sed -i "/^STEP_${1}=/d" "$STATE_FILE" 2>/dev/null || true
+  sed -i "/^LAST_STEP=/d" "$STATE_FILE" 2>/dev/null || true
+  printf 'STEP_%s="done"\n' "${1}" >> "$STATE_FILE"
+  printf 'LAST_STEP="%s"\n' "${1}" >> "$STATE_FILE"
+}
+
+# Unterbrochene Installationen suchen
+mapfile -t _STATES < <(compgen -G "/tmp/django_install_*.state" 2>/dev/null || true)
+if [ "${#_STATES[@]}" -gt 0 ] && [ -f "${_STATES[0]}" ]; then
+  echo
+  echo "┌──────────────────────────────────────────────────────────────────┐"
+  echo "│       ⚠️  Unterbrochene Installation(en) gefunden               │"
+  echo "└──────────────────────────────────────────────────────────────────┘"
+  _IDX=1
+  for _sf in "${_STATES[@]}"; do
+    _proj=$(grep "^PROJECTNAME=" "$_sf" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "?")
+    _lstep=$(grep "^LAST_STEP=" "$_sf" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "noch keiner")
+    echo "  ${_IDX}) Projekt: ${_proj}  |  Letzter Schritt: ${_lstep}"
+    _IDX=$((_IDX + 1))
+  done
+  echo
+  read -p "Installation fortsetzen? [J/n]: " _RC
+  if [[ "${_RC:-J}" =~ ^[Jj]$ ]]; then
+    if [ "${#_STATES[@]}" -gt 1 ]; then
+      read -p "Welche Installation fortsetzen? (Nummer): " _RN
+      _RESUME_FILE="${_STATES[$((_RN - 1))]}"
+    else
+      _RESUME_FILE="${_STATES[0]}"
+    fi
+    # shellcheck disable=SC1090
+    source "$_RESUME_FILE"
+    STATE_FILE="$_RESUME_FILE"
+    _RESUME=true
+    echo "✅ Fortsetze Installation: $PROJECTNAME"
+    echo "   Abgeschlossene Schritte werden übersprungen..."
+    echo
+  fi
+fi
+
 # -------------------------------------------------------------------
 # OS + systemd Check (Debian / Ubuntu)
 # -------------------------------------------------------------------
@@ -46,35 +97,50 @@ echo "✅ Ausführung als root bestätigt"
 # -------------------------------------------------------------------
 # Projektname -> /srv/<name> (mit Validierung!)
 # -------------------------------------------------------------------
-read -p "Projektname (Ordner unter /srv, z.B. gpsmgr): " PROJECTNAME
-[ -z "${PROJECTNAME:-}" ] && echo "❌ FEHLER: Projektname leer." && exit 1
+if [[ "$_RESUME" != "true" ]]; then
+  read -p "Projektname (Ordner unter /srv, z.B. gpsmgr): " PROJECTNAME
+  [ -z "${PROJECTNAME:-}" ] && echo "❌ FEHLER: Projektname leer." && exit 1
 
-# Validierung: nur alphanumerisch, _, - und 3-50 Zeichen
-if [[ ! "$PROJECTNAME" =~ ^[a-zA-Z0-9_-]{3,50}$ ]]; then
-  echo "❌ FEHLER: Ungültiger Projektname!"
-  echo "   Erlaubt: a-z, A-Z, 0-9, _, - (3-50 Zeichen)"
-  exit 1
+  # Validierung: nur alphanumerisch, _, - und 3-50 Zeichen
+  if [[ ! "$PROJECTNAME" =~ ^[a-zA-Z0-9_-]{3,50}$ ]]; then
+    echo "❌ FEHLER: Ungültiger Projektname!"
+    echo "   Erlaubt: a-z, A-Z, 0-9, _, - (3-50 Zeichen)"
+    exit 1
+  fi
+
+  APPDIR="/srv/$PROJECTNAME"
+
+  # State-Datei für dieses Projekt initialisieren
+  STATE_FILE="/tmp/django_install_${PROJECTNAME}.state"
+  : > "$STATE_FILE"
+  chmod 600 "$STATE_FILE"
+  printf 'PROJECTNAME="%s"\n' "$PROJECTNAME" >> "$STATE_FILE"
+  printf 'APPDIR="%s"\n' "$APPDIR" >> "$STATE_FILE"
+  printf 'STATE_FILE="%s"\n' "$STATE_FILE" >> "$STATE_FILE"
+
+  # -------------------------------------------------------------------
+  # Existenz-Checks (vor Installation!)
+  # -------------------------------------------------------------------
+  if [[ -d "$APPDIR" ]]; then
+    echo "❌ FEHLER: $APPDIR existiert bereits!"
+    exit 1
+  fi
+
+  if [[ -f "/etc/systemd/system/${PROJECTNAME}.service" ]]; then
+    echo "❌ FEHLER: Service ${PROJECTNAME} existiert bereits!"
+    exit 1
+  fi
+
+  if [[ -f "/etc/nginx/sites-available/${PROJECTNAME}" ]]; then
+    echo "❌ FEHLER: Nginx-Site ${PROJECTNAME} existiert bereits!"
+    exit 1
+  fi
 fi
-
-APPDIR="/srv/$PROJECTNAME"
 
 # -------------------------------------------------------------------
-# Existenz-Checks (vor Installation!)
+# Eingaben (bei Resume aus State-Datei geladen, sonst neu abfragen)
 # -------------------------------------------------------------------
-if [[ -d "$APPDIR" ]]; then
-  echo "❌ FEHLER: $APPDIR existiert bereits!"
-  exit 1
-fi
-
-if [[ -f "/etc/systemd/system/${PROJECTNAME}.service" ]]; then
-  echo "❌ FEHLER: Service ${PROJECTNAME} existiert bereits!"
-  exit 1
-fi
-
-if [[ -f "/etc/nginx/sites-available/${PROJECTNAME}" ]]; then
-  echo "❌ FEHLER: Nginx-Site ${PROJECTNAME} existiert bereits!"
-  exit 1
-fi
+if ! is_done "input_saved"; then
 
 # -------------------------------------------------------------------
 # GitHub Repository Option
@@ -245,9 +311,45 @@ read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
 
 SSH_KEY_PATH="/home/${APPUSER}/.ssh/id_ed25519"
 
+  # ---- Alle Eingaben in State-Datei speichern (für Resume) ----
+  cat >> "$STATE_FILE" << STATEEOF
+GITHUB_REPO_URL="${GITHUB_REPO_URL}"
+USE_GITHUB="${USE_GITHUB}"
+LOCAL_IP="${LOCAL_IP}"
+ALL_LOCAL_IPS="${ALL_LOCAL_IPS}"
+HOSTNAME_FQDN="${HOSTNAME_FQDN}"
+MODE="${MODE}"
+MODESEL="${MODESEL}"
+DEBUG_VALUE="${DEBUG_VALUE}"
+ALLOWED_HOSTS="${ALLOWED_HOSTS}"
+NGINX_SERVER_NAMES="${NGINX_SERVER_NAMES}"
+CSRF_TRUSTED_ORIGINS_VALUE="${CSRF_TRUSTED_ORIGINS_VALUE}"
+DBTYPE="${DBTYPE}"
+DBTYPE_SEL="${DBTYPE_SEL}"
+DB_PACKAGE_LOCAL="${DB_PACKAGE_LOCAL:-}"
+DB_PACKAGE_CLIENT="${DB_PACKAGE_CLIENT:-}"
+DBMODE="${DBMODE:-}"
+DBNAME="${DBNAME:-}"
+DBUSER="${DBUSER:-}"
+DBPASS="${DBPASS:-}"
+DBHOST="${DBHOST:-}"
+DBPORT="${DBPORT:-}"
+DB_ENGINE="${DB_ENGINE:-}"
+DB_PATH="${DB_PATH:-}"
+APPUSER="${APPUSER}"
+DJKEY="${DJKEY}"
+SSH_KEY_PASSPHRASE="${SSH_KEY_PASSPHRASE}"
+SSH_KEY_PATH="${SSH_KEY_PATH}"
+STATEEOF
+  chmod 600 "$STATE_FILE"
+  mark_done "input_saved"
+
+fi  # end of input section (! is_done "input_saved")
+
 # -------------------------------------------------------------------
 # System-Pakete aktualisieren
 # -------------------------------------------------------------------
+if ! is_done "pkgs_installed"; then
 apt update
 
 read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
@@ -292,9 +394,15 @@ else
   echo "⏭️  fail2ban übersprungen"
 fi
 
+mark_done "pkgs_installed"
+else
+  echo "⏭️  Pakete bereits installiert - überspringe"
+fi  # end pkgs_installed
+
 # -------------------------------------------------------------------
 # SSH-Server: PasswordAuthentication + PermitRootLogin sicherstellen
 # -------------------------------------------------------------------
+if ! is_done "sshd_configured"; then
 echo "🔐 Prüfe SSH-Server Konfiguration..."
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_CHANGED=false
@@ -330,9 +438,15 @@ if [ "$SSHD_CHANGED" = true ]; then
   echo "  🔄 SSH-Server neu gestartet"
 fi
 
+mark_done "sshd_configured"
+else
+  echo "⏭️  SSH-Konfiguration bereits erledigt - überspringe"
+fi  # end sshd_configured
+
 # -------------------------------------------------------------------
 # App-User erstellen
 # -------------------------------------------------------------------
+if ! is_done "appuser_created"; then
 if ! id "$APPUSER" &>/dev/null; then
   echo "👤 Erstelle Benutzer: $APPUSER"
   adduser --disabled-password --gecos "" "$APPUSER" 2>/dev/null || adduser --disabled-password "$APPUSER"
@@ -395,6 +509,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 cat "${SSH_KEY_PATH}.pub"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
+
+mark_done "appuser_created"
+else
+  echo "⏭️  App-User bereits erstellt - überspringe"
+fi  # end appuser_created
 
 # GitHub Setup
 GITHUB_SSH_OPTS="-o ConnectTimeout=30"
@@ -462,6 +581,7 @@ fi
 # -------------------------------------------------------------------
 # PostgreSQL / MySQL Installation (lokal)
 # -------------------------------------------------------------------
+if ! is_done "db_setup"; then
 cd /tmp
 
 if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
@@ -520,9 +640,15 @@ elif [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "2" ]; then
   apt install -y $DB_PACKAGE_CLIENT
 fi
 
+mark_done "db_setup"
+else
+  echo "⏭️  Datenbank bereits eingerichtet - überspringe"
+fi  # end db_setup
+
 # -------------------------------------------------------------------
 # Projektverzeichnis
 # -------------------------------------------------------------------
+if ! is_done "project_setup"; then
 echo "📁 Erstelle Projektverzeichnis: $APPDIR"
 mkdir -p "$APPDIR"
 chown "$APPUSER:$APPUSER" "$APPDIR"
@@ -537,7 +663,23 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   su - "$APPUSER" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new ${GITHUB_SSH_OPTS}' git clone '$GITHUB_REPO_URL' '$APPDIR'"
   
   echo "✅ Repository geklont nach $APPDIR"
-  
+
+  # Django-Modul automatisch erkennen (Verzeichnis das wsgi.py enthält)
+  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 -name "wsgi.py" ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null)
+  if [ -z "$DJANGO_MODULE" ]; then
+    echo "⚠️  WARNUNG: wsgi.py nicht gefunden, verwende 'core' als Standard"
+    DJANGO_MODULE="core"
+  fi
+  echo "📌 Django-Modul erkannt: $DJANGO_MODULE"
+
+  # Admin-URL auf /djadmin/ setzen (beide Schreibweisen: einfache und doppelte Anführungszeichen)
+  URLS_FILE="$APPDIR/$DJANGO_MODULE/urls.py"
+  if [ -f "$URLS_FILE" ]; then
+    sed -i "s|path('admin/', admin.site.urls)|path('djadmin/', admin.site.urls)|g" "$URLS_FILE"
+    sed -i 's|path("admin/", admin.site.urls)|path("djadmin/", admin.site.urls)|g' "$URLS_FILE"
+    echo "✅ Admin-URL auf /djadmin/ gesetzt in $URLS_FILE"
+  fi
+
   # Virtual Environment erstellen
   echo "🐍 Erstelle Python Virtual Environment..."
   su - "$APPUSER" -s /bin/bash <<EOF
@@ -587,24 +729,35 @@ python manage.py startapp app
 # Admin-URL auf /djadmin/ umbenennen
 sed -i "s|path('admin/', admin.site.urls)|path('djadmin/', admin.site.urls)|g" core/urls.py
 EOF
+DJANGO_MODULE="core"
 fi
+
+mark_done "project_setup"
+else
+  echo "⏭️  Projekt bereits eingerichtet - überspringe"
+  # Django-Modul erkennen (für nachfolgende Schritte)
+  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 -name "wsgi.py" ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null || echo "core")
+fi  # end project_setup
 
 # -------------------------------------------------------------------
 # .env Datei
 # -------------------------------------------------------------------
+if ! is_done "config_done"; then
 if [[ "$USE_GITHUB" != "true" ]] || [ ! -f "$APPDIR/.env" ]; then
   echo "🔐 Erstelle .env Datei..."
+  # Doppelte Anführungszeichen im Passwort escapen
+  DBPASS_ESCAPED="${DBPASS//\"/\\\"}"
   cat > "$APPDIR/.env" <<EOF
-PROJECTNAME=$PROJECTNAME
-MODE=$MODE
+PROJECTNAME="$PROJECTNAME"
+MODE="$MODE"
 DEBUG=$DEBUG_VALUE
-SECRET_KEY=$DJKEY
-DB_ENGINE=$DB_ENGINE
-DB_NAME=$DBNAME
-DB_USER=$DBUSER
-DB_PASS=$DBPASS
-DB_HOST=$DBHOST
-DB_PORT=$DBPORT
+SECRET_KEY="$DJKEY"
+DB_ENGINE="$DB_ENGINE"
+DB_NAME="$DBNAME"
+DB_USER="$DBUSER"
+DB_PASS="$DBPASS_ESCAPED"
+DB_HOST="$DBHOST"
+DB_PORT="$DBPORT"
 ALLOWED_HOSTS=$ALLOWED_HOSTS
 CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
 EOF
@@ -768,25 +921,47 @@ EOF
   chown "$APPUSER:$APPUSER" "$APPDIR/core/settings.py"
 fi
 
+mark_done "config_done"
+else
+  echo "⏭️  Konfiguration bereits erledigt - überspringe"
+fi  # end config_done
+
 # -------------------------------------------------------------------
 # Log-Verzeichnis (muss vor Migrationen existieren, da settings.py darauf zugreift)
 # -------------------------------------------------------------------
-mkdir -p "/var/log/${PROJECTNAME}"
-chown "$APPUSER:adm" "/var/log/${PROJECTNAME}"
-chmod 750 "/var/log/${PROJECTNAME}"
+if ! is_done "logdir_done"; then
+  mkdir -p "/var/log/${PROJECTNAME}"
+  chown "$APPUSER:adm" "/var/log/${PROJECTNAME}"
+  chmod 750 "/var/log/${PROJECTNAME}"
+  mark_done "logdir_done"
+fi  # end logdir_done
 
 # -------------------------------------------------------------------
-# Migrationen + Static Files
+# Migrationen
 # -------------------------------------------------------------------
-echo "📊 Führe Migrationen aus..."
-su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py migrate"
+if ! is_done "migrations_done"; then
+  echo "📊 Führe Migrationen aus..."
+  su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py migrate"
+  mark_done "migrations_done"
+else
+  echo "⏭️  Migrationen bereits ausgeführt - überspringe"
+fi  # end migrations_done
 
-echo "📦 Sammle statische Dateien..."
-su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
+# -------------------------------------------------------------------
+# Statische Dateien
+# -------------------------------------------------------------------
+if ! is_done "static_done"; then
+  echo "📦 Sammle statische Dateien..."
+  su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
+  mark_done "static_done"
+else
+  echo "⏭️  Statische Dateien bereits gesammelt - überspringe"
+fi  # end static_done
 
 # -------------------------------------------------------------------
 # Django Superuser erstellen
 # -------------------------------------------------------------------
+if ! is_done "superuser_done"; then
 echo
 echo "👑 Django Superuser erstellen (Admin-Login für /djadmin/)"
 read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
@@ -815,9 +990,15 @@ su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
 echo "✅ Django Superuser '$DJANGO_ADMIN_USER' erstellt"
 echo "   Login unter: http://${LOCAL_IP}/djadmin/"
 
+mark_done "superuser_done"
+else
+  echo "⏭️  Django Superuser bereits erstellt - überspringe"
+fi  # end superuser_done
+
 # -------------------------------------------------------------------
 # systemd Service
 # -------------------------------------------------------------------
+if ! is_done "systemd_done"; then
 echo "🔧 Erstelle systemd Service..."
 cat > /etc/systemd/system/${PROJECTNAME}.service <<EOF
 [Unit]
@@ -829,7 +1010,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn core.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
+ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
 Restart=always
 RestartSec=10
 
@@ -847,9 +1028,15 @@ if ! systemctl is-active --quiet "$PROJECTNAME"; then
   journalctl -u "$PROJECTNAME" -n 20 --no-pager
 fi
 
+mark_done "systemd_done"
+else
+  echo "⏭️  systemd Service bereits konfiguriert - überspringe"
+fi  # end systemd_done
+
 # -------------------------------------------------------------------
 # Log-Rotation
 # -------------------------------------------------------------------
+if ! is_done "logrotate_done"; then
 cat > /etc/logrotate.d/${PROJECTNAME} <<EOF
 /var/log/${PROJECTNAME}/*.log {
   daily
@@ -866,9 +1053,13 @@ cat > /etc/logrotate.d/${PROJECTNAME} <<EOF
 }
 EOF
 
+mark_done "logrotate_done"
+fi  # end logrotate_done
+
 # -------------------------------------------------------------------
 # nginx Konfiguration
 # -------------------------------------------------------------------
+if ! is_done "nginx_done"; then
 echo "🌐 Konfiguriere Nginx..."
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
 server {
@@ -921,9 +1112,15 @@ fi
 
 systemctl restart nginx
 
+mark_done "nginx_done"
+else
+  echo "⏭️  Nginx bereits konfiguriert - überspringe"
+fi  # end nginx_done
+
 # -------------------------------------------------------------------
-# Sudoers
+# Sudoers + Update-Skript
 # -------------------------------------------------------------------
+if ! is_done "scripts_done"; then
 echo "🔐 Konfiguriere sudoers für $APPUSER..."
 cat > /etc/sudoers.d/${PROJECTNAME}-service <<EOF
 $APPUSER ALL=NOPASSWD: /bin/systemctl restart $PROJECTNAME, /bin/systemctl status $PROJECTNAME, /bin/systemctl reload $PROJECTNAME, /bin/journalctl -u $PROJECTNAME*
@@ -1034,9 +1231,15 @@ BACKUPEOF
 chmod 755 /usr/local/bin/${PROJECTNAME}_backup.sh
 echo "💾 Backup-Skript erstellt: /usr/local/bin/${PROJECTNAME}_backup.sh"
 
+mark_done "scripts_done"
+else
+  echo "⏭️  Sudoers und Skripte bereits erstellt - überspringe"
+fi  # end scripts_done
+
 # -------------------------------------------------------------------
 # Health-Check (nur bei neuem Projekt)
 # -------------------------------------------------------------------
+if ! is_done "healthcheck_done"; then
 if [[ "$USE_GITHUB" != "true" ]]; then
   cat > "$APPDIR/core/views.py" <<'HEALTHEOF'
 from django.http import JsonResponse
@@ -1095,9 +1298,15 @@ URLEOF
   echo "✅ Health-Check Endpoint erstellt: /health/"
 fi
 
+mark_done "healthcheck_done"
+else
+  echo "⏭️  Health-Check bereits erstellt - überspringe"
+fi  # end healthcheck_done
+
 # -------------------------------------------------------------------
 # MOTD
 # -------------------------------------------------------------------
+if ! is_done "motd_done"; then
 cat > /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
 # Nur bei interaktiven Shells
 case "\\\$-" in
@@ -1163,8 +1372,13 @@ echo
 MOTDEOF
 chmod 644 /etc/profile.d/${PROJECTNAME}_motd.sh
 
+mark_done "motd_done"
+else
+  echo "⏭️  MOTD bereits konfiguriert - überspringe"
+fi  # end motd_done
+
 # -------------------------------------------------------------------
-# Abschluss
+# Abschluss + State-Datei aufräumen
 # -------------------------------------------------------------------
 echo
 echo "╔═══════════════════════════════════════════════════════════════╗"
@@ -1197,3 +1411,9 @@ echo "💾 Backup:     ${PROJECTNAME}_backup.sh"
 echo
 echo "✅ FERTIG! Viel Erfolg mit deinem Django-Projekt! 🚀"
 echo "═══════════════════════════════════════════════════════════════"
+
+# State-Datei nach erfolgreicher Installation entfernen
+if [ -f "${STATE_FILE:-}" ]; then
+  rm -f "$STATE_FILE"
+  echo "🧹 Installations-State-Datei bereinigt"
+fi
