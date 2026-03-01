@@ -537,7 +537,23 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   su - "$APPUSER" -s /bin/bash -c "GIT_SSH_COMMAND='ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new ${GITHUB_SSH_OPTS}' git clone '$GITHUB_REPO_URL' '$APPDIR'"
   
   echo "✅ Repository geklont nach $APPDIR"
-  
+
+  # Django-Modul automatisch erkennen (Verzeichnis das wsgi.py enthält)
+  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 -name "wsgi.py" ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null)
+  if [ -z "$DJANGO_MODULE" ]; then
+    echo "⚠️  WARNUNG: wsgi.py nicht gefunden, verwende 'core' als Standard"
+    DJANGO_MODULE="core"
+  fi
+  echo "📌 Django-Modul erkannt: $DJANGO_MODULE"
+
+  # Admin-URL auf /djadmin/ setzen (beide Schreibweisen: einfache und doppelte Anführungszeichen)
+  URLS_FILE="$APPDIR/$DJANGO_MODULE/urls.py"
+  if [ -f "$URLS_FILE" ]; then
+    sed -i "s|path('admin/', admin.site.urls)|path('djadmin/', admin.site.urls)|g" "$URLS_FILE"
+    sed -i 's|path("admin/", admin.site.urls)|path("djadmin/", admin.site.urls)|g' "$URLS_FILE"
+    echo "✅ Admin-URL auf /djadmin/ gesetzt in $URLS_FILE"
+  fi
+
   # Virtual Environment erstellen
   echo "🐍 Erstelle Python Virtual Environment..."
   su - "$APPUSER" -s /bin/bash <<EOF
@@ -587,6 +603,7 @@ python manage.py startapp app
 # Admin-URL auf /djadmin/ umbenennen
 sed -i "s|path('admin/', admin.site.urls)|path('djadmin/', admin.site.urls)|g" core/urls.py
 EOF
+DJANGO_MODULE="core"
 fi
 
 # -------------------------------------------------------------------
@@ -831,7 +848,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn core.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
+ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
 Restart=always
 RestartSec=10
 
