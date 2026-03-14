@@ -159,87 +159,46 @@ def install_progress(request, project, run_id):
 
 
 @login_required
-def install_stream(request, log_name):
-    """SSE endpoint: stream install log file line by line."""
+def install_poll(request, log_name):
+    """Polling endpoint: returns new log lines since offset as JSON.
+    Replaces SSE stream — short-lived requests, no EIO on LXC overlayfs."""
     log_path = os.path.join(settings.INSTALL_LOG_DIR, log_name)
+    try:
+        offset = int(request.GET.get('offset', 0))
+    except (ValueError, TypeError):
+        offset = 0
 
-    def event_stream():
-        idle_count = 0
-        max_idle = 300      # 300 × 0.5s = 150s ohne neue Ausgabe
-        wait_count = 0
-        max_wait = 40       # bis zu 20s warten bis Datei erscheint
-        pos = 0             # gelesene Bytes (zum Wiederöffnen nach EIO)
-        eio_retries = 0
-        max_eio = 10        # max 10 EIO-Retries (~5s) bevor Abbruch
+    if not os.path.exists(log_path):
+        return JsonResponse({'lines': [], 'offset': 0, 'done': False, 'waiting': True})
 
-        while not os.path.exists(log_path):
-            if wait_count >= max_wait:
-                yield 'data: [Fehler: Log-Datei nicht gefunden]\n\ndata: __TIMEOUT__\n\n'
-                return
-            time.sleep(0.5)
-            wait_count += 1
+    lines = []
+    new_offset = offset
+    done = False
+    try:
+        with open(log_path, 'rb') as f:
+            f.seek(offset)
+            chunk = f.read(65536)   # max 64 KB pro Poll
+            new_offset = offset + len(chunk)
+        if chunk:
+            text = chunk.decode('utf-8', errors='replace')
+            lines = [l.rstrip('\r') for l in text.splitlines()]
+        # Abgeschlossen?
+        done = _install_finished(log_path, new_offset) and not chunk
+    except OSError:
+        # EIO: einfach leere Antwort → nächster Poll versucht es erneut
+        pass
 
-        buf = b''
-        while idle_count < max_idle:
-            try:
-                with open(log_path, 'rb') as f:
-                    f.seek(pos)
-                    while idle_count < max_idle:
-                        try:
-                            chunk = f.read(8192)
-                        except OSError:
-                            # EIO auf LXC overlayfs → Position merken, kurz warten, neu öffnen
-                            break
-                        if chunk:
-                            eio_retries = 0
-                            idle_count = 0
-                            pos += len(chunk)
-                            buf += chunk
-                            while b'\n' in buf:
-                                line, buf = buf.split(b'\n', 1)
-                                text = line.decode('utf-8', errors='replace').rstrip('\r')
-                                yield f'data: {text}\n\n'
-                        else:
-                            idle_count += 1
-                            time.sleep(0.5)
-                            if _install_finished(log_path, pos):
-                                if buf:
-                                    text = buf.decode('utf-8', errors='replace').rstrip('\r\n')
-                                    if text:
-                                        yield f'data: {text}\n\n'
-                                yield 'data: __DONE__\n\n'
-                                return
-                # Datei wurde nach einem EIO-Break neu geöffnet
-                eio_retries += 1
-                if eio_retries >= max_eio:
-                    yield 'data: [Warnung: Dateisystem-Fehler (EIO) — Installation läuft weiter]\n\n'
-                    yield 'data: __TIMEOUT__\n\n'
-                    return
-                time.sleep(0.5)
-
-            except OSError as e:
-                yield f'data: [stream error: {e}]\n\ndata: __TIMEOUT__\n\n'
-                return
-
-        yield 'data: __TIMEOUT__\n\n'
-
-    response = StreamingHttpResponse(
-        event_stream(),
-        content_type='text/event-stream'
-    )
-    response['Cache-Control'] = 'no-cache'
-    response['X-Accel-Buffering'] = 'no'
-    return response
+    return JsonResponse({'lines': lines, 'offset': new_offset, 'done': done, 'waiting': False})
 
 
 def _install_finished(log_path, current_size):
-    """Heuristic: log file hasn't grown for 3+ seconds and contains finish marker."""
+    """Heuristic: log file hasn't grown and contains finish marker."""
     try:
         size = os.path.getsize(log_path)
         if size != current_size:
             return False
-        with open(log_path) as f:
-            content = f.read()
+        with open(log_path, 'rb') as f:
+            content = f.read().decode('utf-8', errors='replace')
         return 'INSTALLATION FERTIG' in content or 'ABBRUCH' in content or 'FEHLER' in content
     except Exception:
         return False

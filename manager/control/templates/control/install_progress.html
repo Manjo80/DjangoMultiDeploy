@@ -29,63 +29,98 @@
 
 </div>
 </div>
+{% endblock %}
 
+{% block extra_js %}
 <script>
-const terminal = document.getElementById('terminal');
+const terminal   = document.getElementById('terminal');
 const statusBadge = document.getElementById('status-badge');
-const statusText = document.getElementById('status-text');
-const actionButtons = document.getElementById('action-buttons');
+const statusText  = document.getElementById('status-text');
+const actionBtns  = document.getElementById('action-buttons');
+const pollUrl     = '{% url "install_stream" log_name %}';
 
-const source = new EventSource('{% url "install_stream" log_name %}');
+let offset    = 0;
 let lineCount = 0;
-
-source.onmessage = function(e) {
-  const line = e.data;
-
-  if (line === '__DONE__') {
-    source.close();
-    statusBadge.textContent = 'Fertig ✅';
-    statusBadge.className = 'badge bg-success';
-    statusText.textContent = 'Installation abgeschlossen.';
-    actionButtons.classList.remove('d-none');
-    return;
-  }
-  if (line === '__TIMEOUT__') {
-    source.close();
-    statusBadge.textContent = 'Timeout ⚠️';
-    statusBadge.className = 'badge bg-warning';
-    statusText.textContent = 'Stream-Timeout — prüfe systemctl status.';
-    return;
-  }
-
-  // Colorize lines
-  const div = document.createElement('div');
-  let html = escHtml(line);
-  if (line.includes('❌') || line.includes('FEHLER') || line.includes('ABBRUCH')) {
-    div.style.color = '#f85149';
-  } else if (line.includes('✅') || line.includes('FERTIG')) {
-    div.style.color = '#3fb950';
-  } else if (line.includes('⚠️') || line.includes('WARNUNG')) {
-    div.style.color = '#d29922';
-  } else if (line.includes('📦') || line.includes('🔧') || line.includes('🐍')) {
-    div.style.color = '#79c0ff';
-  }
-  div.textContent = line;
-  terminal.appendChild(div);
-  terminal.scrollTop = terminal.scrollHeight;
-  lineCount++;
-  statusText.textContent = `${lineCount} Zeilen empfangen…`;
-};
-
-source.onerror = function() {
-  source.close();
-  statusBadge.textContent = 'Verbindung getrennt';
-  statusBadge.className = 'badge bg-secondary';
-  statusText.textContent = 'Stream-Verbindung unterbrochen.';
-};
+let idleTicks = 0;       // Polls ohne neue Daten
+let errTicks  = 0;       // aufeinanderfolgende Fehler
+let timer     = null;
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+function colorLine(text) {
+  if (text.includes('❌') || /FEHLER|ABBRUCH/i.test(text)) return '#f85149';
+  if (text.includes('✅') || /FERTIG/i.test(text))          return '#3fb950';
+  if (text.includes('⚠️') || /WARNUNG/i.test(text))         return '#d29922';
+  if (/📦|🔧|🐍|📥|🔄/.test(text))                         return '#79c0ff';
+  return null;
+}
+
+function appendLines(lines) {
+  for (const text of lines) {
+    if (!text.trim()) continue;
+    const div = document.createElement('div');
+    div.textContent = text;
+    const c = colorLine(text);
+    if (c) div.style.color = c;
+    terminal.appendChild(div);
+    lineCount++;
+  }
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function setDone() {
+  clearTimeout(timer);
+  statusBadge.textContent = 'Fertig ✅';
+  statusBadge.className   = 'badge bg-success';
+  statusText.textContent  = `Installation abgeschlossen (${lineCount} Zeilen).`;
+  actionBtns.classList.remove('d-none');
+}
+
+function setError(msg) {
+  clearTimeout(timer);
+  statusBadge.textContent = 'Fehler ❌';
+  statusBadge.className   = 'badge bg-danger';
+  statusText.textContent  = msg;
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`${pollUrl}?offset=${offset}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    errTicks = 0;   // Verbindung OK
+
+    if (data.waiting) {
+      // Log-Datei noch nicht vorhanden
+      idleTicks++;
+      statusText.textContent = 'Warte auf Script-Start…';
+      if (idleTicks > 60) { setError('Script hat nicht gestartet (Timeout).'); return; }
+    } else if (data.lines && data.lines.length > 0) {
+      idleTicks = 0;
+      offset = data.offset;
+      appendLines(data.lines);
+      statusText.textContent = `${lineCount} Zeilen empfangen…`;
+    } else {
+      idleTicks++;
+      offset = data.offset;
+      // Timeout nach ~5 Minuten ohne neue Ausgabe
+      if (idleTicks > 300) { setError('Keine Ausgabe seit 5 Minuten — prüfe systemctl status.'); return; }
+    }
+
+    if (data.done) { setDone(); return; }
+
+  } catch (e) {
+    errTicks++;
+    statusText.textContent = `Verbindungsfehler (Versuch ${errTicks})…`;
+    if (errTicks > 10) { setError('Verbindung dauerhaft unterbrochen.'); return; }
+  }
+
+  timer = setTimeout(poll, 1000);
+}
+
+poll();
 </script>
 {% endblock %}
