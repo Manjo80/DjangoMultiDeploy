@@ -602,6 +602,7 @@ DBPORT="${DBPORT:-}"
 DB_ENGINE="${DB_ENGINE:-}"
 DB_PATH="${DB_PATH:-}"
 APPUSER="${APPUSER}"
+APPUSER_PASS="${APPUSER_PASS:-}"
 DJKEY="${DJKEY}"
 SSH_KEY_PASSPHRASE="${SSH_KEY_PASSPHRASE:-}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-}"
@@ -744,18 +745,23 @@ fi
 echo
 echo "🔑 Passwort für Linux-Benutzer '$APPUSER' setzen"
 echo "   (Wird auch für SSH/SCP-Login benötigt)"
-while true; do
-  _read -s -p "Passwort für $APPUSER: " APPUSER_PASS; echo
-  [ -z "$APPUSER_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
-  _read -s -p "Passwort bestätigen: " APPUSER_PASS2; echo
-  if [ "$APPUSER_PASS" = "$APPUSER_PASS2" ]; then
-    echo "$APPUSER:$APPUSER_PASS" | chpasswd
-    echo "✅ Passwort für $APPUSER gesetzt"
-    break
-  else
-    echo "❌ Passwörter stimmen nicht überein. Erneut versuchen."
-  fi
-done
+if [ -n "${APPUSER_PASS:-}" ]; then
+  echo "$APPUSER:$APPUSER_PASS" | chpasswd
+  echo "✅ Passwort für $APPUSER gesetzt"
+else
+  while true; do
+    _read -s -p "Passwort für $APPUSER: " APPUSER_PASS; echo
+    [ -z "$APPUSER_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
+    _read -s -p "Passwort bestätigen: " APPUSER_PASS2; echo
+    if [ "$APPUSER_PASS" = "$APPUSER_PASS2" ]; then
+      echo "$APPUSER:$APPUSER_PASS" | chpasswd
+      echo "✅ Passwort für $APPUSER gesetzt"
+      break
+    else
+      echo "❌ Passwörter stimmen nicht überein. Erneut versuchen."
+    fi
+  done
+fi
 
 # SSH-Verzeichnis erstellen
 echo "🔑 Erstelle SSH-Key für Benutzer $APPUSER..."
@@ -2141,8 +2147,25 @@ REGISTRY_DIR=/etc/django-servers.d
 MANAGERENV
   chmod 600 "$_MANAGER_DIR/.env"
 
-  # Datenbankmigrationen
-  "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" migrate --run-syncdb 2>/dev/null || true
+  # Datenbankmigrationen (inkl. auth-Tabellen)
+  "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" migrate 2>/dev/null || \
+    "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" migrate --run-syncdb
+
+  # Admin-Benutzer anlegen
+  echo
+  echo "👤 Manager Admin-Benutzer anlegen"
+  _read -p "Admin-Benutzername [admin]: " _ADMIN_USER
+  _ADMIN_USER="${_ADMIN_USER:-admin}"
+  while true; do
+    _read -s -p "Admin-Passwort: " _ADMIN_PASS; echo
+    [ -z "$_ADMIN_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
+    _read -s -p "Admin-Passwort bestätigen: " _ADMIN_PASS2; echo
+    [ "$_ADMIN_PASS" = "$_ADMIN_PASS2" ] && break
+    echo "❌ Passwörter stimmen nicht überein."
+  done
+  "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" shell -c \
+    "from django.contrib.auth.models import User; User.objects.filter(username='${_ADMIN_USER}').delete(); User.objects.create_superuser('${_ADMIN_USER}', '', '${_ADMIN_PASS}')"
+  echo "✅ Admin-Benutzer '${_ADMIN_USER}' angelegt (is_staff=True)"
 
   # Statische Dateien
   "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" collectstatic --noinput -v 0
