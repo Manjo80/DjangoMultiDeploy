@@ -2,34 +2,37 @@
 
 Interaktives Bash-Installationsskript für **mehrere Django-Projekte auf einem Server** — jedes mit eigenem Gunicorn-Port, nginx-Site, systemd-Service, Datenbank, App-User und SSH-Key.
 
+Optional: **Web-Interface (Manager)** auf Port 8888 zur Verwaltung aller Projekte im Browser.
+
 Zoraxy Reverse Proxy ready · Checkpoint/Resume · LXC/Container ready · Debian & Ubuntu
 
 ---
 
 ## Übersicht
 
-Ein einziger Aufruf von `Installv2.sh` richtet ein vollständiges Django-Projekt ein:
-
 | Was | Details |
 |---|---|
 | Linux App-User | eigener User, Home-Verzeichnis, SSH-Key (ed25519) |
 | Python venv | projektgebunden unter `/srv/<projekt>/.venv` |
-| Django + Gunicorn | 3 Worker, 120s Timeout, eigener Port ab 8000 |
+| Django + Gunicorn | 2×CPU+1 Worker, 120s Timeout, eigener Port ab 8000 |
 | Datenbank | PostgreSQL / MySQL / SQLite — lokal oder remote |
 | systemd Service | Autostart, Restart=always, RestartSec=10 |
-| nginx | server_name-basiert, Security-Header, Static/Media-Caching |
+| nginx | server_name-basiert, Security-Header, gzip, Static/Media-Caching |
 | fail2ban | SSH-Schutz (3 Versuche, 1h Ban) — optional |
-| Backup-Skript | DB-Dump + Projekt-Archiv, 14-Tage-Rotation |
-| Update-Skript | git pull + migrate + collectstatic + restart |
+| Backup-Skript | DB-Dump + Projekt-Archiv, 14-Tage-Rotation, täglicher Cron |
+| Update-Skript | Backup → git pull → migrate → collectstatic → restart |
 | Health-Check | `/health/` Endpoint mit DB-Test |
 | MOTD | zeigt beim Login alle Django-Projekte mit Status und Befehlen |
 | Checkpoint/Resume | unterbrochene Installationen fortsetzbar |
+| **Web-Interface** | **Browser-Verwaltung aller Projekte auf Port 8888** |
 
 ---
 
 ## Installation
 
 ```bash
+git clone https://github.com/Manjo80/DjangoMultiDeploy.git
+cd DjangoMultiDeploy
 chmod +x Installv2.sh
 sudo ./Installv2.sh
 ```
@@ -38,7 +41,29 @@ sudo ./Installv2.sh
 
 ---
 
-## Eingaben beim Setup
+## Installations-Menü
+
+Nach den System-Voraussetzungs-Checks wählt man, was installiert werden soll:
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║          DjangoMultiDeploy — Was installieren?               ║
+╠═══════════════════════════════════════════════════════════════╣
+║  1) Django-Projekt           (neue Django-Webanwendung)      ║
+║  2) DjangoMultiDeploy Manager (Web-Interface Port 8888)      ║
+║  3) Beides                                                   ║
+╚═══════════════════════════════════════════════════════════════╝
+```
+
+| Option | Was passiert |
+|---|---|
+| **1** | Django-Projekt einrichten (Gunicorn, nginx, DB, systemd, …) |
+| **2** | Nur Manager installieren (venv, systemd, Port 8888) |
+| **3** | Beides — Manager + neues Django-Projekt |
+
+---
+
+## Eingaben beim Setup (Django-Projekt)
 
 Das Skript fragt alle Parameter interaktiv ab. Alle Eingaben werden in einer State-Datei gespeichert, damit eine unterbrochene Installation fortgesetzt werden kann.
 
@@ -46,7 +71,6 @@ Das Skript fragt alle Parameter interaktiv ab. Alle Eingaben werden in einer Sta
 |---|---|---|
 | **Projektname** | — | 3–50 Zeichen, a-z A-Z 0-9 _ - |
 | **GitHub URL** | leer (neues Projekt) | öffentlich oder privat (SSH) |
-| **System-Pakete updaten** | J | empfohlen |
 | **Modus** | 1 = DEV | 2 = PROD |
 | **Gunicorn-Port** | nächster freier Port ≥ 8000 | automatisch erkannt |
 | **ALLOWED_HOSTS** | alle lokalen IPs + localhost + FQDN | kommasepariert |
@@ -56,15 +80,134 @@ Das Skript fragt alle Parameter interaktiv ab. Alle Eingaben werden in einer Sta
 | **DB-User** | `<projektname>_user` | |
 | **DB-Host** | localhost | |
 | **DB-Port** | 5432 (PG) / 3306 (MySQL) | |
-| **DB-Passwort** | — | Pflicht, Sonderzeichen erlaubt |
+| **DB-Passwort** | — | Pflicht |
 | **Linux App-User** | — | Pflicht, beginnt mit Buchstabe |
-| **App-User Passwort** | — | Pflicht, mit Bestätigung |
 | **Django SECRET_KEY** | auto (32 Hex-Zeichen) | leer lassen = wird generiert |
 | **SSH-Key Passphrase** | leer (kein Passwort) | für ed25519-Key |
+| **Gunicorn Worker** | 2×CPU+1 | automatisch berechnet |
+| **Sprachcode** | `de-de` | z.B. `en-us`, `fr-fr` |
+| **Zeitzone** | `Europe/Berlin` | z.B. `Europe/London` |
+| **SMTP Host** | leer (deaktiviert) | optional |
+| **Backup-Uhrzeit** | `02:00` | täglicher Cron |
+| **System-Pakete updaten** | J | empfohlen |
 | **fail2ban installieren** | J | SSH-Brute-Force-Schutz |
-| **Django Admin-User** | admin | |
-| **Django Admin-E-Mail** | admin@localhost | |
-| **Django Admin-Passwort** | — | Pflicht, mit Bestätigung |
+
+---
+
+## NONINTERACTIVE-Modus
+
+Das Skript unterstützt einen vollständig nicht-interaktiven Modus für die Einbindung in CI/CD oder das Web-Interface. Alle Eingaben werden als Umgebungsvariablen übergeben:
+
+```bash
+export NONINTERACTIVE=true
+export PROJECTNAME=myapp
+export APPUSER=myuser
+export MODESEL=2
+export DBTYPE_SEL=1
+export DBMODE=2
+export DBHOST=localhost
+export DBPORT=5432
+export DBNAME=myapp
+export DBUSER=myapp_user
+export DBPASS=geheim
+export GUNICORN_PORT=8001
+export LANGUAGE_CODE=de-de
+export TIME_ZONE=Europe/Berlin
+export _INSTALL_SEL=1
+sudo ./Installv2.sh
+```
+
+| Umgebungsvariable | Bedeutung | Standard |
+|---|---|---|
+| `NONINTERACTIVE` | `true` = alle Prompts deaktivieren | `false` |
+| `_INSTALL_SEL` | 1=Projekt, 2=Manager, 3=Beides | `3` |
+| `PROJECTNAME` | Projektname | — |
+| `APPUSER` | Linux App-User | — |
+| `MODESEL` | 1=DEV, 2=PROD | `1` |
+| `GITHUB_REPO_URL` | GitHub URL oder leer | leer |
+| `GUNICORN_PORT` | Port (leer = auto) | ab 8000 |
+| `GUNICORN_WORKERS` | Anzahl Worker | 2×CPU+1 |
+| `ALLOWED_HOSTS` | Kommasepariert | auto |
+| `DBTYPE_SEL` | 1=PG, 2=MySQL, 3=SQLite | — |
+| `DBMODE` | 1=lokal, 2=remote | — |
+| `DBNAME` / `DBUSER` / `DBPASS` | DB-Zugangsdaten | — |
+| `DBHOST` / `DBPORT` | DB-Verbindung | localhost/5432 |
+| `LANGUAGE_CODE` / `TIME_ZONE` | Lokalisierung | de-de / Europe/Berlin |
+| `EMAIL_HOST` u.a. | SMTP-Konfiguration | leer |
+| `_BACKUP_TIME` | Cron-Zeit (HH:MM) | `02:00` |
+| `UPGRADE` | j=System-Pakete updaten | `n` |
+| `INSTALL_FAIL2BAN` | j=fail2ban installieren | `n` |
+
+---
+
+## DjangoMultiDeploy Manager (Web-Interface)
+
+Der Manager ist eine Django-App, die alle installierten Projekte über einen Browser verwaltet. Er wird auf **Port 8888** betrieben.
+
+### Features
+
+| Seite | Funktion |
+|---|---|
+| **Dashboard** | Übersicht aller Projekte mit Service-Status |
+| **Install-Wizard** | Formular → NONINTERACTIVE-Aufruf → Live-Terminal (SSE) |
+| **Projektdetail** | Start / Stop / Restart / Update / Backup |
+| **Log-Viewer** | systemd Journal, nginx Access + Error-Logs |
+| **SSH-Key** | Key im Browser anzeigen und herunterladen |
+| **Remove-Wizard** | Granulares Entfernen: Dateien / DB / User / Backup / Logs |
+
+### Installationsweg
+
+```bash
+sudo ./Installv2.sh
+# → Option 2 oder 3 wählen
+```
+
+Manager läuft danach unter: `http://<server-ip>:8888/`
+
+### Manager-Verzeichnis
+
+```
+/srv/djmanager/
+├── .env                    ← SECRET_KEY, Port, Pfade (chmod 600)
+├── venv/                   ← Python venv
+├── manage.py
+├── djmanager/              ← Django-Einstellungen
+│   ├── settings.py
+│   └── urls.py
+├── control/                ← Views, Utils, Templates
+│   ├── views.py            ← alle Views + SSE-Stream
+│   ├── utils.py            ← Registry lesen, systemctl, Logs, Backup
+│   ├── urls.py
+│   └── templates/control/
+│       ├── base.html       ← Bootstrap 5 Dark-Theme
+│       ├── dashboard.html
+│       ├── install_form.html
+│       ├── install_progress.html   ← Live-Terminal via SSE
+│       ├── project_detail.html
+│       ├── log_viewer.html
+│       ├── ssh_key.html
+│       ├── remove_confirm.html
+│       └── remove_done.html
+├── logs/                   ← Install-Logs (pro Aufruf)
+└── staticfiles/
+```
+
+### systemd Service
+
+```ini
+[Service]
+User=root
+ExecStart=/srv/djmanager/venv/bin/python /srv/djmanager/manage.py \
+          runserver 0.0.0.0:8888
+Restart=always
+```
+
+```bash
+systemctl status djmanager
+journalctl -u djmanager -f
+```
+
+> **Hinweis:** Der Manager läuft als root, da er systemctl-Befehle ausführen und das Installationsskript aufrufen muss. Nur im internen Netz verwenden — für externen Zugriff Zoraxy/nginx mit Authentifizierung vorschalten.
 
 ---
 
@@ -73,9 +216,10 @@ Das Skript fragt alle Parameter interaktiv ab. Alle Eingaben werden in einer Sta
 Mehrere Django-Projekte laufen parallel auf demselben Server. Das Skript erkennt den nächsten freien Port automatisch:
 
 ```
-webapp   →  Gunicorn: 127.0.0.1:8000  →  nginx (server_name: webapp.example.com)
-shopapp  →  Gunicorn: 127.0.0.1:8001  →  nginx (server_name: shop.example.com)
-intranet →  Gunicorn: 127.0.0.1:8002  →  nginx (server_name: intern.example.com)
+webapp    →  Gunicorn: 127.0.0.1:8000  →  nginx (server_name: webapp.example.com)
+shopapp   →  Gunicorn: 127.0.0.1:8001  →  nginx (server_name: shop.example.com)
+intranet  →  Gunicorn: 127.0.0.1:8002  →  nginx (server_name: intern.example.com)
+djmanager →  Port 8888 direkt            (Manager Web-Interface)
 ```
 
 **PostgreSQL:** Ein einziger PostgreSQL-Server (Port 5432) reicht für alle Projekte. Nur DB-Name und DB-User müssen pro Projekt unterschiedlich sein. Das Skript zeigt beim Setup vorhandene Datenbanken an.
@@ -105,6 +249,16 @@ Django
 
 **Zoraxy-Einstellung:** `Pass Host Header` / `Preserve Host` aktivieren — sonst schlägt Django CSRF fehl.
 
+Das Skript zeigt nach der Installation die fertige Zoraxy-Konfiguration an:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Incoming:  webapp.example.com                              │
+│  Target:    http://192.168.1.10:80                          │
+│  Option:    'Pass Host Header' / 'Preserve Host' ✅         │
+└─────────────────────────────────────────────────────────────┘
+```
+
 Im PROD-Modus setzt Django automatisch:
 ```python
 USE_X_FORWARDED_HOST = True
@@ -112,6 +266,24 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
 ```
+
+---
+
+## System-Voraussetzungs-Checks
+
+Vor der Installation werden automatisch geprüft:
+
+| Check | Was wird geprüft | Fehler-Aktion |
+|---|---|---|
+| `/tmp` beschreibbar | `touch /tmp/.test` | remount / neues tmpfs |
+| Root-FS beschreibbar | `touch /root/.test` | Abbruch mit Hinweis |
+| Freier Speicher `/` | mind. 2 GB | Abbruch |
+| Freier Speicher `/tmp` | mind. 512 MB | Abbruch |
+| DNS-Auflösung | `getent hosts pypi.org` | Abbruch |
+| HTTPS-Verbindung | `curl pypi.org` | Abbruch |
+| Systemzeit | > 2023 | Warnung |
+
+> **Proxmox LXC:** Falls `/tmp` read-only ist (häufiges Problem), versucht das Skript automatisch `mount -o remount,rw /tmp` und als Fallback ein neues tmpfs. Schlägt beides fehl, erscheint eine klare Diagnose-Meldung.
 
 ---
 
@@ -137,6 +309,27 @@ SESSION_COOKIE_SECURE = True
 | **SQLite** | ✅ | — | ✅ | ⚠️ nicht empfohlen |
 
 Alle Zugangsdaten landen ausschließlich in `/srv/<projekt>/.env` (chmod 600).
+
+**DB-Verbindungstest:** Vor den Migrationen wird die DB-Verbindung mit einem `SELECT 1` geprüft — bei Fehler Abbruch mit klarer Meldung.
+
+---
+
+## Gunicorn Worker
+
+Die Worker-Anzahl wird automatisch aus den CPU-Kernen berechnet:
+
+```
+Worker = 2 × CPU-Kerne + 1
+```
+
+| CPU-Kerne | Worker |
+|---|---|
+| 1 | 3 |
+| 2 | 5 |
+| 4 | 9 |
+| 8 | 17 |
+
+Der Wert kann beim Setup manuell überschrieben werden (1–32).
 
 ---
 
@@ -179,6 +372,8 @@ Host github.com
     IdentitiesOnly yes
 ```
 
+**Im Web-Interface (Manager):** Der Public Key wird direkt im Browser angezeigt und ist per Klick herunterladbar. Die Installation wartet, bis der User auf "GitHub-Key bestätigt" klickt.
+
 Der **Django-Modul-Name** (Verzeichnis mit `wsgi.py`) wird automatisch erkannt.
 
 ---
@@ -196,6 +391,8 @@ Key nach der Installation herunterladen (für WinSCP / PuTTY):
 ```bash
 scp root@<server-ip>:/home/<appuser>/.ssh/id_ed25519 .
 ```
+
+Oder im **Manager** → Projektdetail → **SSH-Key** → Herunterladen.
 
 ---
 
@@ -240,7 +437,7 @@ WorkingDirectory=/srv/<projekt>
 EnvironmentFile=/srv/<projekt>/.env
 ExecStart=.venv/bin/gunicorn <modul>.wsgi:application \
   --bind 127.0.0.1:<port> \
-  --workers 3 \
+  --workers <2×CPU+1> \
   --timeout 120 \
   --access-logfile /var/log/<projekt>/access.log \
   --error-logfile /var/log/<projekt>/error.log
@@ -260,8 +457,9 @@ sudo journalctl -u <projekt> -f
 
 ## nginx Konfiguration
 
-- Hört auf **Port 80**, routing per `server_name`
+- Hört auf **Port 80**, Routing per `server_name`
 - `client_max_body_size 50M` (Datei-Upload)
+- gzip aktiviert (Kompressionsstufe 6, min. 256 Byte)
 
 **Security-Header** (automatisch gesetzt):
 ```
@@ -296,14 +494,20 @@ bantime  = 3600    # 1 Stunde
 
 ---
 
-## SSH-Server-Konfiguration
+## E-Mail / SMTP (optional)
 
-Das Skript passt `/etc/ssh/sshd_config` automatisch an:
+Beim Setup kann ein SMTP-Server konfiguriert werden:
 
-| Einstellung | Wert | Grund |
-|---|---|---|
-| `PasswordAuthentication` | yes | SSH/SCP-Login mit Passwort ermöglichen |
-| `PermitRootLogin` | yes | `scp root@…` für Key-Download |
+| Variable | Beispiel |
+|---|---|
+| `EMAIL_HOST` | `smtp.gmail.com` |
+| `EMAIL_PORT` | `587` |
+| `EMAIL_HOST_USER` | `user@gmail.com` |
+| `EMAIL_HOST_PASSWORD` | `geheim` |
+| `EMAIL_USE_TLS` | `True` |
+| `DEFAULT_FROM_EMAIL` | `noreply@beispiel.de` |
+
+Ohne SMTP-Konfiguration verwendet Django automatisch das `console`-Backend (gibt E-Mails in die Logs aus).
 
 ---
 
@@ -312,13 +516,16 @@ Das Skript passt `/etc/ssh/sshd_config` automatisch an:
 Erstellt unter `/usr/local/bin/<projekt>_update.sh`
 
 ```
-1. git pull  (als App-User, mit SSH-Key + ConnectTimeout=30s)
-2. pip install -r requirements.txt  (falls vorhanden)
-3. python manage.py makemigrations  (nur wenn neue Migrationen erkannt)
-4. python manage.py migrate
-5. python manage.py collectstatic --noinput
-6. sudo systemctl restart <projekt>
+1. Backup erstellen  (<projekt>_backup.sh — sichert vor dem Update!)
+2. git pull  (als App-User, mit SSH-Key + ConnectTimeout=30s)
+3. pip install -r requirements.txt  (falls vorhanden)
+4. python manage.py makemigrations  (nur wenn neue Migrationen erkannt)
+5. python manage.py migrate
+6. python manage.py collectstatic --noinput
+7. sudo systemctl restart <projekt>
 ```
+
+Über den **Manager** per Klick ausführbar (Projektdetail → "Git Pull + Update").
 
 ---
 
@@ -336,28 +543,39 @@ Erstellt unter `/usr/local/bin/<projekt>_backup.sh`
 
 Backups liegen in `/var/backups/<projekt>/` (Rechte 700).
 Dateien älter als **14 Tage** werden automatisch gelöscht.
+Täglicher Cron zur eingestellten Uhrzeit (Standard: 02:00).
 
 ---
 
-## Log-Management
+## Deinstallations-Skript
 
-**Verzeichnis:** `/var/log/<projekt>/` (Rechte 750, Gruppe `adm`)
+Erstellt unter `/usr/local/bin/<projekt>_remove.sh`
 
-| Datei | Inhalt |
-|---|---|
-| `access.log` | Gunicorn Access-Log |
-| `error.log` | Gunicorn Error-Log |
-| `django.log` | Django ERROR-Logging (nur PROD) |
+Entfernt (mit Bestätigung pro Schritt):
+1. systemd Service stoppen + deaktivieren
+2. nginx-Site entfernen
+3. systemd + sudoers + logrotate + Registry-Eintrag
+4. optional: Projektverzeichnis `/srv/<projekt>/`
+5. optional: Datenbank + DB-User
+6. optional: Linux App-User
+7. optional: Backups `/var/backups/<projekt>/`
+8. optional: Logs `/var/log/<projekt>/`
+9. Skript löscht sich selbst am Ende
 
-**logrotate** (`/etc/logrotate.d/<projekt>`):
+Im **Manager** über den Remove-Wizard mit Checkboxen steuerbar.
 
-| Parameter | Wert |
-|---|---|
-| Rotation | täglich |
-| Aufbewahrung | 14 Tage |
-| Komprimierung | gzip (verzögert um 1 Tag) |
-| Neue Datei | 640, `<appuser>:adm` |
-| Nach Rotation | `systemctl reload <projekt>` |
+---
+
+## Status-Skript
+
+```bash
+django_status.sh
+```
+
+Globales Skript für alle Projekte. Zeigt eine Tabelle mit:
+- systemctl-Status
+- HTTP `/health/` Check
+- Port, Modus, DB, User
 
 ---
 
@@ -457,6 +675,15 @@ Checkpoints (Schritte die übersprungen werden falls bereits erledigt):
 ├── staticfiles/
 └── media/
 
+/srv/djmanager/                     ← Manager Web-Interface (optional)
+├── .env                            ← Manager-Secrets (chmod 600)
+├── venv/
+├── manage.py
+├── djmanager/
+├── control/
+├── logs/                           ← Install-Logs
+└── staticfiles/
+
 /home/<appuser>/
 └── .ssh/
     ├── id_ed25519                  ← Private Key (600)
@@ -467,9 +694,10 @@ Checkpoints (Schritte die übersprungen werden falls bereits erledigt):
 
 /etc/
 ├── systemd/system/<projekt>.service
+├── systemd/system/djmanager.service  ← Manager-Service (optional)
 ├── nginx/sites-available/<projekt>
 ├── nginx/sites-enabled/<projekt>   ← Symlink
-├── django-servers.d/<projekt>.conf ← Registry für MOTD
+├── django-servers.d/<projekt>.conf ← Registry für MOTD und Manager
 ├── profile.d/00_django_motd.sh     ← Geteiltes MOTD-Skript
 ├── sudoers.d/<projekt>-service     ← (chmod 440)
 ├── logrotate.d/<projekt>
@@ -477,7 +705,9 @@ Checkpoints (Schritte die übersprungen werden falls bereits erledigt):
 
 /usr/local/bin/
 ├── <projekt>_update.sh             ← (chmod 755)
-└── <projekt>_backup.sh             ← (chmod 755)
+├── <projekt>_backup.sh             ← (chmod 755)
+├── <projekt>_remove.sh             ← (chmod 755)
+└── django_status.sh                ← Globaler Status (chmod 755)
 
 /var/
 ├── log/<projekt>/                  ← (chmod 750, <appuser>:adm)
@@ -490,7 +720,30 @@ Checkpoints (Schritte die übersprungen werden falls bereits erledigt):
     └── project_YYYYMMDD_HHMMSS.tar.gz
 
 /tmp/django_install_<projekt>.state ← Checkpoint (wird nach Erfolg gelöscht)
+/tmp/djmanager_installs/            ← Manager Install-Locks (SSH-Key-Pause)
 ```
+
+---
+
+## Log-Management
+
+**Verzeichnis:** `/var/log/<projekt>/` (Rechte 750, Gruppe `adm`)
+
+| Datei | Inhalt |
+|---|---|
+| `access.log` | Gunicorn Access-Log |
+| `error.log` | Gunicorn Error-Log |
+| `django.log` | Django ERROR-Logging (nur PROD) |
+
+**logrotate** (`/etc/logrotate.d/<projekt>`):
+
+| Parameter | Wert |
+|---|---|
+| Rotation | täglich |
+| Aufbewahrung | 14 Tage |
+| Komprimierung | gzip (verzögert um 1 Tag) |
+| Neue Datei | 640, `<appuser>:adm` |
+| Nach Rotation | `systemctl reload <projekt>` |
 
 ---
 
@@ -501,6 +754,7 @@ Linux-User (<appuser>)   →  startet Django, besitzt .venv und .env
 PostgreSQL-User (<dbuser>) →  nur DB-Zugriff, kein Shell-Login
 /srv/<projekt>             →  Projekt + venv + Secrets
 .env                       →  einziger Ort für alle Secrets
+/etc/django-servers.d/     →  Registry: Quelle für MOTD, Manager, Status-Skript
 ```
 
 **Trennung:** Linux-User ≠ DB-User — minimale Rechte (Absicht)
@@ -509,14 +763,14 @@ PostgreSQL-User (<dbuser>) →  nur DB-Zugriff, kein Shell-Login
 
 ## Lokalisierung
 
-Die `settings.py` wird mit deutschen Standardwerten erstellt:
+Sprache und Zeitzone werden beim Setup abgefragt und in `.env` gespeichert:
 
 ```python
-LANGUAGE_CODE = "de-de"
-TIME_ZONE     = "Europe/Luxembourg"
+LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "de-de")
+TIME_ZONE     = os.getenv("TIME_ZONE", "Europe/Berlin")
 ```
 
-→ Kann nach der Installation in `.env` oder `settings.py` angepasst werden.
+Beispiele: `de-de / Europe/Berlin` · `en-us / Europe/London` · `fr-fr / Europe/Paris`
 
 ---
 
@@ -528,11 +782,13 @@ TIME_ZONE     = "Europe/Luxembourg"
 | Keine Secrets in systemd | EnvironmentFile statt Environment= |
 | `.env` nur für root + App-User | chmod 600 |
 | `.env` im `.gitignore` | wird automatisch eingetragen |
-| Admin unter `/djadmin/` | nicht `/admin/` (Security durch Obscurity) |
+| Admin unter `/djadmin/` | nicht `/admin/` |
 | nginx Security-Header | X-Frame-Options, X-Content-Type, X-XSS |
+| nginx gzip | Kompressionsstufe 6 |
 | fail2ban | 3 Versuche → 1h Sperre |
 | SSH-Key ed25519 | moderner Algorithmus statt RSA |
-| DB-Passwort-Escaping | Sonderzeichen in `.env` sicher gespeichert |
+| DB-Verbindungstest | vor Migrationen, Abbruch bei Fehler |
+| Manager als root | nur intern — externe Absicherung via Reverse Proxy |
 
 ---
 
@@ -550,5 +806,4 @@ TIME_ZONE     = "Europe/Luxembourg"
 - **kein HTTPS** — macht Zoraxy / dein Reverse Proxy
 - **kein Firewall-Setup** — ufw / iptables bleibt dem Admin überlassen
 - **kein Auto-Scaling** — ein Gunicorn-Prozess pro Projekt
-
-→ Ziel: klarer, stabiler Unterbau. Kein Hosting-Framework.
+- **keine Manager-Authentifizierung** — für externen Zugriff Reverse Proxy mit Auth vorschalten
