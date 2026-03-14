@@ -9,6 +9,15 @@ set -euo pipefail
 # Version: 3.0
 # ===================================================================
 
+# -------------------------------------------------------------------
+# NONINTERACTIVE-Modus: alle Eingabevariablen als Env-Vars übergeben
+# Wird vom DjangoMultiDeploy Manager (Web-Interface) genutzt
+# Beispiel: export NONINTERACTIVE=true PROJECTNAME=myapp ...
+# -------------------------------------------------------------------
+NONINTERACTIVE="${NONINTERACTIVE:-false}"
+# _read: überspringt read-Prompts wenn NONINTERACTIVE=true
+_read() { [ "$NONINTERACTIVE" = "true" ] && return 0; read "$@"; }
+
 # ===================================================================
 # Checkpoint / Resume System
 # ===================================================================
@@ -42,10 +51,13 @@ if [ "${#_STATES[@]}" -gt 0 ] && [ -f "${_STATES[0]}" ]; then
     _IDX=$((_IDX + 1))
   done
   echo
-  read -p "Installation fortsetzen? [J/n]: " _RC
-  if [[ "${_RC:-J}" =~ ^[Jj]$ ]]; then
+  _RC="${_RC:-}"
+  [ "$NONINTERACTIVE" != "true" ] && read -p "Installation fortsetzen? [J/n]: " _RC
+  _RC="${_RC:-J}"
+  if [[ "$_RC" =~ ^[Jj]$ ]]; then
     if [ "${#_STATES[@]}" -gt 1 ]; then
-      read -p "Welche Installation fortsetzen? (Nummer): " _RN
+      _RN="${_RN:-}"
+      [ "$NONINTERACTIVE" != "true" ] && read -p "Welche Installation fortsetzen? (Nummer): " _RN
       _RESUME_FILE="${_STATES[$((_RN - 1))]}"
     else
       _RESUME_FILE="${_STATES[0]}"
@@ -204,10 +216,45 @@ echo "✅ Alle Voraussetzungen erfüllt — Installation wird gestartet"
 echo
 
 # -------------------------------------------------------------------
+# Installations-Modus auswählen
+# -------------------------------------------------------------------
+if [ "${NONINTERACTIVE:-false}" != "true" ]; then
+  echo "╔═══════════════════════════════════════════════════════════════╗"
+  echo "║          DjangoMultiDeploy — Was installieren?               ║"
+  echo "╠═══════════════════════════════════════════════════════════════╣"
+  echo "║  1) Django-Projekt           (neue Django-Webanwendung)      ║"
+  echo "║  2) DjangoMultiDeploy Manager (Web-Interface Port 8888)      ║"
+  echo "║  3) Beides                                                   ║"
+  echo "╚═══════════════════════════════════════════════════════════════╝"
+  _read -p "Auswahl (1/2/3) [3]: " _INSTALL_SEL
+fi
+_INSTALL_SEL="${_INSTALL_SEL:-3}"
+case "$_INSTALL_SEL" in
+  1) INSTALL_PROJECT=true;  INSTALL_MANAGER=false ;;
+  2) INSTALL_PROJECT=false; INSTALL_MANAGER=true  ;;
+  3) INSTALL_PROJECT=true;  INSTALL_MANAGER=true  ;;
+  *) echo "❌ FEHLER: Ungültige Auswahl (1/2/3)"; exit 1 ;;
+esac
+
+# Defaults für nicht-benötigte Variablen setzen
+if [ "$INSTALL_PROJECT" = "false" ]; then
+  PROJECTNAME="${PROJECTNAME:-}"
+  APPUSER="${APPUSER:-}"
+fi
+
+echo "✅ Modus: $([ "$INSTALL_PROJECT" = "true" ] && echo "Django-Projekt" || true)$([ "$INSTALL_PROJECT" = "true" ] && [ "$INSTALL_MANAGER" = "true" ] && echo " + " || true)$([ "$INSTALL_MANAGER" = "true" ] && echo "Manager" || true)"
+echo
+
+# ===================================================================
+# PROJEKT-INSTALLATION (nur wenn INSTALL_PROJECT=true)
+# ===================================================================
+if [ "${INSTALL_PROJECT:-true}" = "true" ]; then
+
+# -------------------------------------------------------------------
 # Projektname -> /srv/<name> (mit Validierung!)
 # -------------------------------------------------------------------
 if [[ "$_RESUME" != "true" ]]; then
-  read -p "Projektname (Ordner unter /srv, z.B. webapp): " PROJECTNAME
+  _read -p "Projektname (Ordner unter /srv, z.B. webapp): " PROJECTNAME
   [ -z "${PROJECTNAME:-}" ] && echo "❌ FEHLER: Projektname leer." && exit 1
 
   # Validierung: nur alphanumerisch, _, - und 3-50 Zeichen
@@ -259,7 +306,7 @@ echo "GitHub Repository (optional):"
 echo "  • Öffentliches Repo: https://github.com/user/repo.git"
 echo "  • Privates Repo:     git@github.com:user/repo.git"
 echo "  • Leer lassen für neues Django-Projekt (ohne GitHub)"
-read -p "GitHub URL (leer für neues Projekt): " GITHUB_REPO_URL
+_read -p "GitHub URL (leer für neues Projekt): " GITHUB_REPO_URL
 USE_GITHUB="${GITHUB_REPO_URL:+true}"
 
 if [[ "$USE_GITHUB" == "true" ]]; then
@@ -288,7 +335,7 @@ echo
 echo "Modus:"
 echo "  1) DEV  (DEBUG=True, kein SSL-Proxy nötig)"
 echo "  2) PROD (DEBUG=False, Reverse-Proxy mit SSL)"
-read -p "Auswahl (1/2) [1]: " MODESEL
+_read -p "Auswahl (1/2) [1]: " MODESEL
 MODESEL="${MODESEL:-1}"
 [[ "$MODESEL" != "1" && "$MODESEL" != "2" ]] && echo "❌ FEHLER: Bitte 1 oder 2." && exit 1
 if [ "$MODESEL" = "1" ]; then MODE="dev"; DEBUG_VALUE="True"; else MODE="prod"; DEBUG_VALUE="False"; fi
@@ -304,7 +351,7 @@ echo
 echo "Gunicorn-Port (jede Django-Instanz braucht einen eigenen Port):"
 echo "  Aktuell laufende Dienste auf diesem Server:"
 ss -tlnp 2>/dev/null | awk '/LISTEN/{print "  ",$0}' | grep -E ':(80[0-9][0-9]|9[0-9][0-9][0-9]) ' || echo "  (keine auf 8000-9999)"
-read -p "Gunicorn-Port [${_DEFAULT_PORT}]: " GUNICORN_PORT
+_read -p "Gunicorn-Port [${_DEFAULT_PORT}]: " GUNICORN_PORT
 GUNICORN_PORT="${GUNICORN_PORT:-$_DEFAULT_PORT}"
 if [[ ! "$GUNICORN_PORT" =~ ^[0-9]+$ ]] || [ "$GUNICORN_PORT" -lt 1024 ] || [ "$GUNICORN_PORT" -gt 65535 ]; then
   echo "❌ FEHLER: Ungültiger Port! Erlaubt: 1024-65535"
@@ -312,7 +359,7 @@ if [[ ! "$GUNICORN_PORT" =~ ^[0-9]+$ ]] || [ "$GUNICORN_PORT" -lt 1024 ] || [ "$
 fi
 if ss -tlnp 2>/dev/null | grep -q ":${GUNICORN_PORT} "; then
   echo "⚠️  WARNUNG: Port ${GUNICORN_PORT} ist bereits belegt!"
-  read -p "Trotzdem verwenden? (j/N): " _PC
+  _read -p "Trotzdem verwenden? (j/N): " _PC
   [[ ! "$_PC" =~ ^[Jj]$ ]] && exit 1
 fi
 echo "✅ Gunicorn-Port: $GUNICORN_PORT"
@@ -322,7 +369,7 @@ echo "✅ Gunicorn-Port: $GUNICORN_PORT"
 # -------------------------------------------------------------------
 DEFAULT_ALLOWED_HOSTS="${ALL_LOCAL_IPS},127.0.0.1,localhost,${HOSTNAME_FQDN}"
 [ "$MODE" = "prod" ] && echo "PROD: DNS-Namen eintragen (z.B. app.intern.lan)"
-read -p "ALLOWED_HOSTS (Komma-separiert) [${DEFAULT_ALLOWED_HOSTS}]: " ALLOWED_HOSTS
+_read -p "ALLOWED_HOSTS (Komma-separiert) [${DEFAULT_ALLOWED_HOSTS}]: " ALLOWED_HOSTS
 ALLOWED_HOSTS="${ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS}"
 NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ' | xargs)"
 [ -z "${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
@@ -350,7 +397,7 @@ echo "Datenbank-Typ:"
 echo "  1) PostgreSQL (lokal oder remote)"
 echo "  2) MySQL/MariaDB (lokal oder remote)"
 echo "  3) SQLite (nur für DEV, kein Remote möglich)"
-read -p "Auswahl (1/2/3): " DBTYPE_SEL
+_read -p "Auswahl (1/2/3): " DBTYPE_SEL
 case "$DBTYPE_SEL" in
   1) DBTYPE="postgresql"; DB_PACKAGE_LOCAL="postgresql postgresql-contrib"; DB_PACKAGE_CLIENT="postgresql-client";;
   2) DBTYPE="mysql"; DB_PACKAGE_LOCAL="mariadb-server mariadb-client"; DB_PACKAGE_CLIENT="mariadb-client";;
@@ -362,7 +409,7 @@ esac
 if [ "$DBTYPE" = "sqlite" ]; then
   if [ "$MODE" = "prod" ]; then
     echo "⚠️  WARNUNG: SQLite wird nicht für PROD empfohlen (keine Parallelität, Backup-Komplexität)."
-    read -p "Trotzdem fortfahren? (j/N): " CONFIRM
+    _read -p "Trotzdem fortfahren? (j/N): " CONFIRM
     [[ ! "$CONFIRM" =~ ^[Jj]$ ]] && exit 1
   fi
   DB_PATH="$APPDIR/db.sqlite3"
@@ -376,7 +423,7 @@ else
   echo "DB-Betriebsmodus:"
   echo "  1) Lokal installieren"
   echo "  2) Remote-Verbindung"
-  read -p "Auswahl (1/2): " DBMODE
+  _read -p "Auswahl (1/2): " DBMODE
   [[ "$DBMODE" != "1" && "$DBMODE" != "2" ]] && echo "❌ FEHLER: Bitte 1 oder 2." && exit 1
 
   # -------------------------------------------------------------------
@@ -404,25 +451,25 @@ else
   DBNAME_DEFAULT="${PROJECTNAME//-/_}"
   DBUSER_DEFAULT="${PROJECTNAME//-/_}_user"
 
-  read -p "DB Name [${DBNAME_DEFAULT}]: " TMP_DBNAME
+  _read -p "DB Name [${DBNAME_DEFAULT}]: " TMP_DBNAME
   DBNAME="${TMP_DBNAME:-$DBNAME_DEFAULT}"
   DBNAME="${DBNAME//-/_}"
 
-  read -p "DB User [${DBUSER_DEFAULT}]: " TMP_DBUSER
+  _read -p "DB User [${DBUSER_DEFAULT}]: " TMP_DBUSER
   DBUSER="${TMP_DBUSER:-$DBUSER_DEFAULT}"
   DBUSER="${DBUSER//-/_}"
 
-  read -p "DB Host [localhost]: " DBHOST
+  _read -p "DB Host [localhost]: " DBHOST
   DBHOST="${DBHOST:-localhost}"
 
-  read -p "DB Port [${DBTYPE}]: " DBPORT
+  _read -p "DB Port [${DBTYPE}]: " DBPORT
   if [ "$DBTYPE" = "postgresql" ]; then
     DBPORT="${DBPORT:-5432}"
   else
     DBPORT="${DBPORT:-3306}"
   fi
 
-  read -s -p "DB Passwort für ${DBUSER}: " DBPASS; echo
+  _read -s -p "DB Passwort für ${DBUSER}: " DBPASS; echo
   [ -z "$DBPASS" ] && echo "❌ FEHLER: Passwort erforderlich." && exit 1
 
   # Django ENGINE setzen
@@ -436,7 +483,7 @@ fi
 # -------------------------------------------------------------------
 # Linux User
 # -------------------------------------------------------------------
-read -p "Linux-User für App (wird erstellt, z.B. webuser): " APPUSER
+_read -p "Linux-User für App (wird erstellt, z.B. webuser): " APPUSER
 [ -z "${APPUSER:-}" ] && echo "❌ FEHLER: APPUSER leer." && exit 1
 
 # Validierung APPUSER
@@ -449,7 +496,7 @@ fi
 # -------------------------------------------------------------------
 # Secret
 # -------------------------------------------------------------------
-read -s -p "Django SECRET_KEY (leer = auto): " DJKEY; echo
+_read -s -p "Django SECRET_KEY (leer = auto): " DJKEY; echo
 [ -z "${DJKEY:-}" ] && DJKEY="$(openssl rand -hex 32)"
 
 # -------------------------------------------------------------------
@@ -459,7 +506,7 @@ echo
 echo "🔐 SSH-Key für SSH-Zugriff (WinSCP/PuTTY)"
 echo "   Dieser Key ermöglicht SSH-Login als $APPUSER"
 echo
-read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
+_read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
 
 SSH_KEY_PATH="/home/${APPUSER}/.ssh/id_ed25519"
 
@@ -471,7 +518,7 @@ _DEFAULT_WORKERS=$(( _CPU_COUNT * 2 + 1 ))
 echo
 echo "Gunicorn Worker (Empfehlung: 2 × CPU-Kerne + 1):"
 echo "  Dieser Server hat ${_CPU_COUNT} CPU-Kern(e) → Empfehlung: ${_DEFAULT_WORKERS} Worker"
-read -p "Anzahl Worker [${_DEFAULT_WORKERS}]: " GUNICORN_WORKERS
+_read -p "Anzahl Worker [${_DEFAULT_WORKERS}]: " GUNICORN_WORKERS
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-$_DEFAULT_WORKERS}"
 if [[ ! "$GUNICORN_WORKERS" =~ ^[0-9]+$ ]] || [ "$GUNICORN_WORKERS" -lt 1 ] || [ "$GUNICORN_WORKERS" -gt 32 ]; then
   echo "❌ FEHLER: Ungültige Worker-Anzahl (1-32)!"
@@ -485,9 +532,9 @@ echo "✅ Gunicorn Worker: $GUNICORN_WORKERS"
 echo
 echo "Sprache & Zeitzone für Django:"
 echo "  Beispiele: de-de / Europe/Berlin | en-us / Europe/London | fr-fr / Europe/Paris"
-read -p "Sprachcode [de-de]: " LANGUAGE_CODE
+_read -p "Sprachcode [de-de]: " LANGUAGE_CODE
 LANGUAGE_CODE="${LANGUAGE_CODE:-de-de}"
-read -p "Zeitzone   [Europe/Berlin]: " TIME_ZONE
+_read -p "Zeitzone   [Europe/Berlin]: " TIME_ZONE
 TIME_ZONE="${TIME_ZONE:-Europe/Berlin}"
 echo "✅ Sprache: $LANGUAGE_CODE | Zeitzone: $TIME_ZONE"
 
@@ -496,15 +543,15 @@ echo "✅ Sprache: $LANGUAGE_CODE | Zeitzone: $TIME_ZONE"
 # -------------------------------------------------------------------
 echo
 echo "E-Mail / SMTP Konfiguration (optional — leer lassen zum Überspringen):"
-read -p "SMTP Host (z.B. smtp.gmail.com) [leer = deaktiviert]: " EMAIL_HOST
+_read -p "SMTP Host (z.B. smtp.gmail.com) [leer = deaktiviert]: " EMAIL_HOST
 if [ -n "${EMAIL_HOST:-}" ]; then
-  read -p "SMTP Port [587]: " EMAIL_PORT
+  _read -p "SMTP Port [587]: " EMAIL_PORT
   EMAIL_PORT="${EMAIL_PORT:-587}"
-  read -p "SMTP User (E-Mail-Adresse): " EMAIL_HOST_USER
-  read -s -p "SMTP Passwort: " EMAIL_HOST_PASSWORD; echo
-  read -p "TLS verwenden? [J/n]: " _TLS_CHOICE
+  _read -p "SMTP User (E-Mail-Adresse): " EMAIL_HOST_USER
+  _read -s -p "SMTP Passwort: " EMAIL_HOST_PASSWORD; echo
+  _read -p "TLS verwenden? [J/n]: " _TLS_CHOICE
   [[ "${_TLS_CHOICE:-J}" =~ ^[Jj]$ ]] && EMAIL_USE_TLS="True" || EMAIL_USE_TLS="False"
-  read -p "Absender-Adresse [${EMAIL_HOST_USER:-noreply@localhost}]: " DEFAULT_FROM_EMAIL
+  _read -p "Absender-Adresse [${EMAIL_HOST_USER:-noreply@localhost}]: " DEFAULT_FROM_EMAIL
   DEFAULT_FROM_EMAIL="${DEFAULT_FROM_EMAIL:-${EMAIL_HOST_USER:-noreply@localhost}}"
   echo "✅ E-Mail konfiguriert: ${EMAIL_HOST}:${EMAIL_PORT} (TLS: ${EMAIL_USE_TLS})"
 else
@@ -517,7 +564,7 @@ fi
 # Backup-Cron Uhrzeit
 # -------------------------------------------------------------------
 echo
-read -p "Automatisches tägliches Backup um (HH:MM) [02:00]: " _BACKUP_TIME
+_read -p "Automatisches tägliches Backup um (HH:MM) [02:00]: " _BACKUP_TIME
 _BACKUP_TIME="${_BACKUP_TIME:-02:00}"
 BACKUP_CRON_HOUR=$(echo "$_BACKUP_TIME" | cut -d: -f1 | sed 's/^0*//' )
 BACKUP_CRON_MIN=$(echo "$_BACKUP_TIME"  | cut -d: -f2 | sed 's/^0*//' )
@@ -580,7 +627,7 @@ fi  # end of input section (! is_done "input_saved")
 if ! is_done "pkgs_installed"; then
 apt update
 
-read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
+_read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
 [[ "${UPGRADE:-J}" =~ ^[Jj]$ ]] && apt upgrade -y
 
 # Basis-Pakete
@@ -602,7 +649,7 @@ fi
 # -------------------------------------------------------------------
 # fail2ban installieren
 # -------------------------------------------------------------------
-read -p "fail2ban installieren (schützt SSH)? [J/n]: " INSTALL_FAIL2BAN
+_read -p "fail2ban installieren (schützt SSH)? [J/n]: " INSTALL_FAIL2BAN
 INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-J}"
 if [[ "$INSTALL_FAIL2BAN" =~ ^[Jj]$ ]]; then
   echo "🛡️  Installiere fail2ban..."
@@ -691,9 +738,9 @@ echo
 echo "🔑 Passwort für Linux-Benutzer '$APPUSER' setzen"
 echo "   (Wird auch für SSH/SCP-Login benötigt)"
 while true; do
-  read -s -p "Passwort für $APPUSER: " APPUSER_PASS; echo
+  _read -s -p "Passwort für $APPUSER: " APPUSER_PASS; echo
   [ -z "$APPUSER_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
-  read -s -p "Passwort bestätigen: " APPUSER_PASS2; echo
+  _read -s -p "Passwort bestätigen: " APPUSER_PASS2; echo
   if [ "$APPUSER_PASS" = "$APPUSER_PASS2" ]; then
     echo "$APPUSER:$APPUSER_PASS" | chpasswd
     echo "✅ Passwort für $APPUSER gesetzt"
@@ -754,7 +801,7 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   echo "   3. Titel: '${PROJECTNAME} - $(hostname -f 2>/dev/null || echo 'server')'"
   echo "   4. Key einfügen und speichern"
   echo
-  read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
+  _read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
   [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
 
   # known_hosts für github.com
@@ -1234,16 +1281,16 @@ fi  # end static_done
 if ! is_done "superuser_done"; then
 echo
 echo "👑 Django Superuser erstellen (Admin-Login für /djadmin/)"
-read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
+_read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
 DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
 
-read -p "Admin-Email [admin@localhost]: " DJANGO_ADMIN_EMAIL
+_read -p "Admin-Email [admin@localhost]: " DJANGO_ADMIN_EMAIL
 DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
 
 while true; do
-  read -s -p "Admin-Passwort: " DJANGO_ADMIN_PASS; echo
+  _read -s -p "Admin-Passwort: " DJANGO_ADMIN_PASS; echo
   [ -z "$DJANGO_ADMIN_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
-  read -s -p "Admin-Passwort bestätigen: " DJANGO_ADMIN_PASS2; echo
+  _read -s -p "Admin-Passwort bestätigen: " DJANGO_ADMIN_PASS2; echo
   if [ "$DJANGO_ADMIN_PASS" = "$DJANGO_ADMIN_PASS2" ]; then
     break
   else
@@ -1599,7 +1646,7 @@ echo "╔═══════════════════════�
 echo "║           DEINSTALLATION: \${PROJECT}                          ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo "⚠️  Entfernt Service, nginx, Configs und optional alle Daten."
-read -p "Wirklich deinstallieren? (j/N): " _C
+_read -p "Wirklich deinstallieren? (j/N): " _C
 [[ ! "\${_C:-N}" =~ ^[Jj]\$ ]] && echo "Abbruch." && exit 0
 
 # Service stoppen
@@ -1624,28 +1671,28 @@ rm -f "/etc/django-servers.d/\${PROJECT}.conf"
 echo "✅ Service, nginx, Configs und Cron entfernt"
 
 # Projektverzeichnis?
-read -p "Projektverzeichnis '\${APPDIR}' löschen? (j/N): " _R
+_read -p "Projektverzeichnis '\${APPDIR}' löschen? (j/N): " _R
 [[ "\${_R:-N}" =~ ^[Jj]\$ ]] && rm -rf "\${APPDIR}" && echo "✅ Projektverzeichnis entfernt"
 
 # Logs?
-read -p "Log-Verzeichnis '/var/log/\${PROJECT}' löschen? (j/N): " _R
+_read -p "Log-Verzeichnis '/var/log/\${PROJECT}' löschen? (j/N): " _R
 [[ "\${_R:-N}" =~ ^[Jj]\$ ]] && rm -rf "/var/log/\${PROJECT}" && echo "✅ Logs entfernt"
 
 # Backups?
-read -p "Backup-Verzeichnis '\${BACKUP_DIR}' löschen? (j/N): " _R
+_read -p "Backup-Verzeichnis '\${BACKUP_DIR}' löschen? (j/N): " _R
 [[ "\${_R:-N}" =~ ^[Jj]\$ ]] && rm -rf "\${BACKUP_DIR}" && echo "✅ Backups entfernt"
 
 # Datenbank?
 if [ -n "\${DBNAME:-}" ]; then
   if [ "\${DBTYPE}" = "postgresql" ]; then
-    read -p "PostgreSQL DB '\${DBNAME}' + User '\${DBUSER_DB}' löschen? (j/N): " _R
+    _read -p "PostgreSQL DB '\${DBNAME}' + User '\${DBUSER_DB}' löschen? (j/N): " _R
     if [[ "\${_R:-N}" =~ ^[Jj]\$ ]]; then
       su -s /bin/bash postgres -c "psql -c \"DROP DATABASE IF EXISTS \\\"\${DBNAME}\\\";\"" 2>/dev/null || true
       su -s /bin/bash postgres -c "psql -c \"DROP USER IF EXISTS \\\"\${DBUSER_DB}\\\";\"" 2>/dev/null || true
       echo "✅ PostgreSQL DB + User entfernt"
     fi
   elif [ "\${DBTYPE}" = "mysql" ]; then
-    read -p "MySQL DB '\${DBNAME}' + User '\${DBUSER_DB}' löschen? (j/N): " _R
+    _read -p "MySQL DB '\${DBNAME}' + User '\${DBUSER_DB}' löschen? (j/N): " _R
     if [[ "\${_R:-N}" =~ ^[Jj]\$ ]]; then
       mysql -u root -e "DROP DATABASE IF EXISTS \`\${DBNAME}\`; DROP USER IF EXISTS '\${DBUSER_DB}'@'localhost';" 2>/dev/null || true
       echo "✅ MySQL DB + User entfernt"
@@ -1654,7 +1701,7 @@ if [ -n "\${DBNAME:-}" ]; then
 fi
 
 # Linux-User?
-read -p "Linux-User '\${APPUSER}' + Home-Verzeichnis löschen? (j/N): " _R
+_read -p "Linux-User '\${APPUSER}' + Home-Verzeichnis löschen? (j/N): " _R
 if [[ "\${_R:-N}" =~ ^[Jj]\$ ]]; then
   deluser --remove-home "\${APPUSER}" 2>/dev/null || userdel -r "\${APPUSER}" 2>/dev/null || true
   echo "✅ Linux-User entfernt"
@@ -1991,3 +2038,116 @@ if [ -f "${STATE_FILE:-}" ]; then
   rm -f "$STATE_FILE"
   echo "🧹 Installations-State-Datei bereinigt"
 fi
+
+fi  # end INSTALL_PROJECT
+
+# ===================================================================
+# MANAGER-INSTALLATION (PLATZHALTER — wird in nächstem Abschnitt befüllt)
+# ===================================================================
+if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
+  echo
+  echo "╔════════════════════════════════════════════════════════════════════╗"
+  echo "║           DjangoMultiDeploy Manager — Installation                ║"
+  echo "╚════════════════════════════════════════════════════════════════════╝"
+  _MANAGER_DIR="/srv/djmanager"
+  _MANAGER_PORT="${MANAGER_PORT:-8888}"
+  _MANAGER_USER="${MANAGER_USER:-djmanager}"
+
+  echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
+  echo "🔌 Manager-Port:         $_MANAGER_PORT"
+  echo "👤 Manager-User:         $_MANAGER_USER"
+  echo
+  # Manager-Dateien werden vom Installer aus dem Repo geladen
+  # (script liegt neben /manager/ Verzeichnis im Repo)
+  _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  _MANAGER_SRC="${_SCRIPT_DIR}/manager"
+
+  if [ ! -d "$_MANAGER_SRC" ]; then
+    echo "❌ FEHLER: Manager-Quellverzeichnis nicht gefunden: $_MANAGER_SRC"
+    echo "   Stelle sicher, dass das komplette DjangoMultiDeploy-Repo geklont ist."
+    exit 1
+  fi
+
+  # Linux-User für Manager erstellen
+  if ! id "$_MANAGER_USER" &>/dev/null; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$_MANAGER_USER"
+    echo "✅ System-User '$_MANAGER_USER' erstellt"
+  fi
+
+  # Zielverzeichnis vorbereiten
+  mkdir -p "$_MANAGER_DIR"
+  cp -r "$_MANAGER_SRC/." "$_MANAGER_DIR/"
+
+  # Python venv + Abhängigkeiten
+  echo "🐍 Erstelle Python venv für Manager..."
+  python3 -m venv "$_MANAGER_DIR/venv"
+  "$_MANAGER_DIR/venv/bin/pip" install --upgrade pip -q
+  "$_MANAGER_DIR/venv/bin/pip" install -r "$_MANAGER_DIR/requirements.txt" -q
+  echo "✅ Python-Abhängigkeiten installiert"
+
+  # .env für Manager
+  _MANAGER_SECRET="$(openssl rand -hex 32)"
+  cat > "$_MANAGER_DIR/.env" <<MANAGERENV
+SECRET_KEY=${_MANAGER_SECRET}
+DEBUG=False
+ALLOWED_HOSTS=*
+MANAGER_PORT=${_MANAGER_PORT}
+INSTALL_SCRIPT=${_SCRIPT_DIR}/Installv2.sh
+REGISTRY_DIR=/etc/django-servers.d
+MANAGERENV
+  chmod 600 "$_MANAGER_DIR/.env"
+
+  # Datenbankmigrationen
+  "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" migrate --run-syncdb 2>/dev/null || true
+
+  # Statische Dateien
+  "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" collectstatic --noinput -v 0
+
+  # Berechtigungen
+  chown -R "$_MANAGER_USER:$_MANAGER_USER" "$_MANAGER_DIR"
+  chmod 750 "$_MANAGER_DIR"
+
+  # systemd Service
+  cat > /etc/systemd/system/djmanager.service <<MANSERVEOF
+[Unit]
+Description=DjangoMultiDeploy Manager
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${_MANAGER_DIR}
+ExecStart=${_MANAGER_DIR}/venv/bin/python ${_MANAGER_DIR}/manage.py runserver 0.0.0.0:${_MANAGER_PORT}
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+MANSERVEOF
+
+  systemctl daemon-reload
+  systemctl enable --now djmanager
+  echo "✅ Manager-Service gestartet"
+
+  # nginx Reverse Proxy für Manager (optional, eigener Port reicht auch)
+  # Manager läuft direkt auf Port 8888, kein nginx nötig
+
+  _MGR_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
+  [ -z "${_MGR_IP:-}" ] && _MGR_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+
+  echo
+  echo "╔════════════════════════════════════════════════════════════════════╗"
+  echo "║              Manager erfolgreich installiert ✅                    ║"
+  echo "╚════════════════════════════════════════════════════════════════════╝"
+  echo "🌐 Manager-URL:    http://${_MGR_IP}:${_MANAGER_PORT}/"
+  echo "📊 Status:         systemctl status djmanager"
+  echo "📋 Logs:           journalctl -u djmanager -f"
+  echo
+  echo "⚠️  Der Manager läuft als root — nur im internen Netz verwenden!"
+  echo "   Für externen Zugriff: Zoraxy/nginx mit Authentifizierung vorschalten."
+  echo "════════════════════════════════════════════════════════════════════"
+fi  # end INSTALL_MANAGER
+
+echo
+echo "✅ DjangoMultiDeploy — Alle Installationen abgeschlossen."

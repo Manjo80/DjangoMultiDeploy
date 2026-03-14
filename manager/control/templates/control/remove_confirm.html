@@ -1,0 +1,88 @@
+{% extends "control/base.html" %}
+{% block title %}Projekt entfernen — {{ name }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-6">
+
+<div class="card border-danger">
+  <div class="card-header bg-danger text-white">
+    <h5 class="mb-0"><i class="bi bi-trash me-2"></i>Projekt entfernen: {{ name }}</h5>
+  </div>
+  <div class="card-body">
+
+    <div class="alert alert-danger">
+      <strong>Achtung!</strong> Diese Aktion kann nicht rückgängig gemacht werden.
+      Der systemd-Service und die nginx-Konfiguration werden immer entfernt.
+      Wähle unten, was zusätzlich gelöscht werden soll.
+    </div>
+
+    <form method="post" action="{% url 'remove_run' name %}">
+      {% csrf_token %}
+
+      <h6 class="mt-3 mb-2">Was soll entfernt werden?</h6>
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="remove_appdir"
+               id="remove_appdir" value="1" checked>
+        <label class="form-check-label" for="remove_appdir">
+          <strong>Projektverzeichnis</strong>
+          <span class="text-muted">— {{ conf.APPDIR|default:"/srv/"|add:name }}</span>
+        </label>
+      </div>
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="remove_db"
+               id="remove_db" value="1">
+        <label class="form-check-label" for="remove_db">
+          <strong>Datenbank</strong>
+          {% if conf.DBNAME %}
+          <span class="text-muted">— {{ conf.DBTYPE }} / {{ conf.DBNAME }}</span>
+          {% endif %}
+        </label>
+      </div>
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="remove_user"
+               id="remove_user" value="1">
+        <label class="form-check-label" for="remove_user">
+          <strong>Linux-User</strong>
+          <span class="text-muted">— {{ conf.APPUSER|default:"?" }}</span>
+        </label>
+      </div>
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="remove_backups"
+               id="remove_backups" value="1">
+        <label class="form-check-label" for="remove_backups">
+          <strong>Backups</strong>
+          <span class="text-muted">— /var/backups/{{ name }}/</span>
+        </label>
+      </div>
+
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" name="remove_logs"
+               id="remove_logs" value="1">
+        <label class="form-check-label" for="remove_logs">
+          <strong>Logs</strong>
+          <span class="text-muted">— /var/log/nginx/{{ name }}_*.log</span>
+        </label>
+      </div>
+
+      <div class="d-flex gap-2">
+        <a href="{% url 'project_detail' name %}" class="btn btn-secondary flex-fill">
+          Abbrechen
+        </a>
+        <button type="submit" class="btn btn-danger flex-fill"
+                onclick="return confirm('Wirklich entfernen?')">
+          <i class="bi bi-trash me-1"></i> Jetzt entfernen
+        </button>
+      </div>
+    </form>
+
+  </div>
+</div>
+
+</div>
+</div>
+{% endblock %}

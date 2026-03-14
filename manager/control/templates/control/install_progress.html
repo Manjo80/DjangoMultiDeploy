@@ -1,0 +1,91 @@
+{% extends "control/base.html" %}
+{% block title %}Installation läuft — {{ project }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-9">
+
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">
+      <i class="bi bi-terminal me-2"></i>
+      Installation: <strong>{{ project }}</strong>
+    </h5>
+    <span id="status-badge" class="badge bg-warning">läuft…</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="terminal-box" id="terminal"></div>
+  </div>
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <span class="text-muted small" id="status-text">Warte auf Ausgabe…</span>
+    <div id="action-buttons" class="d-none">
+      <a href="{% url 'project_detail' project %}" class="btn btn-primary">
+        <i class="bi bi-gear me-1"></i> Projekt verwalten
+      </a>
+      <a href="{% url 'dashboard' %}" class="btn btn-secondary ms-2">Dashboard</a>
+    </div>
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+const terminal = document.getElementById('terminal');
+const statusBadge = document.getElementById('status-badge');
+const statusText = document.getElementById('status-text');
+const actionButtons = document.getElementById('action-buttons');
+
+const source = new EventSource('{% url "install_stream" log_name %}');
+let lineCount = 0;
+
+source.onmessage = function(e) {
+  const line = e.data;
+
+  if (line === '__DONE__') {
+    source.close();
+    statusBadge.textContent = 'Fertig ✅';
+    statusBadge.className = 'badge bg-success';
+    statusText.textContent = 'Installation abgeschlossen.';
+    actionButtons.classList.remove('d-none');
+    return;
+  }
+  if (line === '__TIMEOUT__') {
+    source.close();
+    statusBadge.textContent = 'Timeout ⚠️';
+    statusBadge.className = 'badge bg-warning';
+    statusText.textContent = 'Stream-Timeout — prüfe systemctl status.';
+    return;
+  }
+
+  // Colorize lines
+  const div = document.createElement('div');
+  let html = escHtml(line);
+  if (line.includes('❌') || line.includes('FEHLER') || line.includes('ABBRUCH')) {
+    div.style.color = '#f85149';
+  } else if (line.includes('✅') || line.includes('FERTIG')) {
+    div.style.color = '#3fb950';
+  } else if (line.includes('⚠️') || line.includes('WARNUNG')) {
+    div.style.color = '#d29922';
+  } else if (line.includes('📦') || line.includes('🔧') || line.includes('🐍')) {
+    div.style.color = '#79c0ff';
+  }
+  div.textContent = line;
+  terminal.appendChild(div);
+  terminal.scrollTop = terminal.scrollHeight;
+  lineCount++;
+  statusText.textContent = `${lineCount} Zeilen empfangen…`;
+};
+
+source.onerror = function() {
+  source.close();
+  statusBadge.textContent = 'Verbindung getrennt';
+  statusBadge.className = 'badge bg-secondary';
+  statusText.textContent = 'Stream-Verbindung unterbrochen.';
+};
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+{% endblock %}

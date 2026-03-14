@@ -1,0 +1,58 @@
+{% extends "control/base.html" %}
+{% block title %}Dashboard — DjangoMultiDeploy{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2><i class="bi bi-grid-3x3-gap-fill me-2"></i>Dashboard</h2>
+  <a href="{% url 'install_form' %}" class="btn btn-success">
+    <i class="bi bi-plus-circle me-1"></i> Neues Projekt installieren
+  </a>
+</div>
+
+{% if not projects %}
+<div class="card text-center p-5">
+  <i class="bi bi-inbox display-3 text-muted"></i>
+  <p class="mt-3 text-muted">Noch keine Django-Projekte installiert.</p>
+  <a href="{% url 'install_form' %}" class="btn btn-success mt-2">Jetzt installieren</a>
+</div>
+{% else %}
+<div class="row g-3">
+  {% for p in projects %}
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>{{ p.PROJECTNAME }}</strong>
+        {% if p.status == 'active' %}
+          <span class="badge badge-active">● aktiv</span>
+        {% elif p.status == 'failed' %}
+          <span class="badge badge-failed">● Fehler</span>
+        {% elif p.status == 'inactive' %}
+          <span class="badge badge-inactive">● gestoppt</span>
+        {% else %}
+          <span class="badge badge-unknown">{{ p.status }}</span>
+        {% endif %}
+      </div>
+      <div class="card-body small">
+        <table class="table table-sm table-dark mb-0">
+          <tr><th class="text-muted">Modus</th><td>{{ p.MODE|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Port</th><td>{{ p.GUNICORN_PORT|default:"-" }}</td></tr>
+          <tr><th class="text-muted">DB</th><td>{{ p.DBTYPE|default:"-" }}{% if p.DBNAME %} / {{ p.DBNAME }}{% endif %}</td></tr>
+          <tr><th class="text-muted">User</th><td>{{ p.APPUSER|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Host</th><td class="text-truncate" style="max-width:150px">{{ p.PRIMARY_HOST|default:p.LOCAL_IP|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Installiert</th><td>{{ p.INSTALL_DATE|default:"-" }}</td></tr>
+        </table>
+      </div>
+      <div class="card-footer d-flex gap-2">
+        <a href="{% url 'project_detail' p.PROJECTNAME %}" class="btn btn-sm btn-outline-primary flex-fill">
+          <i class="bi bi-gear"></i> Verwalten
+        </a>
+        <a href="{% url 'log_viewer' p.PROJECTNAME %}" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-file-text"></i>
+        </a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
