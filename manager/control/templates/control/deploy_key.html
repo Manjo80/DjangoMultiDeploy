@@ -1,0 +1,64 @@
+{% extends "control/base.html" %}
+{% block title %}GitHub Deploy-Key — DjangoMultiDeploy{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-8">
+
+<div class="card">
+  <div class="card-header">
+    <h5 class="mb-0"><i class="bi bi-key-fill me-2"></i>GitHub Deploy-Key (Server-weit)</h5>
+  </div>
+  <div class="card-body">
+
+    <div class="alert alert-info" style="background:#1f3a5f;border-color:#1f6feb;color:#e6edf3;">
+      <i class="bi bi-info-circle me-1"></i>
+      Dieser <strong>öffentliche Schlüssel</strong> gilt für den gesamten Server — alle Projekte
+      nutzen denselben Deploy-Key für GitHub. Füge ihn einmalig in deinem GitHub-Account ein.
+    </div>
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if pub_key %}
+    <h6 class="text-muted mb-2">Öffentlicher Schlüssel:</h6>
+    <pre class="log-output" id="pub-key-box" style="font-size:0.75rem; word-break:break-all; white-space:pre-wrap; max-height:120px;">{{ pub_key }}</pre>
+
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <button class="btn btn-outline-secondary" onclick="copyKey()">
+        <i class="bi bi-clipboard me-1"></i> Kopieren
+      </button>
+      <a href="{% url 'global_deploy_key_download' %}" class="btn btn-outline-success">
+        <i class="bi bi-download me-1"></i> .pub herunterladen
+      </a>
+    </div>
+
+    <hr class="my-4">
+    <h6 class="text-muted">So fügst du den Key zu GitHub hinzu:</h6>
+    <ol class="small" style="line-height:2">
+      <li>Key oben kopieren (Schaltfläche "Kopieren")</li>
+      <li><strong>GitHub.com</strong> → Profilbild → <em>Settings</em> → <em>SSH and GPG keys</em> → <em>New SSH key</em></li>
+      <li>Titel z.B. <code>DjangoMultiDeploy Server</code>, Key einfügen, speichern</li>
+      <li>Für <strong>private Repos</strong>: Den Key alternativ als Repository Deploy Key hinterlegen<br>
+          (Repo → <em>Settings</em> → <em>Deploy keys</em> → <em>Add deploy key</em>)</li>
+    </ol>
+    {% endif %}
+
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+function copyKey() {
+  const text = document.getElementById('pub-key-box').textContent.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target.closest('button');
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i> Kopiert!';
+    setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard me-1"></i> Kopieren'; }, 2000);
+  });
+}
+</script>
+{% endblock %}

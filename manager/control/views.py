@@ -21,6 +21,7 @@ from .utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
     list_backups, run_update, run_backup, get_ssh_key, start_install,
+    get_global_deploy_key,
 )
 
 
@@ -38,7 +39,26 @@ def dashboard(request):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def install_form(request):
-    return render(request, 'control/install_form.html')
+    import socket
+    # Nächsten freien Port ermitteln
+    used_ports = {p.get('GUNICORN_PORT') for p in get_all_projects() if p.get('GUNICORN_PORT')}
+    next_port = next((str(p) for p in range(8000, 9000) if str(p) not in used_ports), '8000')
+    # Server-Info
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        local_ip = '127.0.0.1'
+    try:
+        hostname = socket.getfqdn()
+    except Exception:
+        hostname = local_ip
+    defaults = {
+        'next_port': next_port,
+        'local_ip': local_ip,
+        'hostname': hostname,
+        'allowed_hosts_suggestion': f'{local_ip},{hostname}',
+    }
+    return render(request, 'control/install_form.html', defaults)
 
 
 @require_POST
@@ -202,6 +222,27 @@ def ssh_key_confirm(request, project):
     os.makedirs('/tmp/djmanager_installs', exist_ok=True)
     Path(confirm_file).touch()
     return JsonResponse({'ok': True})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Global GitHub Deploy Key
+# ──────────────────────────────────────────────────────────────────────────────
+
+def global_deploy_key(request):
+    pub_key, error = get_global_deploy_key()
+    return render(request, 'control/deploy_key.html', {
+        'pub_key': pub_key,
+        'error': error,
+    })
+
+
+def global_deploy_key_download(request):
+    pub_key, error = get_global_deploy_key()
+    if error:
+        raise Http404(error)
+    response = HttpResponse(pub_key + '\n', content_type='text/plain')
+    response['Content-Disposition'] = 'attachment; filename="djmanager_github_ed25519.pub"'
+    return response
 
 
 # ──────────────────────────────────────────────────────────────────────────────
