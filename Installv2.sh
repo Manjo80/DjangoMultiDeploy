@@ -608,6 +608,9 @@ SSH_KEY_PASSPHRASE="${SSH_KEY_PASSPHRASE:-}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-}"
 GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_github_ed25519}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS}"
+DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
+DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
+DJANGO_ADMIN_PASS="${DJANGO_ADMIN_PASS:-}"
 LANGUAGE_CODE="${LANGUAGE_CODE}"
 TIME_ZONE="${TIME_ZONE}"
 EMAIL_HOST="${EMAIL_HOST:-}"
@@ -1306,28 +1309,36 @@ fi  # end static_done
 if ! is_done "superuser_done"; then
 echo
 echo "👑 Django Superuser erstellen (Admin-Login für /djadmin/)"
-_read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
-DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
 
-_read -p "Admin-Email [admin@localhost]: " DJANGO_ADMIN_EMAIL
-DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
-
-while true; do
-  _read -s -p "Admin-Passwort: " DJANGO_ADMIN_PASS; echo
-  [ -z "$DJANGO_ADMIN_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
-  _read -s -p "Admin-Passwort bestätigen: " DJANGO_ADMIN_PASS2; echo
-  if [ "$DJANGO_ADMIN_PASS" = "$DJANGO_ADMIN_PASS2" ]; then
-    break
-  else
+if [ -n "${DJANGO_ADMIN_PASS:-}" ]; then
+  # Noninteractive (Web-UI)
+  DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
+  DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
+  echo "✅ Django Admin '${DJANGO_ADMIN_USER}' wird angelegt..."
+else
+  _read -p "Admin-Username [admin]: " DJANGO_ADMIN_USER
+  DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
+  _read -p "Admin-Email [admin@localhost]: " DJANGO_ADMIN_EMAIL
+  DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
+  while true; do
+    _read -s -p "Admin-Passwort: " DJANGO_ADMIN_PASS; echo
+    [ -z "$DJANGO_ADMIN_PASS" ] && echo "❌ Passwort darf nicht leer sein." && continue
+    _read -s -p "Admin-Passwort bestätigen: " DJANGO_ADMIN_PASS2; echo
+    [ "$DJANGO_ADMIN_PASS" = "$DJANGO_ADMIN_PASS2" ] && break
     echo "❌ Passwörter stimmen nicht überein. Erneut versuchen."
-  fi
-done
+  done
+fi
 
 su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
   DJANGO_SUPERUSER_PASSWORD='$DJANGO_ADMIN_PASS' \
   python manage.py createsuperuser --noinput \
     --username '$DJANGO_ADMIN_USER' \
-    --email '$DJANGO_ADMIN_EMAIL'"
+    --email '$DJANGO_ADMIN_EMAIL'" 2>/dev/null || \
+su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
+  python manage.py shell -c \
+  \"from django.contrib.auth.models import User; \
+  User.objects.filter(username='$DJANGO_ADMIN_USER').delete(); \
+  User.objects.create_superuser('$DJANGO_ADMIN_USER','$DJANGO_ADMIN_EMAIL','$DJANGO_ADMIN_PASS')\""
 
 echo "✅ Django Superuser '$DJANGO_ADMIN_USER' erstellt"
 echo "   Login unter: http://${LOCAL_IP}/djadmin/"
@@ -1454,7 +1465,10 @@ server {
 EOF
 
 ln -sf /etc/nginx/sites-available/$PROJECTNAME /etc/nginx/sites-enabled/$PROJECTNAME
-rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+# Default-Site nur entfernen wenn es die einzige aktive Site ist
+# (mehrere Projekte auf einem Server — andere Sites nicht anfassen)
+_ACTIVE_SITES=$(ls /etc/nginx/sites-enabled/ 2>/dev/null | grep -v "^default$" | wc -l)
+[ "$_ACTIVE_SITES" -eq 0 ] && rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
 if ! nginx -t; then
   echo "❌ FEHLER: Nginx Konfiguration ungültig!"
