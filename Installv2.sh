@@ -2079,6 +2079,9 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   cp -r "$_MANAGER_SRC/." "$_MANAGER_DIR/"
 
   # Python venv + Abhängigkeiten
+  echo "🐍 Installiere Python-Abhängigkeiten für Manager..."
+  apt-get install -y -q python3 python3-venv python3-pip build-essential 2>/dev/null || \
+    apt install -y python3 python3-venv python3-pip build-essential
   echo "🐍 Erstelle Python venv für Manager..."
   python3 -m venv "$_MANAGER_DIR/venv"
   "$_MANAGER_DIR/venv/bin/pip" install --upgrade pip -q
