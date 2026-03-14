@@ -636,6 +636,9 @@ apt install -y curl git nano ca-certificates openssl net-tools nginx \
                python3 python3-venv python3-pip build-essential iproute2
 # sudo ist in LXC-Containern oft nicht verfügbar — optional installieren
 apt install -y sudo 2>/dev/null || echo "ℹ️  sudo nicht installierbar (LXC?) — wird nicht benötigt"
+# Versionsspezifisches venv-Paket installieren (z.B. python3.11-venv auf Debian/Ubuntu)
+_PY_VER_MAIN=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
+[ -n "$_PY_VER_MAIN" ] && apt install -y "python${_PY_VER_MAIN}-venv" 2>/dev/null || true
 
 # Bildverarbeitung (Pillow)
 echo "🖼️  Installiere Pillow-Abhängigkeiten..."
@@ -2087,8 +2090,23 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   # Python venv + Abhängigkeiten
   echo "🐍 Installiere Python-Abhängigkeiten für Manager..."
-  apt-get install -y -q python3 python3-venv python3-pip build-essential 2>/dev/null || \
+  apt-get install -y python3 python3-venv python3-pip build-essential 2>&1 || \
     apt install -y python3 python3-venv python3-pip build-essential
+
+  # Versionsspezifisches venv-Paket installieren (z.B. python3.11-venv auf Debian/Ubuntu)
+  _PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
+  if [ -n "$_PY_VER" ]; then
+    apt-get install -y "python${_PY_VER}-venv" 2>&1 || \
+      apt install -y "python${_PY_VER}-venv" 2>/dev/null || true
+  fi
+
+  # Sicherstellen dass venv wirklich verfügbar ist
+  if ! python3 -m venv --help >/dev/null 2>&1; then
+    echo "❌ python3-venv ist nicht verfügbar. Bitte manuell installieren:"
+    echo "   apt install python3-venv python${_PY_VER:+${_PY_VER}-}venv"
+    exit 1
+  fi
+
   echo "🐍 Erstelle Python venv für Manager..."
   python3 -m venv "$_MANAGER_DIR/venv"
   "$_MANAGER_DIR/venv/bin/pip" install --upgrade pip -q
