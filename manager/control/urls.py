@@ -21,6 +21,7 @@ urlpatterns = [
     # Project management
     path('project/<str:name>/', views.project_detail, name='project_detail'),
     path('project/<str:name>/action/', views.project_action, name='project_action'),
+    path('project/<str:name>/update/', views.project_update, name='project_update'),
     path('project/<str:name>/logs/', views.log_viewer, name='log_viewer'),
     path('project/<str:name>/remove/', views.remove_confirm, name='remove_confirm'),
     path('project/<str:name>/remove/run/', views.remove_run, name='remove_run'),

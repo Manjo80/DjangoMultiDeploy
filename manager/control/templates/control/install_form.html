@@ -32,6 +32,17 @@
                  pattern="[a-z][a-z0-9_\-]{1,30}" placeholder="z.B. webuser">
         </div>
         <div class="col-md-6">
+          <label class="form-label">Linux-User Passwort *</label>
+          <input type="password" name="appuser_pass" class="form-control" required
+                 id="appuser_pass_field" autocomplete="new-password">
+          <div class="form-text">Für SSH/SCP-Login als App-User</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Passwort bestätigen *</label>
+          <input type="password" class="form-control" id="appuser_pass2_field"
+                 autocomplete="new-password">
+        </div>
+        <div class="col-md-6">
           <label class="form-label">Modus</label>
           <select name="modesel" class="form-select">
             <option value="1">DEV (DEBUG=True)</option>
@@ -190,6 +201,16 @@ document.getElementById('dbtype_sel').addEventListener('change', function() {
   const [port, hint] = dbPorts[this.value] || ['', ''];
   document.getElementById('dbport_field').value = port;
   document.getElementById('dbport_hint').textContent = hint;
+});
+// Linux-User Passwort Bestätigung
+document.querySelector('form').addEventListener('submit', function(e) {
+  const p1 = document.getElementById('appuser_pass_field').value;
+  const p2 = document.getElementById('appuser_pass2_field').value;
+  if (p1 !== p2) {
+    e.preventDefault();
+    alert('Linux-User Passwörter stimmen nicht überein!');
+    document.getElementById('appuser_pass2_field').focus();
+  }
 });
 </script>
 {% endblock %}

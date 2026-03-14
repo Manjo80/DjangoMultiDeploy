@@ -16,6 +16,21 @@ from django.http import (
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.conf import settings
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
+from functools import wraps
+
+
+def admin_required(view_func):
+    """Only staff users may access this view."""
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect(f'/login/?next={request.path}')
+        if not request.user.is_staff:
+            return render(request, 'control/403.html', status=403)
+        return view_func(request, *args, **kwargs)
+    return wrapper
 
 from .utils import (
     get_all_projects, get_project, get_service_status,
@@ -29,6 +44,7 @@ from .utils import (
 # Dashboard
 # ──────────────────────────────────────────────────────────────────────────────
 
+@login_required
 def dashboard(request):
     projects = get_all_projects()
     return render(request, 'control/dashboard.html', {'projects': projects})
@@ -38,29 +54,33 @@ def dashboard(request):
 # Install wizard
 # ──────────────────────────────────────────────────────────────────────────────
 
+@admin_required
 def install_form(request):
-    import socket
+    import socket, subprocess as _sp
     # Nächsten freien Port ermitteln
     used_ports = {p.get('GUNICORN_PORT') for p in get_all_projects() if p.get('GUNICORN_PORT')}
     next_port = next((str(p) for p in range(8000, 9000) if str(p) not in used_ports), '8000')
-    # Server-Info
+    # Alle echten IPs via `hostname -I` (ohne loopback, ohne Manager-Hostname)
     try:
-        local_ip = socket.gethostbyname(socket.gethostname())
+        raw = _sp.check_output(['hostname', '-I'], text=True).strip()
+        all_ips = [ip for ip in raw.split() if not ip.startswith('127.')]
     except Exception:
-        local_ip = '127.0.0.1'
-    try:
-        hostname = socket.getfqdn()
-    except Exception:
-        hostname = local_ip
+        all_ips = []
+    if not all_ips:
+        try:
+            all_ips = [socket.gethostbyname(socket.gethostname())]
+        except Exception:
+            all_ips = []
+    allowed_suggestion = ','.join(all_ips) if all_ips else ''
     defaults = {
         'next_port': next_port,
-        'local_ip': local_ip,
-        'hostname': hostname,
-        'allowed_hosts_suggestion': f'{local_ip},{hostname}',
+        'server_ips': all_ips,
+        'allowed_hosts_suggestion': allowed_suggestion,
     }
     return render(request, 'control/install_form.html', defaults)
 
 
+@admin_required
 @require_POST
 def install_run(request):
     """Receive install form, launch background install, redirect to progress page."""
@@ -82,8 +102,8 @@ def install_run(request):
         'DBPASS':             data.get('dbpass', '').strip(),
         'DBHOST':             data.get('dbhost', 'localhost').strip(),
         'DBPORT':             data.get('dbport', '5432').strip(),
+        'APPUSER_PASS':        data.get('appuser_pass', '').strip(),
         'DJKEY':              data.get('djkey', '').strip(),
-        'SSH_KEY_PASSPHRASE': data.get('ssh_key_passphrase', '').strip(),
         'LANGUAGE_CODE':      data.get('language_code', 'de-de').strip(),
         'TIME_ZONE':          data.get('time_zone', 'Europe/Berlin').strip(),
         'EMAIL_HOST':         data.get('email_host', '').strip(),
@@ -126,6 +146,7 @@ def install_run(request):
     return redirect('install_progress', project=project, run_id=run_id)
 
 
+@login_required
 def install_progress(request, project, run_id):
     log_name = f'{project}_{run_id}.log'
     return render(request, 'control/install_progress.html', {
@@ -135,6 +156,7 @@ def install_progress(request, project, run_id):
     })
 
 
+@login_required
 def install_stream(request, log_name):
     """SSE endpoint: stream install log file line by line."""
     log_path = os.path.join(settings.INSTALL_LOG_DIR, log_name)
@@ -228,6 +250,7 @@ def ssh_key_confirm(request, project):
 # Global GitHub Deploy Key
 # ──────────────────────────────────────────────────────────────────────────────
 
+@admin_required
 def global_deploy_key(request):
     pub_key, error = get_global_deploy_key()
     return render(request, 'control/deploy_key.html', {
@@ -236,6 +259,7 @@ def global_deploy_key(request):
     })
 
 
+@admin_required
 def global_deploy_key_download(request):
     pub_key, error = get_global_deploy_key()
     if error:
@@ -249,6 +273,7 @@ def global_deploy_key_download(request):
 # Project detail + actions
 # ──────────────────────────────────────────────────────────────────────────────
 
+@login_required
 def project_detail(request, name):
     conf = get_project(name)
     if not conf:
@@ -261,6 +286,7 @@ def project_detail(request, name):
     })
 
 
+@admin_required
 @require_POST
 def project_action(request, name):
     action = request.POST.get('action', '')
@@ -303,6 +329,7 @@ def project_action(request, name):
 # Log viewer
 # ──────────────────────────────────────────────────────────────────────────────
 
+@login_required
 def log_viewer(request, name):
     conf = get_project(name)
     if not conf:
@@ -333,6 +360,7 @@ def log_viewer(request, name):
 # Remove wizard
 # ──────────────────────────────────────────────────────────────────────────────
 
+@admin_required
 def remove_confirm(request, name):
     conf = get_project(name)
     if not conf:
@@ -343,6 +371,7 @@ def remove_confirm(request, name):
     })
 
 
+@admin_required
 @require_POST
 def remove_run(request, name):
     """Execute remove script with selected options."""
@@ -366,3 +395,41 @@ def remove_run(request, name):
         'output': output,
         'opts': opts,
     })
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Auth: Login / Logout
+# ──────────────────────────────────────────────────────────────────────────────
+
+def login_view(request):
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+    error = None
+    if request.method == 'POST':
+        user = authenticate(
+            request,
+            username=request.POST.get('username', ''),
+            password=request.POST.get('password', ''),
+        )
+        if user:
+            login(request, user)
+            return redirect(request.GET.get('next', 'dashboard'))
+        error = 'Ungültiger Benutzername oder Passwort.'
+    return render(request, 'control/login.html', {'error': error})
+
+
+def logout_view(request):
+    logout(request)
+    return redirect('login')
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Update (admin only)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@admin_required
+@require_POST
+def project_update(request, name):
+    from .utils import run_update
+    ok, output = run_update(name)
+    return JsonResponse({'ok': ok, 'output': output})
