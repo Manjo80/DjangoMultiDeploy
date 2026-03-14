@@ -185,6 +185,30 @@ MODESEL="${MODESEL:-1}"
 if [ "$MODESEL" = "1" ]; then MODE="dev"; DEBUG_VALUE="True"; else MODE="prod"; DEBUG_VALUE="False"; fi
 
 # -------------------------------------------------------------------
+# Gunicorn Port (automatisch freien Port vorschlagen)
+# -------------------------------------------------------------------
+_DEFAULT_PORT=8000
+while ss -tlnp 2>/dev/null | grep -q ":${_DEFAULT_PORT} "; do
+  _DEFAULT_PORT=$((_DEFAULT_PORT + 1))
+done
+echo
+echo "Gunicorn-Port (jede Django-Instanz braucht einen eigenen Port):"
+echo "  Aktuell laufende Dienste auf diesem Server:"
+ss -tlnp 2>/dev/null | awk '/LISTEN/{print "  ",$0}' | grep -E ':(80[0-9][0-9]|9[0-9][0-9][0-9]) ' || echo "  (keine auf 8000-9999)"
+read -p "Gunicorn-Port [${_DEFAULT_PORT}]: " GUNICORN_PORT
+GUNICORN_PORT="${GUNICORN_PORT:-$_DEFAULT_PORT}"
+if [[ ! "$GUNICORN_PORT" =~ ^[0-9]+$ ]] || [ "$GUNICORN_PORT" -lt 1024 ] || [ "$GUNICORN_PORT" -gt 65535 ]; then
+  echo "❌ FEHLER: Ungültiger Port! Erlaubt: 1024-65535"
+  exit 1
+fi
+if ss -tlnp 2>/dev/null | grep -q ":${GUNICORN_PORT} "; then
+  echo "⚠️  WARNUNG: Port ${GUNICORN_PORT} ist bereits belegt!"
+  read -p "Trotzdem verwenden? (j/N): " _PC
+  [[ ! "$_PC" =~ ^[Jj]$ ]] && exit 1
+fi
+echo "✅ Gunicorn-Port: $GUNICORN_PORT"
+
+# -------------------------------------------------------------------
 # Hosts
 # -------------------------------------------------------------------
 DEFAULT_ALLOWED_HOSTS="${ALL_LOCAL_IPS},127.0.0.1,localhost,${HOSTNAME_FQDN}"
@@ -324,6 +348,7 @@ DEBUG_VALUE="${DEBUG_VALUE}"
 ALLOWED_HOSTS="${ALLOWED_HOSTS}"
 NGINX_SERVER_NAMES="${NGINX_SERVER_NAMES}"
 CSRF_TRUSTED_ORIGINS_VALUE="${CSRF_TRUSTED_ORIGINS_VALUE}"
+GUNICORN_PORT="${GUNICORN_PORT}"
 DBTYPE="${DBTYPE}"
 DBTYPE_SEL="${DBTYPE_SEL}"
 DB_PACKAGE_LOCAL="${DB_PACKAGE_LOCAL:-}"
@@ -1010,7 +1035,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
+ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind 127.0.0.1:${GUNICORN_PORT} --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
 Restart=always
 RestartSec=10
 
@@ -1089,7 +1114,7 @@ server {
 
     # Django App
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:${GUNICORN_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -1116,6 +1141,35 @@ mark_done "nginx_done"
 else
   echo "⏭️  Nginx bereits konfiguriert - überspringe"
 fi  # end nginx_done
+
+# -------------------------------------------------------------------
+# Projekt-Registry (für MOTD und Verwaltung aller Django-Server)
+# -------------------------------------------------------------------
+if ! is_done "registry_done"; then
+  mkdir -p /etc/django-servers.d
+  chmod 755 /etc/django-servers.d
+  cat > /etc/django-servers.d/${PROJECTNAME}.conf <<REGEOF
+PROJECTNAME="${PROJECTNAME}"
+APPDIR="${APPDIR}"
+APPUSER="${APPUSER}"
+MODE="${MODE}"
+DEBUG="${DEBUG_VALUE}"
+GUNICORN_PORT="${GUNICORN_PORT}"
+DBTYPE="${DBTYPE}"
+DBNAME="${DBNAME:-}"
+DBHOST="${DBHOST:-}"
+DBPORT="${DBPORT:-}"
+LOCAL_IP="${LOCAL_IP}"
+HOSTNAME_FQDN="${HOSTNAME_FQDN}"
+GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"
+INSTALL_DATE="$(date '+%Y-%m-%d %H:%M')"
+REGEOF
+  chmod 644 /etc/django-servers.d/${PROJECTNAME}.conf
+  echo "✅ Projekt-Registry eingetragen: /etc/django-servers.d/${PROJECTNAME}.conf"
+  mark_done "registry_done"
+else
+  echo "⏭️  Registry bereits eingetragen - überspringe"
+fi  # end registry_done
 
 # -------------------------------------------------------------------
 # Sudoers + Update-Skript
@@ -1304,73 +1358,127 @@ else
 fi  # end healthcheck_done
 
 # -------------------------------------------------------------------
-# MOTD
+# MOTD (dynamisch - zeigt alle Django-Server beim Login)
 # -------------------------------------------------------------------
 if ! is_done "motd_done"; then
-cat > /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
+
+# Alte projektspezifische MOTD-Dateien aufräumen
+rm -f /etc/profile.d/${PROJECTNAME}_motd.sh 2>/dev/null || true
+
+# Gemeinsames MOTD-Skript erstellen (statisch, liest Registry zur Laufzeit)
+# Wird bei jedem neuen Projekt überschrieben (identischer Inhalt)
+cat > /etc/profile.d/00_django_motd.sh <<'MOTDEOF'
+#!/bin/bash
+# Django Multi-Server MOTD - liest /etc/django-servers.d/*.conf
+
 # Nur bei interaktiven Shells
-case "\\\$-" in
+case "$-" in
   *i*) ;;
   *) return ;;
 esac
 
-# Nur einmal pro Session
-if [ -n "\\\${MOTD_${PROJECTNAME}_SHOWN:-}" ]; then
+# Nur einmal pro Session anzeigen
+if [ -n "${DJANGO_MOTD_SHOWN:-}" ]; then
   return
 fi
-export MOTD_${PROJECTNAME}_SHOWN=1
+export DJANGO_MOTD_SHOWN=1
+
+CONF_DIR="/etc/django-servers.d"
+[ -d "$CONF_DIR" ] || return
+
+# Projekte zählen
+PROJECT_COUNT=0
+for _c in "$CONF_DIR"/*.conf; do
+  [ -f "$_c" ] && PROJECT_COUNT=$(( PROJECT_COUNT + 1 ))
+done
+[ "$PROJECT_COUNT" -eq 0 ] && return
+
+# Systeminfo ermitteln
+_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')
+[ -z "$_IP" ] && _IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+_HOST=$(hostname -f 2>/dev/null || hostname)
 
 echo
-echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║              $PROJECTNAME - Serverübersicht                   ║"
-echo "╚═══════════════════════════════════════════════════════════════╝"
-echo "📁 Projektverzeichnis: $APPDIR"
-echo "👤 App-Benutzer:       $APPUSER"
-echo "🌐 Modus:              $MODE (DEBUG=$DEBUG_VALUE)"
-echo "🗄️  Datenbank:         ${DBTYPE^^}"
+echo "╔══════════════════════════════════════════════════════════════════════════╗"
+printf "║  %-72s  ║\n" "Django Server Übersicht - $_HOST"
+echo "╠══════════════════════════════════════════════════════════════════════════╣"
+printf "║  %-22s %-7s %-6s %-10s %-10s %-14s ║\n" \
+  "PROJEKT" "PORT" "MODUS" "DATENBANK" "STATUS" "BENUTZER"
+echo "╠══════════════════════════════════════════════════════════════════════════╣"
+
+for _conf in "$CONF_DIR"/*.conf; do
+  [ -f "$_conf" ] || continue
+  _PROJ=$(grep '^PROJECTNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _PORT=$(grep '^GUNICORN_PORT=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _MODE=$(grep '^MODE=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _DB=$(grep '^DBTYPE=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _USER=$(grep '^APPUSER=' "$_conf" | cut -d= -f2 | tr -d '"')
+  if systemctl is-active --quiet "$_PROJ" 2>/dev/null; then
+    _STATUS="aktiv ✅"
+  else
+    _STATUS="gestoppt ❌"
+  fi
+  printf "║  %-22s %-7s %-6s %-10s %-10s %-14s ║\n" \
+    "$_PROJ" "${_PORT:-8000}" "${_MODE:-?}" "${_DB:-?}" "$_STATUS" "${_USER:-?}"
+done
+
+echo "╠══════════════════════════════════════════════════════════════════════════╣"
+printf "║  %-72s  ║\n" "IP: $_IP  |  $(date '+%d.%m.%Y %H:%M')  |  Uptime: $(uptime -p 2>/dev/null)"
+echo "╚══════════════════════════════════════════════════════════════════════════╝"
+echo
+
+# Detailansicht je Projekt
+_idx=1
+for _conf in "$CONF_DIR"/*.conf; do
+  [ -f "$_conf" ] || continue
+  _PROJ=$(grep '^PROJECTNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _APPDIR=$(grep '^APPDIR=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _USER=$(grep '^APPUSER=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _PORT=$(grep '^GUNICORN_PORT=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _MODE=$(grep '^MODE=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _DB=$(grep '^DBTYPE=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _DBNAME=$(grep '^DBNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _DBHOST=$(grep '^DBHOST=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _GITHUB=$(grep '^GITHUB_REPO_URL=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _DATE=$(grep '^INSTALL_DATE=' "$_conf" | cut -d= -f2- | tr -d '"')
+  _LIP=$(grep '^LOCAL_IP=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _KEYPATH="/home/$_USER/.ssh/id_ed25519"
+
+  echo "  [$_idx] $_PROJ  (installiert: ${_DATE:-?})"
+  echo "      📁 Verzeichnis:   $_APPDIR"
+  echo "      👤 App-User:      $_USER"
+  echo "      🌐 Modus:         $_MODE"
+  echo "      🔌 Gunicorn:      127.0.0.1:${_PORT:-8000}  (intern)"
+  echo "      🗄️  Datenbank:    ${_DB:-?}${_DBNAME:+  |  DB: $_DBNAME}${_DBHOST:+  |  Host: $_DBHOST}"
+  [ -n "$_GITHUB" ] && echo "      📦 GitHub:        $_GITHUB"
+  echo
+  echo "      📊 Status:        systemctl status $_PROJ"
+  echo "      📋 Logs:          journalctl -u $_PROJ -f"
+  echo "      🔄 Update:        ${_PROJ}_update.sh"
+  echo "      💾 Backup:        ${_PROJ}_backup.sh"
+  echo "      👑 Django-Admin:  http://${_LIP:-$_IP}/djadmin/"
+  echo "      🔐 SSH-Key:       scp root@${_LIP:-$_IP}:$_KEYPATH ."
+  echo "  ────────────────────────────────────────────────────────────────────"
+  echo
+  _idx=$(( _idx + 1 ))
+done
+
+echo "  🔀 Zoraxy Reverse Proxy Konfiguration:"
+echo "     Dieses nginx hört auf Port 80 und leitet per server_name weiter."
+echo "     Zoraxy (anderer Server) konfigurieren:"
+for _conf in "$CONF_DIR"/*.conf; do
+  [ -f "$_conf" ] || continue
+  _PROJ=$(grep '^PROJECTNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _LIP=$(grep '^LOCAL_IP=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _HOSTS=$(grep '^ALLOWED_HOSTS=' "$_conf" | cut -d= -f2 | tr -d '"' | cut -d, -f1)
+  printf "     %-30s →  http://%s:80\n" "${_HOSTS:-$_PROJ}" "${_LIP:-$_IP}"
+done
+echo "     Wichtig: 'Pass Host Header' in Zoraxy aktivieren!"
+echo "  ════════════════════════════════════════════════════════════════════"
+echo
 MOTDEOF
 
-if [ "$DBTYPE" != "sqlite" ]; then
-  cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
-echo "   DB-Engine:          $DB_ENGINE"
-echo "   DB-Name:            $DBNAME"
-echo "   DB-Host:            $DBHOST"
-echo "   DB-Port:            $DBPORT"
-MOTDEOF
-fi
-
-if [[ "$USE_GITHUB" == "true" ]]; then
-  cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
-echo "📦 GitHub Repo:       $GITHUB_REPO_URL"
-MOTDEOF
-fi
-
-cat >> /etc/profile.d/${PROJECTNAME}_motd.sh <<MOTDEOF
-echo
-echo "🔐 SSH-ZUGRIFF:"
-echo "   Benutzer:     $APPUSER"
-echo "   IP-Adresse:   $LOCAL_IP"
-echo "   Hostname:     $HOSTNAME_FQDN"
-echo "   Private Key:  $SSH_KEY_PATH"
-echo
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📥 Private Key für WinSCP/PuTTY herunterladen:"
-echo "   scp root@${LOCAL_IP}:${SSH_KEY_PATH} ."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo
-echo "📦 Update:     ${PROJECTNAME}_update.sh"
-echo "💾 Backup:     ${PROJECTNAME}_backup.sh"
-echo
-echo "📊 Status:     systemctl status $PROJECTNAME"
-echo "📋 Logs:       journalctl -u $PROJECTNAME -f"
-echo
-echo "🌐 Django Admin: http://$LOCAL_IP/djadmin/"
-echo
-echo "👑 Superuser:  sudo -u $APPUSER bash -c 'cd $APPDIR && source .venv/bin/activate && python manage.py createsuperuser'"
-echo "═══════════════════════════════════════════════════════════════"
-echo
-MOTDEOF
-chmod 644 /etc/profile.d/${PROJECTNAME}_motd.sh
+chmod 644 /etc/profile.d/00_django_motd.sh
 
 mark_done "motd_done"
 else
@@ -1381,36 +1489,60 @@ fi  # end motd_done
 # Abschluss + State-Datei aufräumen
 # -------------------------------------------------------------------
 echo
-echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║                      INSTALLATION FERTIG ✅                   ║"
-echo "╚═══════════════════════════════════════════════════════════════╝"
-echo "📁 Projektverzeichnis: $APPDIR"
-echo "👤 App-Benutzer:       $APPUSER"
-echo "🌐 Modus:              $MODE (DEBUG=$DEBUG_VALUE)"
-echo "🗄️  Datenbank:         ${DBTYPE^^}"
+echo "╔════════════════════════════════════════════════════════════════════╗"
+echo "║                    INSTALLATION FERTIG ✅                         ║"
+echo "╚════════════════════════════════════════════════════════════════════╝"
+echo "📁 Projektverzeichnis:  $APPDIR"
+echo "👤 App-Benutzer:        $APPUSER"
+echo "🌐 Modus:               $MODE (DEBUG=$DEBUG_VALUE)"
+echo "🔌 Gunicorn-Port:       127.0.0.1:${GUNICORN_PORT}  (intern)"
+echo "🗄️  Datenbank:          ${DBTYPE^^}"
 if [ "$DBTYPE" != "sqlite" ]; then
-  echo "   DB-Engine:          $DB_ENGINE"
-  echo "   DB-Name:            $DBNAME"
-  echo "   DB-Host:            $DBHOST"
-  echo "   DB-Port:            $DBPORT"
+  echo "   DB-Engine:           $DB_ENGINE"
+  echo "   DB-Name:             $DBNAME"
+  echo "   DB-Host:             $DBHOST"
+  echo "   DB-Port:             $DBPORT"
 fi
 echo
 echo "🔐 SSH-ZUGRIFF:"
-echo "   Benutzer:     $APPUSER"
-echo "   IP-Adresse:   $LOCAL_IP"
-echo "   Hostname:     $HOSTNAME_FQDN"
-echo "   Private Key:  $SSH_KEY_PATH"
+echo "   Benutzer:      $APPUSER"
+echo "   IP-Adresse:    $LOCAL_IP"
+echo "   Hostname:      $HOSTNAME_FQDN"
+echo "   Private Key:   $SSH_KEY_PATH"
 echo
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📥 Private Key für WinSCP/PuTTY herunterladen:"
 echo "   scp root@${LOCAL_IP}:${SSH_KEY_PATH} ."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
-echo "📦 Update:     ${PROJECTNAME}_update.sh"
-echo "💾 Backup:     ${PROJECTNAME}_backup.sh"
+echo "📦 Update:      ${PROJECTNAME}_update.sh"
+echo "💾 Backup:      ${PROJECTNAME}_backup.sh"
+echo "📊 Status:      systemctl status ${PROJECTNAME}"
+echo "📋 Logs:        journalctl -u ${PROJECTNAME} -f"
+echo
+echo "🌐 Django Admin: http://${LOCAL_IP}/djadmin/"
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔀 Zoraxy Reverse Proxy Konfiguration:"
+echo "   Datenfluss:  Internet → Zoraxy (SSL) → nginx:80 → gunicorn:${GUNICORN_PORT}"
+echo
+echo "   In Zoraxy einen neuen Proxy-Eintrag anlegen:"
+echo "   ┌─────────────────────────────────────────────────────────────┐"
+echo "   │  Incoming:  <your-domain.example.com>                      │"
+echo "   │  Target:    http://${LOCAL_IP}:80                          │"
+echo "   │  Option:    'Pass Host Header' / 'Preserve Host' ✅        │"
+echo "   └─────────────────────────────────────────────────────────────┘"
+echo
+echo "   Nginx server_name auf diesem Server:"
+echo "   /etc/nginx/sites-available/${PROJECTNAME}"
+echo "   → server_name: ${NGINX_SERVER_NAMES}"
+echo
+echo "   Beim nächsten Login wird die vollständige Serverübersicht"
+echo "   mit allen Django-Projekten angezeigt (/etc/profile.d/00_django_motd.sh)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 echo "✅ FERTIG! Viel Erfolg mit deinem Django-Projekt! 🚀"
-echo "═══════════════════════════════════════════════════════════════"
+echo "════════════════════════════════════════════════════════════════════"
 
 # State-Datei nach erfolgreicher Installation entfernen
 if [ -f "${STATE_FILE:-}" ]; then
