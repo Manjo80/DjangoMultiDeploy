@@ -12,10 +12,10 @@
     .navbar-brand { color: #58a6ff !important; font-weight: 700; }
     .card { background: #161b22; border: 1px solid #30363d; }
     .card-header { background: #21262d; border-bottom: 1px solid #30363d; }
-    .badge-active   { background: #238636; }
-    .badge-inactive { background: #6e7681; }
-    .badge-failed   { background: #da3633; }
-    .badge-unknown  { background: #9e6a03; }
+    .badge-active   { background: #238636; color: #fff; }
+    .badge-inactive { background: #6e7681; color: #fff; }
+    .badge-failed   { background: #da3633; color: #fff; }
+    .badge-unknown  { background: #9e6a03; color: #fff; }
     pre.log-output {
       background: #010409; border: 1px solid #30363d; color: #58a6ff;
       font-size: 0.78rem; max-height: 600px; overflow-y: auto;
@@ -33,9 +33,21 @@
       background: #0d1117; border-color: #58a6ff; color: #e6edf3;
       box-shadow: 0 0 0 0.2rem rgba(88,166,255,0.2);
     }
-    .btn-primary   { background: #238636; border-color: #238636; }
-    .btn-primary:hover { background: #2ea043; border-color: #2ea043; }
-    .btn-danger    { background: #da3633; border-color: #da3633; }
+    .form-select option { background: #161b22; color: #e6edf3; }
+    .btn-primary   { background: #238636; border-color: #238636; color: #fff !important; }
+    .btn-primary:hover { background: #2ea043; border-color: #2ea043; color: #fff !important; }
+    .btn-success   { background: #238636; border-color: #238636; color: #fff !important; }
+    .btn-success:hover { background: #2ea043; border-color: #2ea043; color: #fff !important; }
+    .btn-danger    { background: #da3633; border-color: #da3633; color: #fff !important; }
+    .btn-danger:hover  { background: #b91c1a; border-color: #b91c1a; color: #fff !important; }
+    .btn-outline-primary   { border-color: #58a6ff; color: #58a6ff !important; }
+    .btn-outline-primary:hover   { background: #58a6ff; color: #0d1117 !important; }
+    .btn-outline-secondary { border-color: #8b949e; color: #8b949e !important; }
+    .btn-outline-secondary:hover { background: #8b949e; color: #0d1117 !important; }
+    .btn-outline-success   { border-color: #3fb950; color: #3fb950 !important; }
+    .btn-outline-success:hover   { background: #3fb950; color: #0d1117 !important; }
+    .btn-outline-danger    { border-color: #f85149; color: #f85149 !important; }
+    .btn-outline-danger:hover    { background: #f85149; color: #fff !important; }
     .table         { color: #e6edf3; }
     .table-dark    { --bs-table-bg: #0d1117; }
     a              { color: #58a6ff; }
@@ -53,6 +65,9 @@
     <div class="ms-auto d-flex gap-2">
       <a href="{% url 'dashboard' %}" class="btn btn-sm btn-outline-secondary">
         <i class="bi bi-grid"></i> Dashboard
+      </a>
+      <a href="{% url 'global_deploy_key' %}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-key"></i> GitHub Key
       </a>
       <a href="{% url 'install_form' %}" class="btn btn-sm btn-outline-success">
         <i class="bi bi-plus-circle"></i> Neues Projekt

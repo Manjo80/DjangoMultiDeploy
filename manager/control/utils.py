@@ -179,6 +179,35 @@ def remove_project(name, opts):
         return False, str(e)
 
 
+GLOBAL_DEPLOY_KEY = '/root/.ssh/djmanager_github_ed25519'
+
+
+def get_global_deploy_key():
+    """Return (pubkey_content, error). Creates the key if it doesn't exist."""
+    pub_path = GLOBAL_DEPLOY_KEY + '.pub'
+    if not os.path.exists(GLOBAL_DEPLOY_KEY):
+        try:
+            import socket
+            comment = f'djmanager@{socket.getfqdn()}'
+            os.makedirs('/root/.ssh', mode=0o700, exist_ok=True)
+            subprocess.run(
+                ['ssh-keygen', '-t', 'ed25519', '-C', comment,
+                 '-f', GLOBAL_DEPLOY_KEY, '-N', ''],
+                check=True, capture_output=True
+            )
+            os.chmod(GLOBAL_DEPLOY_KEY, 0o600)
+            os.chmod(pub_path, 0o644)
+        except Exception as e:
+            return None, f'Key konnte nicht erstellt werden: {e}'
+    if not os.path.exists(pub_path):
+        return None, f'Public Key nicht gefunden: {pub_path}'
+    try:
+        with open(pub_path) as f:
+            return f.read().strip(), None
+    except OSError as e:
+        return None, str(e)
+
+
 def get_ssh_key(project):
     """Return the SSH private key content for a project's app user."""
     conf = get_project(project)

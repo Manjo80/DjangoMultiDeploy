@@ -14,6 +14,10 @@ urlpatterns = [
     path('install/ssh-key/<str:project>/confirm/', views.ssh_key_confirm, name='ssh_key_confirm'),
     path('install/ssh-key/<str:project>/download/', views.ssh_key_download, name='ssh_key_download'),
 
+    # Global GitHub deploy key
+    path('deploy-key/', views.global_deploy_key, name='global_deploy_key'),
+    path('deploy-key/download/', views.global_deploy_key_download, name='global_deploy_key_download'),
+
     # Project management
     path('project/<str:name>/', views.project_detail, name='project_detail'),
     path('project/<str:name>/action/', views.project_action, name='project_action'),

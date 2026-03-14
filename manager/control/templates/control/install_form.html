@@ -46,12 +46,15 @@
         <div class="col-md-6">
           <label class="form-label">ALLOWED_HOSTS</label>
           <input type="text" name="allowed_hosts" class="form-control"
-                 placeholder="Leer = automatisch ermitteln">
+                 placeholder="Leer = automatisch ermitteln"
+                 value="{{ allowed_hosts_suggestion }}">
+          <div class="form-text">Server-IP, Hostname oder Domain (kommagetrennt)</div>
         </div>
         <div class="col-md-3">
           <label class="form-label">Gunicorn-Port</label>
           <input type="number" name="gunicorn_port" class="form-control"
-                 placeholder="Auto (ab 8000)" min="1024" max="65535">
+                 value="{{ next_port }}" min="1024" max="65535">
+          <div class="form-text">Nächster freier Port</div>
         </div>
         <div class="col-md-3">
           <label class="form-label">Gunicorn-Worker</label>
@@ -83,7 +86,8 @@
         </div>
         <div class="col-md-3">
           <label class="form-label">DB-Port</label>
-          <input type="number" name="dbport" class="form-control" value="5432">
+          <input type="number" name="dbport" class="form-control" id="dbport_field" value="5432">
+          <div class="form-text" id="dbport_hint">Standard PostgreSQL</div>
         </div>
         <div class="col-md-4">
           <label class="form-label">DB-Name</label>
@@ -121,13 +125,11 @@
         </div>
       </div>
 
-      <h5 class="mt-2 mb-3 text-muted border-bottom pb-2">SSH-Key (optional)</h5>
-      <div class="row g-3 mb-3">
-        <div class="col-md-6">
-          <label class="form-label">SSH-Key Passphrase</label>
-          <input type="password" name="ssh_key_passphrase" class="form-control"
-                 placeholder="Leer = kein Passwort">
-        </div>
+      <div class="alert alert-secondary d-flex align-items-center gap-2 py-2 mb-4" style="font-size:0.85rem;">
+        <i class="bi bi-key"></i>
+        <span>GitHub Deploy-Key wird server-weit verwaltet —
+          <a href="{% url 'global_deploy_key' %}">Key anzeigen / zu GitHub hinzufügen</a>
+        </span>
       </div>
 
       <details class="mb-4">
@@ -180,11 +182,14 @@
 </div>
 
 <script>
-// Hide DB password field when SQLite selected
+const dbPorts = {'1': ['5432', 'Standard PostgreSQL'], '2': ['3306', 'Standard MySQL/MariaDB'], '3': ['', 'SQLite (kein Port)']};
 document.getElementById('dbtype_sel').addEventListener('change', function() {
   const isLite = this.value === '3';
   document.getElementById('dbpass_field').required = !isLite;
   document.getElementById('dbpass_field').closest('.col-md-6').style.display = isLite ? 'none' : '';
+  const [port, hint] = dbPorts[this.value] || ['', ''];
+  document.getElementById('dbport_field').value = port;
+  document.getElementById('dbport_hint').textContent = hint;
 });
 </script>
 {% endblock %}
