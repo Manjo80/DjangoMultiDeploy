@@ -1,0 +1,190 @@
+{% extends "control/base.html" %}
+{% block title %}Neues Projekt — DjangoMultiDeploy{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-8">
+
+<div class="card">
+  <div class="card-header">
+    <h4 class="mb-0"><i class="bi bi-plus-circle me-2"></i>Neues Django-Projekt installieren</h4>
+  </div>
+  <div class="card-body">
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="{% url 'install_run' %}">
+      {% csrf_token %}
+
+      <h5 class="mt-2 mb-3 text-muted border-bottom pb-2">Projekt</h5>
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label class="form-label">Projektname *</label>
+          <input type="text" name="projectname" class="form-control" required
+                 pattern="[a-zA-Z0-9_\-]{3,50}" placeholder="z.B. webapp">
+          <div class="form-text">a-z, 0-9, _, - (3–50 Zeichen)</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Linux-User *</label>
+          <input type="text" name="appuser" class="form-control" required
+                 pattern="[a-z][a-z0-9_\-]{1,30}" placeholder="z.B. webuser">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Modus</label>
+          <select name="modesel" class="form-select">
+            <option value="1">DEV (DEBUG=True)</option>
+            <option value="2">PROD (DEBUG=False)</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">GitHub Repository URL</label>
+          <input type="text" name="github_repo_url" class="form-control"
+                 placeholder="https://github.com/user/repo.git (leer = neues Projekt)">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">ALLOWED_HOSTS</label>
+          <input type="text" name="allowed_hosts" class="form-control"
+                 placeholder="Leer = automatisch ermitteln">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Gunicorn-Port</label>
+          <input type="number" name="gunicorn_port" class="form-control"
+                 placeholder="Auto (ab 8000)" min="1024" max="65535">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Gunicorn-Worker</label>
+          <input type="number" name="gunicorn_workers" class="form-control"
+                 placeholder="Auto (2×CPU+1)" min="1" max="32">
+        </div>
+      </div>
+
+      <h5 class="mt-2 mb-3 text-muted border-bottom pb-2">Datenbank</h5>
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <label class="form-label">Datenbank-Typ</label>
+          <select name="dbtype_sel" class="form-select" id="dbtype_sel">
+            <option value="1">PostgreSQL</option>
+            <option value="2">MySQL/MariaDB</option>
+            <option value="3">SQLite</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">DB-Modus</label>
+          <select name="dbmode" class="form-select">
+            <option value="2">Remote (bestehender Server)</option>
+            <option value="1">Lokal installieren</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">DB-Host</label>
+          <input type="text" name="dbhost" class="form-control" value="localhost">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">DB-Port</label>
+          <input type="number" name="dbport" class="form-control" value="5432">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">DB-Name</label>
+          <input type="text" name="dbname" class="form-control" placeholder="Leer = auto">
+        </div>
+        <div class="col-md-5">
+          <label class="form-label">DB-User</label>
+          <input type="text" name="dbuser" class="form-control" placeholder="Leer = auto">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">DB-Passwort *</label>
+          <input type="password" name="dbpass" class="form-control" required
+                 id="dbpass_field">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Django SECRET_KEY</label>
+          <input type="text" name="djkey" class="form-control"
+                 placeholder="Leer = automatisch generieren">
+        </div>
+      </div>
+
+      <h5 class="mt-2 mb-3 text-muted border-bottom pb-2">Sprache & Zeit</h5>
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <label class="form-label">Sprachcode</label>
+          <input type="text" name="language_code" class="form-control" value="de-de">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Zeitzone</label>
+          <input type="text" name="time_zone" class="form-control" value="Europe/Berlin">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Backup-Uhrzeit</label>
+          <input type="time" name="backup_time" class="form-control" value="02:00">
+        </div>
+      </div>
+
+      <h5 class="mt-2 mb-3 text-muted border-bottom pb-2">SSH-Key (optional)</h5>
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label class="form-label">SSH-Key Passphrase</label>
+          <input type="password" name="ssh_key_passphrase" class="form-control"
+                 placeholder="Leer = kein Passwort">
+        </div>
+      </div>
+
+      <details class="mb-4">
+        <summary class="text-muted" style="cursor:pointer">E-Mail / SMTP (optional)</summary>
+        <div class="row g-3 mt-2">
+          <div class="col-md-6">
+            <label class="form-label">SMTP Host</label>
+            <input type="text" name="email_host" class="form-control"
+                   placeholder="z.B. smtp.gmail.com">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">SMTP Port</label>
+            <input type="number" name="email_port" class="form-control" value="587">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">SMTP User</label>
+            <input type="email" name="email_host_user" class="form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">SMTP Passwort</label>
+            <input type="password" name="email_host_password" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <div class="form-check mt-4">
+              <input class="form-check-input" type="checkbox" name="email_use_tls"
+                     id="email_use_tls" checked>
+              <label class="form-check-label" for="email_use_tls">TLS verwenden</label>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Absender-Adresse</label>
+            <input type="email" name="default_from_email" class="form-control"
+                   placeholder="noreply@beispiel.de">
+          </div>
+        </div>
+      </details>
+
+      <div class="d-flex gap-2 justify-content-end">
+        <a href="{% url 'dashboard' %}" class="btn btn-secondary">Abbrechen</a>
+        <button type="submit" class="btn btn-success">
+          <i class="bi bi-play-fill me-1"></i> Installation starten
+        </button>
+      </div>
+
+    </form>
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+// Hide DB password field when SQLite selected
+document.getElementById('dbtype_sel').addEventListener('change', function() {
+  const isLite = this.value === '3';
+  document.getElementById('dbpass_field').required = !isLite;
+  document.getElementById('dbpass_field').closest('.col-md-6').style.display = isLite ? 'none' : '';
+});
+</script>
+{% endblock %}

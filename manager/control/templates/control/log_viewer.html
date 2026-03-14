@@ -1,0 +1,45 @@
+{% extends "control/base.html" %}
+{% block title %}Logs — {{ name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4><i class="bi bi-file-text me-2"></i>Logs: {{ name }}</h4>
+  <a href="{% url 'project_detail' name %}" class="btn btn-sm btn-outline-secondary">← Zurück</a>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label">Log-Typ</label>
+        <select name="type" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="journal"      {% if log_type == 'journal' %}selected{% endif %}>systemd Journal</option>
+          <option value="nginx_access" {% if log_type == 'nginx_access' %}selected{% endif %}>nginx Access</option>
+          <option value="nginx_error"  {% if log_type == 'nginx_error' %}selected{% endif %}>nginx Error</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Zeilen</label>
+        <select name="lines" class="form-select form-select-sm" onchange="this.form.submit()">
+          {% for n in "50,100,200,500"|split:"," %}
+          <option value="{{ n }}" {% if lines == n|add:0 %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-arrow-clockwise"></i> Aktualisieren
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<pre class="log-output" id="log-content">{{ logs }}</pre>
+
+<script>
+// Auto-scroll to bottom
+const el = document.getElementById('log-content');
+el.scrollTop = el.scrollHeight;
+</script>
+{% endblock %}

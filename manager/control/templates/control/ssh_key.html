@@ -1,0 +1,58 @@
+{% extends "control/base.html" %}
+{% block title %}SSH-Key — {{ project }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-7">
+
+<div class="card">
+  <div class="card-header d-flex justify-content-between">
+    <h5 class="mb-0"><i class="bi bi-key me-2"></i>SSH Private Key — {{ project }}</h5>
+    <a href="{% url 'project_detail' project %}" class="btn btn-sm btn-outline-secondary">← Zurück</a>
+  </div>
+  <div class="card-body">
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if key_content %}
+    <div class="alert alert-warning">
+      <i class="bi bi-exclamation-triangle me-1"></i>
+      <strong>Achtung:</strong> Dieser private Schlüssel ermöglicht SSH-Zugriff als
+      <code>{{ conf.APPUSER }}</code>. Sichere ihn sofort und lösche ihn vom Server nach dem Download.
+    </div>
+
+    <pre class="log-output" style="font-size:0.72rem; max-height:350px">{{ key_content }}</pre>
+
+    <div class="d-flex gap-2 mt-3">
+      <a href="{% url 'ssh_key_download' project %}" class="btn btn-success">
+        <i class="bi bi-download me-1"></i> Herunterladen (id_ed25519_{{ project }})
+      </a>
+      <button class="btn btn-outline-secondary" onclick="copyKey()">
+        <i class="bi bi-clipboard me-1"></i> In Zwischenablage
+      </button>
+    </div>
+
+    {% if conf %}
+    <hr class="my-4">
+    <h6 class="text-muted">SSH-Verbindung testen:</h6>
+    <pre class="log-output" style="max-height:100px">ssh -i id_ed25519_{{ project }} {{ conf.APPUSER }}@{{ conf.LOCAL_IP }}</pre>
+    {% endif %}
+    {% endif %}
+
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+function copyKey() {
+  const text = `{{ key_content|escapejs }}`;
+  navigator.clipboard.writeText(text).then(() => {
+    alert('SSH-Key in Zwischenablage kopiert!');
+  });
+}
+</script>
+{% endblock %}

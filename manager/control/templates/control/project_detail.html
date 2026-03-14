@@ -1,0 +1,145 @@
+{% extends "control/base.html" %}
+{% block title %}{{ name }} — DjangoMultiDeploy{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3>
+    <i class="bi bi-server me-2"></i>{{ name }}
+    {% if conf.status == 'active' %}
+      <span class="badge badge-active ms-2">● aktiv</span>
+    {% elif conf.status == 'failed' %}
+      <span class="badge badge-failed ms-2">● Fehler</span>
+    {% else %}
+      <span class="badge badge-inactive ms-2">● {{ conf.status }}</span>
+    {% endif %}
+  </h3>
+  <a href="{% url 'dashboard' %}" class="btn btn-sm btn-outline-secondary">← Dashboard</a>
+</div>
+
+{% if message %}
+<div class="alert alert-success alert-dismissible fade show">
+  {{ message }} <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show">
+  <pre class="mb-0">{{ error }}</pre>
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row g-3">
+
+  <!-- Config Info -->
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-header">Konfiguration</div>
+      <div class="card-body">
+        <table class="table table-sm table-dark mb-0">
+          <tr><th class="text-muted">Verzeichnis</th><td>{{ conf.APPDIR|default:"-" }}</td></tr>
+          <tr><th class="text-muted">User</th><td>{{ conf.APPUSER|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Modus</th><td>{{ conf.MODE|default:"-" }} (DEBUG={{ conf.DEBUG|default:"-" }})</td></tr>
+          <tr><th class="text-muted">Gunicorn-Port</th><td>{{ conf.GUNICORN_PORT|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Worker</th><td>{{ conf.GUNICORN_WORKERS|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Datenbank</th><td>{{ conf.DBTYPE|default:"-" }}{% if conf.DBNAME %} / {{ conf.DBNAME }}{% endif %}</td></tr>
+          <tr><th class="text-muted">DB-Host</th><td>{{ conf.DBHOST|default:"-" }}:{{ conf.DBPORT|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Host</th><td>{{ conf.PRIMARY_HOST|default:"-" }}</td></tr>
+          <tr><th class="text-muted">GitHub</th><td class="text-break">{{ conf.GITHUB_REPO_URL|default:"(kein)" }}</td></tr>
+          <tr><th class="text-muted">Sprache</th><td>{{ conf.LANGUAGE_CODE|default:"-" }} / {{ conf.TIME_ZONE|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Installiert</th><td>{{ conf.INSTALL_DATE|default:"-" }}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-header">Service-Steuerung</div>
+      <div class="card-body d-flex gap-2 flex-wrap">
+        <form method="post" action="{% url 'project_action' name %}">
+          {% csrf_token %}<input type="hidden" name="action" value="start">
+          <button class="btn btn-success"><i class="bi bi-play-fill me-1"></i> Starten</button>
+        </form>
+        <form method="post" action="{% url 'project_action' name %}">
+          {% csrf_token %}<input type="hidden" name="action" value="stop">
+          <button class="btn btn-warning"><i class="bi bi-stop-fill me-1"></i> Stoppen</button>
+        </form>
+        <form method="post" action="{% url 'project_action' name %}">
+          {% csrf_token %}<input type="hidden" name="action" value="restart">
+          <button class="btn btn-info"><i class="bi bi-arrow-clockwise me-1"></i> Neustart</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header">Update & Backup</div>
+      <div class="card-body d-flex gap-2 flex-wrap">
+        <form method="post" action="{% url 'project_action' name %}">
+          {% csrf_token %}<input type="hidden" name="action" value="update">
+          <button class="btn btn-primary">
+            <i class="bi bi-cloud-download me-1"></i> Git Pull + Update
+          </button>
+        </form>
+        <form method="post" action="{% url 'project_action' name %}">
+          {% csrf_token %}<input type="hidden" name="action" value="backup">
+          <button class="btn btn-outline-secondary">
+            <i class="bi bi-archive me-1"></i> Backup erstellen
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header">Zugriff</div>
+      <div class="card-body d-flex gap-2 flex-wrap">
+        <a href="{% url 'log_viewer' name %}" class="btn btn-outline-secondary">
+          <i class="bi bi-file-text me-1"></i> Logs
+        </a>
+        <a href="{% url 'ssh_key_display' name %}" class="btn btn-outline-secondary">
+          <i class="bi bi-key me-1"></i> SSH-Key
+        </a>
+        <a href="http://{{ conf.LOCAL_IP }}/djadmin/" target="_blank"
+           class="btn btn-outline-secondary">
+          <i class="bi bi-box-arrow-up-right me-1"></i> Django Admin
+        </a>
+      </div>
+    </div>
+
+    <div class="card border-danger">
+      <div class="card-header text-danger">Gefahrenzone</div>
+      <div class="card-body">
+        <a href="{% url 'remove_confirm' name %}" class="btn btn-danger">
+          <i class="bi bi-trash me-1"></i> Projekt entfernen
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backups list -->
+  {% if backups %}
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">Vorhandene Backups</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-dark mb-0">
+          <thead>
+            <tr><th>Datei</th><th>Größe</th><th>Datum</th></tr>
+          </thead>
+          <tbody>
+            {% for b in backups %}
+            <tr>
+              <td class="font-monospace">{{ b.name }}</td>
+              <td>{{ b.size_mb }} MB</td>
+              <td>{{ b.mtime|stringformat:".0f" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
