@@ -633,7 +633,9 @@ _read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
 # Basis-Pakete
 echo "📦 Installiere Basis-Pakete..."
 apt install -y curl git nano ca-certificates openssl net-tools nginx \
-               python3 python3-venv python3-pip build-essential iproute2 sudo
+               python3 python3-venv python3-pip build-essential iproute2
+# sudo ist in LXC-Containern oft nicht verfügbar — optional installieren
+apt install -y sudo 2>/dev/null || echo "ℹ️  sudo nicht installierbar (LXC?) — wird nicht benötigt"
 
 # Bildverarbeitung (Pillow)
 echo "🖼️  Installiere Pillow-Abhängigkeiten..."
@@ -1502,11 +1504,16 @@ fi  # end registry_done
 # Sudoers + Update-Skript
 # -------------------------------------------------------------------
 if ! is_done "scripts_done"; then
-echo "🔐 Konfiguriere sudoers für $APPUSER..."
-cat > /etc/sudoers.d/${PROJECTNAME}-service <<EOF
+# sudoers: App-User darf Service-Befehle ohne Passwort — nur wenn sudo verfügbar
+if command -v sudo >/dev/null 2>&1 && [ -d /etc/sudoers.d ]; then
+  echo "🔐 Konfiguriere sudoers für $APPUSER..."
+  cat > /etc/sudoers.d/${PROJECTNAME}-service <<EOF
 $APPUSER ALL=NOPASSWD: /bin/systemctl restart $PROJECTNAME, /bin/systemctl status $PROJECTNAME, /bin/systemctl reload $PROJECTNAME, /bin/journalctl -u $PROJECTNAME*
 EOF
-chmod 440 /etc/sudoers.d/${PROJECTNAME}-service
+  chmod 440 /etc/sudoers.d/${PROJECTNAME}-service
+else
+  echo "ℹ️  sudo nicht verfügbar (LXC?) — sudoers-Eintrag übersprungen"
+fi
 
 # -------------------------------------------------------------------
 # Update-Skript
@@ -1560,9 +1567,9 @@ su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && py
 echo "📦 Sammle statische Dateien..."
 su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
 
-# Service neustarten
+# Service neustarten (direkt als root — kein sudo nötig)
 echo "🔄 Neustart Service..."
-sudo systemctl restart "\$SERVICE"
+systemctl restart "\$SERVICE"
 
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║                     UPDATE DONE ✅                            ║"
@@ -2079,6 +2086,9 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   cp -r "$_MANAGER_SRC/." "$_MANAGER_DIR/"
 
   # Python venv + Abhängigkeiten
+  echo "🐍 Installiere Python-Abhängigkeiten für Manager..."
+  apt-get install -y -q python3 python3-venv python3-pip build-essential 2>/dev/null || \
+    apt install -y python3 python3-venv python3-pip build-essential
   echo "🐍 Erstelle Python venv für Manager..."
   python3 -m venv "$_MANAGER_DIR/venv"
   "$_MANAGER_DIR/venv/bin/pip" install --upgrade pip -q
