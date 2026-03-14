@@ -273,9 +273,28 @@ else
   # -------------------------------------------------------------------
   # DB-Zugangsdaten
   # -------------------------------------------------------------------
+  # ℹ️  Tipp für Multi-Server-Betrieb:
+  # Den gleichen PostgreSQL-Server (gleicher Host, gleicher Port 5432)
+  # können ALLE Django-Projekte auf diesem Server nutzen!
+  # Pro Projekt nur einen eigenen DB-Namen und DB-User vergeben.
+  # Beispiel: gpsmgr → DB: gpsmgr / User: gpsmgr_user
+  #           shopapp → DB: shopapp / User: shopapp_user  (selber PG-Server!)
+  if [ "$DBTYPE" = "postgresql" ]; then
+    _EXISTING_DBS=""
+    if command -v psql >/dev/null 2>&1; then
+      _EXISTING_DBS=$(su -s /bin/bash postgres -c "psql -tAc \"SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')\" 2>/dev/null" 2>/dev/null || true)
+    fi
+    if [ -n "$_EXISTING_DBS" ]; then
+      echo
+      echo "ℹ️  Bereits vorhandene PostgreSQL-Datenbanken auf diesem Server:"
+      echo "$_EXISTING_DBS" | while read -r _db; do echo "     • $_db"; done
+      echo "   → Du kannst denselben PostgreSQL-Server (Port 5432) weiterverwenden!"
+    fi
+  fi
+
   DBNAME_DEFAULT="${PROJECTNAME//-/_}"
   DBUSER_DEFAULT="${PROJECTNAME//-/_}_user"
-  
+
   read -p "DB Name [${DBNAME_DEFAULT}]: " TMP_DBNAME
   DBNAME="${TMP_DBNAME:-$DBNAME_DEFAULT}"
   DBNAME="${DBNAME//-/_}"
@@ -1148,6 +1167,8 @@ fi  # end nginx_done
 if ! is_done "registry_done"; then
   mkdir -p /etc/django-servers.d
   chmod 755 /etc/django-servers.d
+  # Ersten ALLOWED_HOST als Primary-Domain ermitteln (für Zoraxy-Anzeige)
+  _PRIMARY_HOST=$(echo "${ALLOWED_HOSTS:-$LOCAL_IP}" | cut -d, -f1 | tr -d ' ')
   cat > /etc/django-servers.d/${PROJECTNAME}.conf <<REGEOF
 PROJECTNAME="${PROJECTNAME}"
 APPDIR="${APPDIR}"
@@ -1161,6 +1182,7 @@ DBHOST="${DBHOST:-}"
 DBPORT="${DBPORT:-}"
 LOCAL_IP="${LOCAL_IP}"
 HOSTNAME_FQDN="${HOSTNAME_FQDN}"
+PRIMARY_HOST="${_PRIMARY_HOST}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"
 INSTALL_DATE="$(date '+%Y-%m-%d %H:%M')"
 REGEOF
@@ -1439,41 +1461,55 @@ for _conf in "$CONF_DIR"/*.conf; do
   _DB=$(grep '^DBTYPE=' "$_conf" | cut -d= -f2 | tr -d '"')
   _DBNAME=$(grep '^DBNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
   _DBHOST=$(grep '^DBHOST=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _DBPORT=$(grep '^DBPORT=' "$_conf" | cut -d= -f2 | tr -d '"')
   _GITHUB=$(grep '^GITHUB_REPO_URL=' "$_conf" | cut -d= -f2 | tr -d '"')
   _DATE=$(grep '^INSTALL_DATE=' "$_conf" | cut -d= -f2- | tr -d '"')
   _LIP=$(grep '^LOCAL_IP=' "$_conf" | cut -d= -f2 | tr -d '"')
   _KEYPATH="/home/$_USER/.ssh/id_ed25519"
 
   echo "  [$_idx] $_PROJ  (installiert: ${_DATE:-?})"
-  echo "      📁 Verzeichnis:   $_APPDIR"
-  echo "      👤 App-User:      $_USER"
-  echo "      🌐 Modus:         $_MODE"
-  echo "      🔌 Gunicorn:      127.0.0.1:${_PORT:-8000}  (intern)"
-  echo "      🗄️  Datenbank:    ${_DB:-?}${_DBNAME:+  |  DB: $_DBNAME}${_DBHOST:+  |  Host: $_DBHOST}"
-  [ -n "$_GITHUB" ] && echo "      📦 GitHub:        $_GITHUB"
-  echo
-  echo "      📊 Status:        systemctl status $_PROJ"
-  echo "      📋 Logs:          journalctl -u $_PROJ -f"
-  echo "      🔄 Update:        ${_PROJ}_update.sh"
-  echo "      💾 Backup:        ${_PROJ}_backup.sh"
-  echo "      👑 Django-Admin:  http://${_LIP:-$_IP}/djadmin/"
-  echo "      🔐 SSH-Key:       scp root@${_LIP:-$_IP}:$_KEYPATH ."
-  echo "  ────────────────────────────────────────────────────────────────────"
+  echo "  ┌─────────────────────────────────────────────────────────────────"
+  echo "  │  👤 App-User:    $_USER"
+  echo "  │  📁 Pfad:        $_APPDIR"
+  echo "  │  🌐 Modus:       $_MODE  |  🔌 Gunicorn: 127.0.0.1:${_PORT:-8000}"
+  if [ -n "$_DBNAME" ]; then
+    echo "  │  🗄️  DB:         ${_DB:-?}  |  Name: $_DBNAME  |  Host: ${_DBHOST:-localhost}:${_DBPORT:-5432}"
+  else
+    echo "  │  🗄️  DB:         ${_DB:-?}"
+  fi
+  [ -n "$_GITHUB" ] && \
+  echo "  │  📦 GitHub:      $_GITHUB"
+  echo "  │"
+  echo "  │  ── Befehle (als root ausführen) ─────────────────────────────"
+  if [ -n "$_GITHUB" ]; then
+    echo "  │  🔄 Git Pull:    su - $_USER -s /bin/bash -c \"cd $_APPDIR && git pull\""
+  fi
+  echo "  │  🚀 Update:      ${_PROJ}_update.sh          (pull+migrate+static+restart)"
+  echo "  │  🔁 Neustart:    systemctl restart $_PROJ"
+  echo "  │  📊 Status:      systemctl status $_PROJ"
+  echo "  │  📋 Logs live:   journalctl -u $_PROJ -f"
+  echo "  │  💾 Backup:      ${_PROJ}_backup.sh"
+  echo "  │"
+  echo "  │  ── Zugriff ───────────────────────────────────────────────────"
+  echo "  │  🌍 Django-Admin: http://${_LIP:-$_IP}/djadmin/"
+  echo "  │  🔐 SSH als User: ssh $_USER@${_LIP:-$_IP}  (Key: $_KEYPATH)"
+  echo "  │  📥 Key herunterladen: scp root@${_LIP:-$_IP}:$_KEYPATH ."
+  echo "  └─────────────────────────────────────────────────────────────────"
   echo
   _idx=$(( _idx + 1 ))
 done
 
 echo "  🔀 Zoraxy Reverse Proxy Konfiguration:"
-echo "     Dieses nginx hört auf Port 80 und leitet per server_name weiter."
-echo "     Zoraxy (anderer Server) konfigurieren:"
+echo "     nginx auf diesem Server hört auf Port 80, leitet per server_name."
+echo "     In Zoraxy (anderer Server) je Domain einen Eintrag anlegen:"
 for _conf in "$CONF_DIR"/*.conf; do
   [ -f "$_conf" ] || continue
-  _PROJ=$(grep '^PROJECTNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
   _LIP=$(grep '^LOCAL_IP=' "$_conf" | cut -d= -f2 | tr -d '"')
-  _HOSTS=$(grep '^ALLOWED_HOSTS=' "$_conf" | cut -d= -f2 | tr -d '"' | cut -d, -f1)
-  printf "     %-30s →  http://%s:80\n" "${_HOSTS:-$_PROJ}" "${_LIP:-$_IP}"
+  _PHOST=$(grep '^PRIMARY_HOST=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _PROJ=$(grep '^PROJECTNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
+  printf "     %-32s →  http://%s:80\n" "${_PHOST:-$_PROJ}" "${_LIP:-$_IP}"
 done
-echo "     Wichtig: 'Pass Host Header' in Zoraxy aktivieren!"
+echo "     ⚠️  'Pass Host Header' / 'Preserve Host' in Zoraxy aktivieren!"
 echo "  ════════════════════════════════════════════════════════════════════"
 echo
 MOTDEOF
