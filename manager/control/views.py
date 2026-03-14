@@ -161,33 +161,47 @@ def install_stream(request, log_name):
     log_path = os.path.join(settings.INSTALL_LOG_DIR, log_name)
 
     def event_stream():
-        sent = 0
         idle_count = 0
-        max_idle = 300  # 300 × 0.5s = 150s timeout
-        while idle_count < max_idle:
-            try:
-                if not os.path.exists(log_path):
-                    time.sleep(0.5)
-                    idle_count += 1
-                    continue
-                with open(log_path) as f:
-                    f.seek(sent)
-                    chunk = f.read(4096)
+        max_idle = 300      # 300 × 0.5s = 150s ohne neue Ausgabe
+        retry_count = 0
+        max_retry = 20      # bis zu 10s warten bis Datei erscheint
+
+        # Warten bis Log-Datei existiert
+        while not os.path.exists(log_path):
+            if retry_count >= max_retry:
+                yield 'data: [Fehler: Log-Datei nicht gefunden]\n\ndata: __TIMEOUT__\n\n'
+                return
+            time.sleep(0.5)
+            retry_count += 1
+
+        try:
+            buf = b''
+            with open(log_path, 'rb') as f:
+                while idle_count < max_idle:
+                    chunk = f.read(8192)
                     if chunk:
                         idle_count = 0
-                        for line in chunk.splitlines():
-                            yield f'data: {line}\n\n'
-                        sent += len(chunk.encode('utf-8', errors='replace'))
+                        buf += chunk
+                        # Zeilenweise ausgeben, unvollständige letzte Zeile puffern
+                        while b'\n' in buf:
+                            line, buf = buf.split(b'\n', 1)
+                            text = line.decode('utf-8', errors='replace').rstrip('\r')
+                            yield f'data: {text}\n\n'
                     else:
                         idle_count += 1
                         time.sleep(0.5)
-                        # Check if install finished
-                        if _install_finished(log_path, sent):
+                        if _install_finished(log_path, f.tell()):
+                            # Restpuffer ausgeben
+                            if buf:
+                                text = buf.decode('utf-8', errors='replace').rstrip('\r\n')
+                                if text:
+                                    yield f'data: {text}\n\n'
                             yield 'data: __DONE__\n\n'
                             return
-            except Exception as e:
-                yield f'data: [stream error: {e}]\n\n'
-                return
+        except OSError as e:
+            yield f'data: [stream error: {e}]\n\ndata: __TIMEOUT__\n\n'
+            return
+
         yield 'data: __TIMEOUT__\n\n'
 
     response = StreamingHttpResponse(
