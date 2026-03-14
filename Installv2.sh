@@ -18,6 +18,14 @@ NONINTERACTIVE="${NONINTERACTIVE:-false}"
 # _read: überspringt read-Prompts wenn NONINTERACTIVE=true
 _read() { [ "$NONINTERACTIVE" = "true" ] && return 0; read "$@"; }
 
+# ionice + nice für apt (reduziert I/O-Last auf LXC overlayfs)
+# Wird hier initialisiert damit Manager-only-Installation ebenfalls davon profitiert
+if command -v ionice >/dev/null 2>&1; then
+  _APT="ionice -c3 nice -n 19 apt-get"
+else
+  _APT="apt-get"
+fi
+
 # ===================================================================
 # Checkpoint / Resume System
 # ===================================================================
@@ -150,17 +158,32 @@ else
   echo "  ✅ Root-Dateisystem beschreibbar"
 fi
 
-# --- Freier Speicher auf / (mind. 2 GB) ---
+# --- Freier Speicher auf / (mind. 3 GB für LXC overlayfs) ---
 _FREE_ROOT_MB=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
 if [ -n "$_FREE_ROOT_MB" ]; then
-  if [ "$_FREE_ROOT_MB" -lt 2048 ]; then
-    echo "  ❌ Zu wenig Speicher auf /: ${_FREE_ROOT_MB} MB frei (Minimum: 2048 MB)"
+  if [ "$_FREE_ROOT_MB" -lt 3072 ]; then
+    echo "  ❌ Zu wenig Speicher auf /: ${_FREE_ROOT_MB} MB frei (Minimum: 3072 MB)"
     echo "     → df -h /  →  ggf. alte Pakete mit: apt autoremove && apt clean"
+    echo "     → LXC: Container-Disk in Proxmox vergrößern (Minimum: 8 GB empfohlen)"
     _PRE_OK=false
-  elif [ "$_FREE_ROOT_MB" -lt 4096 ]; then
-    echo "  ⚠️  Wenig Speicher auf /: ${_FREE_ROOT_MB} MB frei (Empfehlung: ≥ 4096 MB)"
+  elif [ "$_FREE_ROOT_MB" -lt 5120 ]; then
+    echo "  ⚠️  Wenig Speicher auf /: ${_FREE_ROOT_MB} MB frei (Empfehlung: ≥ 5120 MB / 8 GB Disk)"
   else
     echo "  ✅ Freier Speicher auf /: ${_FREE_ROOT_MB} MB"
+  fi
+fi
+
+# --- Freier RAM (mind. 512 MB für apt + pip) ---
+_FREE_RAM_MB=$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo "")
+if [ -n "$_FREE_RAM_MB" ]; then
+  if [ "$_FREE_RAM_MB" -lt 512 ]; then
+    echo "  ❌ Zu wenig RAM verfügbar: ${_FREE_RAM_MB} MB (Minimum: 512 MB)"
+    echo "     → LXC: Container-RAM in Proxmox erhöhen (Minimum: 1 GB empfohlen)"
+    _PRE_OK=false
+  elif [ "$_FREE_RAM_MB" -lt 1024 ]; then
+    echo "  ⚠️  Wenig RAM: ${_FREE_RAM_MB} MB frei (Empfehlung: ≥ 1024 MB)"
+  else
+    echo "  ✅ Verfügbarer RAM: ${_FREE_RAM_MB} MB"
   fi
 fi
 
@@ -631,31 +654,47 @@ fi  # end of input section (! is_done "input_saved")
 # System-Pakete aktualisieren
 # -------------------------------------------------------------------
 if ! is_done "pkgs_installed"; then
-apt update
+
+$_APT update -qq
 
 _read -p "System-Pakete updaten? (empfohlen) [J/n]: " UPGRADE
-[[ "${UPGRADE:-J}" =~ ^[Jj]$ ]] && apt upgrade -y
+[[ "${UPGRADE:-J}" =~ ^[Jj]$ ]] && $_APT upgrade -y --no-install-recommends -qq
 
-# Basis-Pakete
+# Disk-Check vor dem Installieren (Warnung bei < 2 GB freier Platz)
+_FREE_NOW=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+if [ -n "$_FREE_NOW" ] && [ "$_FREE_NOW" -lt 2048 ]; then
+  echo "⚠️  WARNUNG: Nur ${_FREE_NOW} MB frei auf / — apt install könnte Disk füllen!"
+  echo "   LXC: Container-Disk in Proxmox vergrößern empfohlen (Minimum 8 GB)"
+fi
+
+# Basis-Pakete (--no-install-recommends spart ~300-500 MB auf LXC overlayfs!)
 echo "📦 Installiere Basis-Pakete..."
-apt install -y curl git nano ca-certificates openssl net-tools nginx \
-               python3 python3-venv python3-pip build-essential iproute2
+$_APT install -y --no-install-recommends \
+  curl git nano ca-certificates openssl net-tools nginx \
+  python3 python3-venv python3-pip build-essential iproute2
 # sudo ist in LXC-Containern oft nicht verfügbar — optional installieren
-apt install -y sudo 2>/dev/null || echo "ℹ️  sudo nicht installierbar (LXC?) — wird nicht benötigt"
+$_APT install -y --no-install-recommends sudo 2>/dev/null \
+  || echo "ℹ️  sudo nicht installierbar (LXC?) — wird nicht benötigt"
 # Versionsspezifisches venv-Paket installieren (z.B. python3.11-venv auf Debian/Ubuntu)
 _PY_VER_MAIN=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
-[ -n "$_PY_VER_MAIN" ] && apt install -y "python${_PY_VER_MAIN}-venv" 2>/dev/null || true
+[ -n "$_PY_VER_MAIN" ] && $_APT install -y --no-install-recommends "python${_PY_VER_MAIN}-venv" 2>/dev/null || true
 
 # Bildverarbeitung (Pillow)
 echo "🖼️  Installiere Pillow-Abhängigkeiten..."
-apt install -y libjpeg-dev zlib1g-dev libpng-dev libwebp-dev
+$_APT install -y --no-install-recommends libjpeg-dev zlib1g-dev libpng-dev libwebp-dev
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
-  apt install -y libpq-dev
+  $_APT install -y --no-install-recommends libpq-dev
 elif [ "$DBTYPE" = "mysql" ]; then
-  apt install -y libmysqlclient-dev python3-dev default-libmysqlclient-dev
+  $_APT install -y --no-install-recommends libmysqlclient-dev python3-dev default-libmysqlclient-dev
 fi
+
+# Paket-Cache leeren — spart erheblich Platz auf LXC overlayfs (apt-Cache = 200-500 MB!)
+echo "🧹 Leere apt-Cache (spart Disk-Platz auf LXC)..."
+$_APT autoremove -y -qq
+$_APT clean
+sync
 
 # -------------------------------------------------------------------
 # fail2ban installieren
@@ -664,7 +703,7 @@ _read -p "fail2ban installieren (schützt SSH)? [J/n]: " INSTALL_FAIL2BAN
 INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-J}"
 if [[ "$INSTALL_FAIL2BAN" =~ ^[Jj]$ ]]; then
   echo "🛡️  Installiere fail2ban..."
-  apt install -y fail2ban
+  $_APT install -y --no-install-recommends fail2ban
   cat > /etc/fail2ban/jail.local <<EOF
 [sshd]
 enabled = true
@@ -887,9 +926,9 @@ cd /tmp
 
 if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
   echo "🗄️  Installiere lokale ${DBTYPE^^} Datenbank..."
-  
+
   if [ "$DBTYPE" = "postgresql" ]; then
-    apt install -y $DB_PACKAGE_LOCAL
+    ${_APT:-apt-get} install -y --no-install-recommends $DB_PACKAGE_LOCAL
     systemctl enable --now postgresql
     
     # Warten bis PostgreSQL läuft
@@ -916,7 +955,7 @@ psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null ||
 PGEOF
     
   elif [ "$DBTYPE" = "mysql" ]; then
-    apt install -y $DB_PACKAGE_LOCAL
+    ${_APT:-apt-get} install -y --no-install-recommends $DB_PACKAGE_LOCAL
     systemctl enable --now mariadb
     
     # Warten bis MariaDB läuft
@@ -938,7 +977,7 @@ SQL
   fi
 elif [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "2" ]; then
   echo "🌐 Installiere ${DBTYPE^^} Client für Remote-Verbindung..."
-  apt install -y $DB_PACKAGE_CLIENT
+  ${_APT:-apt-get} install -y --no-install-recommends $DB_PACKAGE_CLIENT
 fi
 
 mark_done "db_setup"
@@ -990,20 +1029,20 @@ set -e
 cd "$APPDIR"
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
-pip install django gunicorn python-dotenv pillow
+pip install --no-cache-dir --upgrade pip
+pip install --no-cache-dir django gunicorn python-dotenv pillow
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
-  pip install "psycopg[binary]"
+  pip install --no-cache-dir "psycopg[binary]"
 elif [ "$DBTYPE" = "mysql" ]; then
-  pip install mysqlclient
+  pip install --no-cache-dir mysqlclient
 fi
 
 # Requirements installieren (falls vorhanden)
 if [ -f "$APPDIR/requirements.txt" ]; then
   echo "📦 Installiere requirements.txt..."
-  pip install -r "$APPDIR/requirements.txt"
+  pip install --no-cache-dir -r "$APPDIR/requirements.txt"
 fi
 EOF
 
@@ -1015,14 +1054,14 @@ set -e
 cd "$APPDIR"
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
-pip install django gunicorn python-dotenv pillow
+pip install --no-cache-dir --upgrade pip
+pip install --no-cache-dir django gunicorn python-dotenv pillow
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
-  pip install "psycopg[binary]"
+  pip install --no-cache-dir "psycopg[binary]"
 elif [ "$DBTYPE" = "mysql" ]; then
-  pip install mysqlclient
+  pip install --no-cache-dir mysqlclient
 fi
 
 # Django Projekt erstellen
@@ -1589,7 +1628,7 @@ fi
 # Requirements installieren
 if [ -f "\$APPDIR/requirements.txt" ]; then
   echo "📦 Installiere Requirements..."
-  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && pip install -r requirements.txt"
+  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && pip install --no-cache-dir -r requirements.txt"
 fi
 
 # Migrationen prüfen und ausführen
@@ -2126,14 +2165,12 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   # Python venv + Abhängigkeiten
   echo "🐍 Installiere Python-Abhängigkeiten für Manager..."
-  apt-get install -y python3 python3-venv python3-pip build-essential 2>&1 || \
-    apt install -y python3 python3-venv python3-pip build-essential
+  ${_APT:-apt-get} install -y --no-install-recommends python3 python3-venv python3-pip build-essential
 
   # Versionsspezifisches venv-Paket installieren (z.B. python3.11-venv auf Debian/Ubuntu)
   _PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
   if [ -n "$_PY_VER" ]; then
-    apt-get install -y "python${_PY_VER}-venv" 2>&1 || \
-      apt install -y "python${_PY_VER}-venv" 2>/dev/null || true
+    ${_APT:-apt-get} install -y --no-install-recommends "python${_PY_VER}-venv" 2>/dev/null || true
   fi
 
   # Sicherstellen dass venv wirklich verfügbar ist
@@ -2145,8 +2182,8 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   echo "🐍 Erstelle Python venv für Manager..."
   python3 -m venv "$_MANAGER_DIR/venv"
-  "$_MANAGER_DIR/venv/bin/pip" install --upgrade pip -q
-  "$_MANAGER_DIR/venv/bin/pip" install -r "$_MANAGER_DIR/requirements.txt" -q
+  "$_MANAGER_DIR/venv/bin/pip" install --no-cache-dir --upgrade pip -q
+  "$_MANAGER_DIR/venv/bin/pip" install --no-cache-dir -r "$_MANAGER_DIR/requirements.txt" -q
   echo "✅ Python-Abhängigkeiten installiert"
 
   # .env für Manager
@@ -2213,7 +2250,7 @@ fi
 # Python-Abhängigkeiten aktualisieren
 if [ -f "\$MANAGER_DIR/requirements.txt" ]; then
   echo "📦 Installiere Requirements..."
-  "\$MANAGER_DIR/venv/bin/pip" install -r "\$MANAGER_DIR/requirements.txt" -q
+  "\$MANAGER_DIR/venv/bin/pip" install --no-cache-dir -r "\$MANAGER_DIR/requirements.txt" -q
 fi
 
 # Migrationen
