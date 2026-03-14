@@ -55,11 +55,21 @@
                  placeholder="https://github.com/user/repo.git (leer = neues Projekt)">
         </div>
         <div class="col-md-6">
-          <label class="form-label">ALLOWED_HOSTS</label>
+          <label class="form-label">Domain / Hostname (nginx server_name)</label>
           <input type="text" name="allowed_hosts" class="form-control"
-                 placeholder="Leer = automatisch ermitteln"
+                 id="allowed_hosts_field"
+                 placeholder="z.B. meinprojekt.example.com"
                  value="{{ allowed_hosts_suggestion }}">
-          <div class="form-text">Server-IP, Hostname oder Domain (kommagetrennt)</div>
+          <div class="form-text">
+            IP oder Domain — nginx leitet Anfragen per <code>server_name</code> weiter.
+            Mehrere Einträge kommagetrennt.
+            {% if server_ips %}
+            <br>Erkannte Server-IPs:
+            {% for ip in server_ips %}<button type="button" class="btn btn-sm py-0 px-1 ms-1"
+              style="font-size:0.75rem;background:#21262d;border:1px solid #30363d;color:#58a6ff"
+              onclick="addHost('{{ ip }}')">+ {{ ip }}</button>{% endfor %}
+            {% endif %}
+          </div>
         </div>
         <div class="col-md-3">
           <label class="form-label">Gunicorn-Port</label>
@@ -136,6 +146,28 @@
         </div>
       </div>
 
+      <h5 class="mt-2 mb-3 text-muted border-bottom pb-2">Django Admin (/djadmin/)</h5>
+      <div class="row g-3 mb-4">
+        <div class="col-md-4">
+          <label class="form-label">Admin-Username</label>
+          <input type="text" name="django_admin_user" class="form-control" value="admin">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Admin-E-Mail</label>
+          <input type="email" name="django_admin_email" class="form-control" value="admin@localhost">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Admin-Passwort *</label>
+          <input type="password" name="django_admin_pass" class="form-control" required
+                 id="django_admin_pass_field" autocomplete="new-password">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Admin-Passwort bestätigen *</label>
+          <input type="password" class="form-control" id="django_admin_pass2_field"
+                 autocomplete="new-password">
+        </div>
+      </div>
+
       <div class="alert alert-secondary d-flex align-items-center gap-2 py-2 mb-4" style="font-size:0.85rem;">
         <i class="bi bi-key"></i>
         <span>GitHub Deploy-Key wird server-weit verwaltet —
@@ -202,14 +234,23 @@ document.getElementById('dbtype_sel').addEventListener('change', function() {
   document.getElementById('dbport_field').value = port;
   document.getElementById('dbport_hint').textContent = hint;
 });
-// Linux-User Passwort Bestätigung
+function addHost(ip) {
+  const f = document.getElementById('allowed_hosts_field');
+  const cur = f.value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!cur.includes(ip)) { cur.push(ip); f.value = cur.join(','); }
+}
 document.querySelector('form').addEventListener('submit', function(e) {
-  const p1 = document.getElementById('appuser_pass_field').value;
-  const p2 = document.getElementById('appuser_pass2_field').value;
-  if (p1 !== p2) {
-    e.preventDefault();
-    alert('Linux-User Passwörter stimmen nicht überein!');
-    document.getElementById('appuser_pass2_field').focus();
+  const checks = [
+    [document.getElementById('appuser_pass_field'), document.getElementById('appuser_pass2_field'), 'Linux-User'],
+    [document.getElementById('django_admin_pass_field'), document.getElementById('django_admin_pass2_field'), 'Django Admin'],
+  ];
+  for (const [p1f, p2f, label] of checks) {
+    if (p1f.value !== p2f.value) {
+      e.preventDefault();
+      alert(`${label} Passwörter stimmen nicht überein!`);
+      p2f.focus();
+      return;
+    }
   }
 });
 </script>
