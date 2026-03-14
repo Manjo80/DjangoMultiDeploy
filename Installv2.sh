@@ -2,8 +2,11 @@
 set -euo pipefail
 
 # ===================================================================
-# Django Installer - Secure & Flexible (LXC/Container ready)
-# Version: 2.0 - Improved & Optimized
+# DjangoMultiDeploy - Multi-Server Django Installer
+# Mehrere Django-Projekte auf einem Server, jedes mit eigenem Port,
+# Gunicorn, nginx, systemd, PostgreSQL/MySQL/SQLite, Backup & MOTD
+# Zoraxy Reverse Proxy ready | LXC/Container ready
+# Version: 3.0
 # ===================================================================
 
 # ===================================================================
@@ -98,7 +101,7 @@ echo "✅ Ausführung als root bestätigt"
 # Projektname -> /srv/<name> (mit Validierung!)
 # -------------------------------------------------------------------
 if [[ "$_RESUME" != "true" ]]; then
-  read -p "Projektname (Ordner unter /srv, z.B. gpsmgr): " PROJECTNAME
+  read -p "Projektname (Ordner unter /srv, z.B. webapp): " PROJECTNAME
   [ -z "${PROJECTNAME:-}" ] && echo "❌ FEHLER: Projektname leer." && exit 1
 
   # Validierung: nur alphanumerisch, _, - und 3-50 Zeichen
@@ -277,8 +280,8 @@ else
   # Den gleichen PostgreSQL-Server (gleicher Host, gleicher Port 5432)
   # können ALLE Django-Projekte auf diesem Server nutzen!
   # Pro Projekt nur einen eigenen DB-Namen und DB-User vergeben.
-  # Beispiel: gpsmgr → DB: gpsmgr / User: gpsmgr_user
-  #           shopapp → DB: shopapp / User: shopapp_user  (selber PG-Server!)
+  # Beispiel: webapp  → DB: webapp  / User: webapp_user  (Port 5432 ✅)
+  #           shopapp → DB: shopapp / User: shopapp_user  (Port 5432 ✅)
   if [ "$DBTYPE" = "postgresql" ]; then
     _EXISTING_DBS=""
     if command -v psql >/dev/null 2>&1; then
@@ -327,7 +330,7 @@ fi
 # -------------------------------------------------------------------
 # Linux User
 # -------------------------------------------------------------------
-read -p "Linux-User für App (wird erstellt, z.B. gps): " APPUSER
+read -p "Linux-User für App (wird erstellt, z.B. webuser): " APPUSER
 [ -z "${APPUSER:-}" ] && echo "❌ FEHLER: APPUSER leer." && exit 1
 
 # Validierung APPUSER
