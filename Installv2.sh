@@ -357,6 +357,70 @@ read -p "SSH-Key Passphrase (leer für kein Passwort): " SSH_KEY_PASSPHRASE
 
 SSH_KEY_PATH="/home/${APPUSER}/.ssh/id_ed25519"
 
+# -------------------------------------------------------------------
+# Gunicorn Worker (automatisch aus CPU-Kernen berechnen)
+# -------------------------------------------------------------------
+_CPU_COUNT=$(nproc 2>/dev/null || echo 2)
+_DEFAULT_WORKERS=$(( _CPU_COUNT * 2 + 1 ))
+echo
+echo "Gunicorn Worker (Empfehlung: 2 × CPU-Kerne + 1):"
+echo "  Dieser Server hat ${_CPU_COUNT} CPU-Kern(e) → Empfehlung: ${_DEFAULT_WORKERS} Worker"
+read -p "Anzahl Worker [${_DEFAULT_WORKERS}]: " GUNICORN_WORKERS
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-$_DEFAULT_WORKERS}"
+if [[ ! "$GUNICORN_WORKERS" =~ ^[0-9]+$ ]] || [ "$GUNICORN_WORKERS" -lt 1 ] || [ "$GUNICORN_WORKERS" -gt 32 ]; then
+  echo "❌ FEHLER: Ungültige Worker-Anzahl (1-32)!"
+  exit 1
+fi
+echo "✅ Gunicorn Worker: $GUNICORN_WORKERS"
+
+# -------------------------------------------------------------------
+# Sprache & Zeitzone
+# -------------------------------------------------------------------
+echo
+echo "Sprache & Zeitzone für Django:"
+echo "  Beispiele: de-de / Europe/Berlin | en-us / Europe/London | fr-fr / Europe/Paris"
+read -p "Sprachcode [de-de]: " LANGUAGE_CODE
+LANGUAGE_CODE="${LANGUAGE_CODE:-de-de}"
+read -p "Zeitzone   [Europe/Berlin]: " TIME_ZONE
+TIME_ZONE="${TIME_ZONE:-Europe/Berlin}"
+echo "✅ Sprache: $LANGUAGE_CODE | Zeitzone: $TIME_ZONE"
+
+# -------------------------------------------------------------------
+# E-Mail / SMTP Konfiguration (optional)
+# -------------------------------------------------------------------
+echo
+echo "E-Mail / SMTP Konfiguration (optional — leer lassen zum Überspringen):"
+read -p "SMTP Host (z.B. smtp.gmail.com) [leer = deaktiviert]: " EMAIL_HOST
+if [ -n "${EMAIL_HOST:-}" ]; then
+  read -p "SMTP Port [587]: " EMAIL_PORT
+  EMAIL_PORT="${EMAIL_PORT:-587}"
+  read -p "SMTP User (E-Mail-Adresse): " EMAIL_HOST_USER
+  read -s -p "SMTP Passwort: " EMAIL_HOST_PASSWORD; echo
+  read -p "TLS verwenden? [J/n]: " _TLS_CHOICE
+  [[ "${_TLS_CHOICE:-J}" =~ ^[Jj]$ ]] && EMAIL_USE_TLS="True" || EMAIL_USE_TLS="False"
+  read -p "Absender-Adresse [${EMAIL_HOST_USER:-noreply@localhost}]: " DEFAULT_FROM_EMAIL
+  DEFAULT_FROM_EMAIL="${DEFAULT_FROM_EMAIL:-${EMAIL_HOST_USER:-noreply@localhost}}"
+  echo "✅ E-Mail konfiguriert: ${EMAIL_HOST}:${EMAIL_PORT} (TLS: ${EMAIL_USE_TLS})"
+else
+  EMAIL_HOST=""; EMAIL_PORT=""; EMAIL_HOST_USER=""
+  EMAIL_HOST_PASSWORD=""; EMAIL_USE_TLS=""; DEFAULT_FROM_EMAIL=""
+  echo "⏭️  E-Mail übersprungen (console backend aktiv)"
+fi
+
+# -------------------------------------------------------------------
+# Backup-Cron Uhrzeit
+# -------------------------------------------------------------------
+echo
+read -p "Automatisches tägliches Backup um (HH:MM) [02:00]: " _BACKUP_TIME
+_BACKUP_TIME="${_BACKUP_TIME:-02:00}"
+BACKUP_CRON_HOUR=$(echo "$_BACKUP_TIME" | cut -d: -f1 | sed 's/^0*//' )
+BACKUP_CRON_MIN=$(echo "$_BACKUP_TIME"  | cut -d: -f2 | sed 's/^0*//' )
+[[ ! "$BACKUP_CRON_HOUR" =~ ^[0-9]+$ ]] || [ "${BACKUP_CRON_HOUR:-99}" -gt 23 ] && BACKUP_CRON_HOUR=2
+[[ ! "$BACKUP_CRON_MIN"  =~ ^[0-9]+$ ]] || [ "${BACKUP_CRON_MIN:-99}"  -gt 59 ] && BACKUP_CRON_MIN=0
+BACKUP_CRON_HOUR="${BACKUP_CRON_HOUR:-2}"
+BACKUP_CRON_MIN="${BACKUP_CRON_MIN:-0}"
+echo "✅ Backup täglich um $(printf '%02d:%02d' "$BACKUP_CRON_HOUR" "$BACKUP_CRON_MIN")"
+
   # ---- Alle Eingaben in State-Datei speichern (für Resume) ----
   cat >> "$STATE_FILE" << STATEEOF
 GITHUB_REPO_URL="${GITHUB_REPO_URL}"
@@ -387,6 +451,17 @@ APPUSER="${APPUSER}"
 DJKEY="${DJKEY}"
 SSH_KEY_PASSPHRASE="${SSH_KEY_PASSPHRASE}"
 SSH_KEY_PATH="${SSH_KEY_PATH}"
+GUNICORN_WORKERS="${GUNICORN_WORKERS}"
+LANGUAGE_CODE="${LANGUAGE_CODE}"
+TIME_ZONE="${TIME_ZONE}"
+EMAIL_HOST="${EMAIL_HOST:-}"
+EMAIL_PORT="${EMAIL_PORT:-}"
+EMAIL_HOST_USER="${EMAIL_HOST_USER:-}"
+EMAIL_HOST_PASSWORD="${EMAIL_HOST_PASSWORD:-}"
+EMAIL_USE_TLS="${EMAIL_USE_TLS:-}"
+DEFAULT_FROM_EMAIL="${DEFAULT_FROM_EMAIL:-}"
+BACKUP_CRON_HOUR="${BACKUP_CRON_HOUR}"
+BACKUP_CRON_MIN="${BACKUP_CRON_MIN}"
 STATEEOF
   chmod 600 "$STATE_FILE"
   mark_done "input_saved"
@@ -807,6 +882,14 @@ DB_HOST="$DBHOST"
 DB_PORT="$DBPORT"
 ALLOWED_HOSTS=$ALLOWED_HOSTS
 CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
+LANGUAGE_CODE="$LANGUAGE_CODE"
+TIME_ZONE="$TIME_ZONE"
+EMAIL_HOST="${EMAIL_HOST:-}"
+EMAIL_PORT="${EMAIL_PORT:-}"
+EMAIL_HOST_USER="${EMAIL_HOST_USER:-}"
+EMAIL_HOST_PASSWORD="${EMAIL_HOST_PASSWORD:-}"
+EMAIL_USE_TLS="${EMAIL_USE_TLS:-}"
+DEFAULT_FROM_EMAIL="${DEFAULT_FROM_EMAIL:-}"
 EOF
 
   chown "$APPUSER:$APPUSER" "$APPDIR/.env"
@@ -921,8 +1004,8 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-LANGUAGE_CODE = "de-de"
-TIME_ZONE = "Europe/Luxembourg"
+LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "de-de")
+TIME_ZONE = os.getenv("TIME_ZONE", "Europe/Berlin")
 USE_I18N = True
 USE_TZ = True
 
@@ -933,6 +1016,19 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# E-Mail-Konfiguration
+_email_host = os.getenv("EMAIL_HOST", "")
+if _email_host:
+    EMAIL_BACKEND       = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST          = _email_host
+    EMAIL_PORT          = int(os.getenv("EMAIL_PORT", "587"))
+    EMAIL_HOST_USER     = os.getenv("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS       = os.getenv("EMAIL_USE_TLS", "True") == "True"
+    DEFAULT_FROM_EMAIL  = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER)
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 # PROD-spezifische Sicherheitseinstellungen
 if MODE == "prod":
@@ -987,6 +1083,27 @@ fi  # end logdir_done
 # Migrationen
 # -------------------------------------------------------------------
 if ! is_done "migrations_done"; then
+  # DB-Verbindung testen bevor Migrationen gestartet werden
+  echo "🔍 Teste Datenbankverbindung..."
+  if [ "$DBTYPE" = "postgresql" ]; then
+    if ! PGPASSWORD="$DBPASS" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" \
+         -c "SELECT 1" >/dev/null 2>&1; then
+      echo "❌ FEHLER: PostgreSQL-Verbindung fehlgeschlagen!"
+      echo "   Host: $DBHOST | Port: $DBPORT | User: $DBUSER | DB: $DBNAME"
+      echo "   Prüfe: Zugangsdaten, ob PostgreSQL läuft, ob User und DB existieren."
+      exit 1
+    fi
+    echo "✅ PostgreSQL-Verbindung erfolgreich"
+  elif [ "$DBTYPE" = "mysql" ]; then
+    if ! mysql -h "$DBHOST" -P "$DBPORT" -u "$DBUSER" -p"$DBPASS" \
+         "$DBNAME" -e "SELECT 1" >/dev/null 2>&1; then
+      echo "❌ FEHLER: MySQL/MariaDB-Verbindung fehlgeschlagen!"
+      echo "   Host: $DBHOST | Port: $DBPORT | User: $DBUSER | DB: $DBNAME"
+      exit 1
+    fi
+    echo "✅ MySQL-Verbindung erfolgreich"
+  fi
+
   echo "📊 Führe Migrationen aus..."
   su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && python manage.py migrate"
   mark_done "migrations_done"
@@ -1057,7 +1174,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind 127.0.0.1:${GUNICORN_PORT} --workers 3 --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
+ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind 127.0.0.1:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
 Restart=always
 RestartSec=10
 
@@ -1114,6 +1231,15 @@ server {
     server_name $NGINX_SERVER_NAMES;
     client_max_body_size 50M;
 
+    # Gzip Komprimierung
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml application/json
+               application/javascript application/xml+rss
+               application/atom+xml image/svg+xml;
+
     # Security Headers
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -1160,6 +1286,23 @@ fi
 systemctl restart nginx
 
 mark_done "nginx_done"
+
+# Zoraxy Konfiguration direkt anzeigen
+_ZORAXY_HOST=$(echo "${ALLOWED_HOSTS:-$LOCAL_IP}" | cut -d, -f1 | tr -d ' ')
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔀 Zoraxy Reverse Proxy — so eintragen:"
+echo
+echo "   Zoraxy → Proxy Rules → New Proxy Rule:"
+echo "   ┌──────────────────────────────────────────────────────────────┐"
+echo "   │  Matching Domain:  ${_ZORAXY_HOST}"
+echo "   │  Target:           http://${LOCAL_IP}:80"
+echo "   │  ✅ Pass / Preserve Host Header aktivieren"
+echo "   └──────────────────────────────────────────────────────────────┘"
+echo
+echo "   nginx server_name (dieser Server): ${NGINX_SERVER_NAMES}"
+echo "   Gunicorn intern:                   127.0.0.1:${GUNICORN_PORT}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 else
   echo "⏭️  Nginx bereits konfiguriert - überspringe"
 fi  # end nginx_done
@@ -1187,6 +1330,12 @@ LOCAL_IP="${LOCAL_IP}"
 HOSTNAME_FQDN="${HOSTNAME_FQDN}"
 PRIMARY_HOST="${_PRIMARY_HOST}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"
+GUNICORN_WORKERS="${GUNICORN_WORKERS}"
+LANGUAGE_CODE="${LANGUAGE_CODE}"
+TIME_ZONE="${TIME_ZONE}"
+EMAIL_HOST="${EMAIL_HOST:-}"
+BACKUP_CRON_HOUR="${BACKUP_CRON_HOUR}"
+BACKUP_CRON_MIN="${BACKUP_CRON_MIN}"
 INSTALL_DATE="$(date '+%Y-%m-%d %H:%M')"
 REGEOF
   chmod 644 /etc/django-servers.d/${PROJECTNAME}.conf
@@ -1224,6 +1373,11 @@ echo "║                  UPDATE START (\$SERVICE)                      ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 
 cd "\$APPDIR"
+
+# Backup vor dem Update
+echo "💾 Erstelle Sicherung vor Update..."
+/usr/local/bin/\${SERVICE}_backup.sh && echo "✅ Backup erstellt" \
+  || echo "⚠️  Backup fehlgeschlagen — Update wird trotzdem fortgesetzt"
 
 # Git Pull (falls Git-Repo vorhanden)
 if [ -d "\$APPDIR/.git" ]; then
@@ -1309,6 +1463,149 @@ BACKUPEOF
 
 chmod 755 /usr/local/bin/${PROJECTNAME}_backup.sh
 echo "💾 Backup-Skript erstellt: /usr/local/bin/${PROJECTNAME}_backup.sh"
+
+# -------------------------------------------------------------------
+# Automatischer Backup-Cron
+# -------------------------------------------------------------------
+echo "⏰ Richte Backup-Cron ein (täglich $(printf '%02d:%02d' "$BACKUP_CRON_HOUR" "$BACKUP_CRON_MIN"))..."
+( crontab -l 2>/dev/null | grep -v "${PROJECTNAME}_backup.sh" || true
+  echo "${BACKUP_CRON_MIN} ${BACKUP_CRON_HOUR} * * * /usr/local/bin/${PROJECTNAME}_backup.sh >> /var/log/${PROJECTNAME}/backup.log 2>&1"
+) | crontab -
+echo "✅ Backup-Cron: $(printf '%02d:%02d' "$BACKUP_CRON_HOUR" "$BACKUP_CRON_MIN") täglich"
+
+# -------------------------------------------------------------------
+# Deinstallations-Skript
+# -------------------------------------------------------------------
+echo "🗑️  Erstelle Deinstallations-Skript..."
+cat > /usr/local/bin/${PROJECTNAME}_remove.sh <<REMOVEEOF
+#!/bin/bash
+set -euo pipefail
+
+PROJECT="${PROJECTNAME}"
+APPDIR="${APPDIR}"
+APPUSER="${APPUSER}"
+DBTYPE="${DBTYPE}"
+DBNAME="${DBNAME:-}"
+DBUSER_DB="${DBUSER:-}"
+BACKUP_DIR="/var/backups/\${PROJECT}"
+
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║           DEINSTALLATION: \${PROJECT}                          ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
+echo "⚠️  Entfernt Service, nginx, Configs und optional alle Daten."
+read -p "Wirklich deinstallieren? (j/N): " _C
+[[ ! "\${_C:-N}" =~ ^[Jj]\$ ]] && echo "Abbruch." && exit 0
+
+# Service stoppen
+echo "🛑 Stoppe Service..."
+systemctl stop "\${PROJECT}"   2>/dev/null || true
+systemctl disable "\${PROJECT}" 2>/dev/null || true
+rm -f "/etc/systemd/system/\${PROJECT}.service"
+systemctl daemon-reload
+
+# nginx entfernen
+rm -f "/etc/nginx/sites-enabled/\${PROJECT}"
+rm -f "/etc/nginx/sites-available/\${PROJECT}"
+nginx -t 2>/dev/null && systemctl reload nginx || true
+
+# Konfigurationen entfernen
+rm -f "/etc/sudoers.d/\${PROJECT}-service"
+rm -f "/etc/logrotate.d/\${PROJECT}"
+rm -f "/etc/django-servers.d/\${PROJECT}.conf"
+
+# Cron-Job entfernen
+( crontab -l 2>/dev/null | grep -v "\${PROJECT}_backup.sh" || true ) | crontab - 2>/dev/null || true
+echo "✅ Service, nginx, Configs und Cron entfernt"
+
+# Projektverzeichnis?
+read -p "Projektverzeichnis '\${APPDIR}' löschen? (j/N): " _R
+[[ "\${_R:-N}" =~ ^[Jj]\$ ]] && rm -rf "\${APPDIR}" && echo "✅ Projektverzeichnis entfernt"
+
+# Logs?
+read -p "Log-Verzeichnis '/var/log/\${PROJECT}' löschen? (j/N): " _R
+[[ "\${_R:-N}" =~ ^[Jj]\$ ]] && rm -rf "/var/log/\${PROJECT}" && echo "✅ Logs entfernt"
+
+# Backups?
+read -p "Backup-Verzeichnis '\${BACKUP_DIR}' löschen? (j/N): " _R
+[[ "\${_R:-N}" =~ ^[Jj]\$ ]] && rm -rf "\${BACKUP_DIR}" && echo "✅ Backups entfernt"
+
+# Datenbank?
+if [ -n "\${DBNAME:-}" ]; then
+  if [ "\${DBTYPE}" = "postgresql" ]; then
+    read -p "PostgreSQL DB '\${DBNAME}' + User '\${DBUSER_DB}' löschen? (j/N): " _R
+    if [[ "\${_R:-N}" =~ ^[Jj]\$ ]]; then
+      su -s /bin/bash postgres -c "psql -c \"DROP DATABASE IF EXISTS \\\"\${DBNAME}\\\";\"" 2>/dev/null || true
+      su -s /bin/bash postgres -c "psql -c \"DROP USER IF EXISTS \\\"\${DBUSER_DB}\\\";\"" 2>/dev/null || true
+      echo "✅ PostgreSQL DB + User entfernt"
+    fi
+  elif [ "\${DBTYPE}" = "mysql" ]; then
+    read -p "MySQL DB '\${DBNAME}' + User '\${DBUSER_DB}' löschen? (j/N): " _R
+    if [[ "\${_R:-N}" =~ ^[Jj]\$ ]]; then
+      mysql -u root -e "DROP DATABASE IF EXISTS \`\${DBNAME}\`; DROP USER IF EXISTS '\${DBUSER_DB}'@'localhost';" 2>/dev/null || true
+      echo "✅ MySQL DB + User entfernt"
+    fi
+  fi
+fi
+
+# Linux-User?
+read -p "Linux-User '\${APPUSER}' + Home-Verzeichnis löschen? (j/N): " _R
+if [[ "\${_R:-N}" =~ ^[Jj]\$ ]]; then
+  deluser --remove-home "\${APPUSER}" 2>/dev/null || userdel -r "\${APPUSER}" 2>/dev/null || true
+  echo "✅ Linux-User entfernt"
+fi
+
+# Skripte selbst entfernen
+rm -f "/usr/local/bin/\${PROJECT}_update.sh"
+rm -f "/usr/local/bin/\${PROJECT}_backup.sh"
+rm -f "\$0"
+
+echo
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║           DEINSTALLATION ABGESCHLOSSEN ✅                    ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
+REMOVEEOF
+chmod 755 /usr/local/bin/${PROJECTNAME}_remove.sh
+echo "🗑️  Deinstallations-Skript: /usr/local/bin/${PROJECTNAME}_remove.sh"
+
+# -------------------------------------------------------------------
+# Server-Status-Skript (global, einmalig erstellt/überschrieben)
+# -------------------------------------------------------------------
+cat > /usr/local/bin/django_status.sh <<'STATUSEOF'
+#!/bin/bash
+CONF_DIR="/etc/django-servers.d"
+[ -d "$CONF_DIR" ] || { echo "Keine Django-Projekte registriert."; exit 0; }
+
+_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')
+[ -z "$_IP" ] && _IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+echo
+echo "╔════════════════════════════════════════════════════════════════════════╗"
+printf "║  %-70s  ║\n" "Django Server Status — $(hostname -f 2>/dev/null)"
+echo "╠════════════════════════════════════════════════════════════════════════╣"
+printf "║  %-20s %-7s %-6s %-10s %-12s %-10s  ║\n" \
+  "PROJEKT" "PORT" "MODUS" "DB" "SERVICE" "/health/"
+echo "╠════════════════════════════════════════════════════════════════════════╣"
+
+for _conf in "$CONF_DIR"/*.conf; do
+  [ -f "$_conf" ] || continue
+  _PROJ=$(grep '^PROJECTNAME='  "$_conf" | cut -d= -f2 | tr -d '"')
+  _PORT=$(grep '^GUNICORN_PORT=' "$_conf" | cut -d= -f2 | tr -d '"')
+  _MODE=$(grep '^MODE='         "$_conf" | cut -d= -f2 | tr -d '"')
+  _DB=$(grep   '^DBTYPE='       "$_conf" | cut -d= -f2 | tr -d '"')
+  systemctl is-active --quiet "$_PROJ" 2>/dev/null && _SVC="aktiv ✅" || _SVC="gestoppt ❌"
+  _HTTP=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
+    "http://127.0.0.1:${_PORT:-8000}/health/" 2>/dev/null || echo "---")
+  case "$_HTTP" in 200) _HSTR="200 ✅";; ---) _HSTR="timeout ⏱";; *) _HSTR="${_HTTP} ⚠️";; esac
+  printf "║  %-20s %-7s %-6s %-10s %-12s %-10s  ║\n" \
+    "$_PROJ" "${_PORT:-?}" "${_MODE:-?}" "${_DB:-?}" "$_SVC" "$_HSTR"
+done
+
+echo "╚════════════════════════════════════════════════════════════════════════╝"
+printf "   %s  |  %s\n" "$(date '+%d.%m.%Y %H:%M:%S')" "Server: $_IP"
+echo
+STATUSEOF
+chmod 755 /usr/local/bin/django_status.sh
+echo "📊 Status-Skript: django_status.sh"
 
 mark_done "scripts_done"
 else
