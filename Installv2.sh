@@ -98,6 +98,112 @@ fi
 echo "✅ Ausführung als root bestätigt"
 
 # -------------------------------------------------------------------
+# System-Voraussetzungen prüfen (vor jeder Installation)
+# -------------------------------------------------------------------
+echo
+echo "🔍 Prüfe System-Voraussetzungen..."
+_PRE_OK=true
+
+# --- /tmp beschreibbar? ---
+if ! touch /tmp/.django_write_test 2>/dev/null; then
+  echo "⚠️  /tmp ist nicht beschreibbar (Read-only) — versuche Remount..."
+  if mount -o remount,rw /tmp 2>/dev/null; then
+    echo "   ✅ /tmp erfolgreich als read-write remountet"
+  else
+    echo "   /tmp remount fehlgeschlagen — versuche tmpfs neu einzuhängen..."
+    if mount -t tmpfs -o size=1g,mode=1777 tmpfs /tmp 2>/dev/null; then
+      echo "   ✅ Neues tmpfs auf /tmp eingehängt"
+    else
+      echo "   ❌ /tmp konnte nicht beschreibbar gemacht werden!"
+      echo "      Mögliche Ursachen:"
+      echo "      • Root-Dateisystem read-only (Disk-Fehler auf Proxmox-Host)"
+      echo "      • Proxmox-Host Speicher voll → Container neu starten"
+      echo "      • dmesg | grep -i 'error\|readonly' auf dem HOST prüfen"
+      _PRE_OK=false
+    fi
+  fi
+else
+  rm -f /tmp/.django_write_test
+  echo "  ✅ /tmp beschreibbar"
+fi
+
+# --- Root-Dateisystem schreibbar? ---
+if ! touch /root/.django_write_test 2>/dev/null; then
+  echo "  ❌ Root-Dateisystem (/) ist read-only!"
+  echo "     → Container neu starten und danach: dmesg | grep -i readonly"
+  echo "     → Auf Proxmox-Host: Disk-Fehler im Proxmox-Log prüfen"
+  _PRE_OK=false
+else
+  rm -f /root/.django_write_test
+  echo "  ✅ Root-Dateisystem beschreibbar"
+fi
+
+# --- Freier Speicher auf / (mind. 2 GB) ---
+_FREE_ROOT_MB=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+if [ -n "$_FREE_ROOT_MB" ]; then
+  if [ "$_FREE_ROOT_MB" -lt 2048 ]; then
+    echo "  ❌ Zu wenig Speicher auf /: ${_FREE_ROOT_MB} MB frei (Minimum: 2048 MB)"
+    echo "     → df -h /  →  ggf. alte Pakete mit: apt autoremove && apt clean"
+    _PRE_OK=false
+  elif [ "$_FREE_ROOT_MB" -lt 4096 ]; then
+    echo "  ⚠️  Wenig Speicher auf /: ${_FREE_ROOT_MB} MB frei (Empfehlung: ≥ 4096 MB)"
+  else
+    echo "  ✅ Freier Speicher auf /: ${_FREE_ROOT_MB} MB"
+  fi
+fi
+
+# --- Freier Speicher auf /tmp (mind. 512 MB) ---
+_FREE_TMP_MB=$(df -m /tmp 2>/dev/null | awk 'NR==2{print $4}')
+if [ -n "$_FREE_TMP_MB" ] && [ "$_FREE_TMP_MB" -lt 512 ]; then
+  echo "  ❌ Zu wenig Speicher auf /tmp: ${_FREE_TMP_MB} MB (Minimum: 512 MB)"
+  echo "     → mount -t tmpfs -o size=1g,mode=1777 tmpfs /tmp"
+  _PRE_OK=false
+else
+  echo "  ✅ Freier Speicher auf /tmp: ${_FREE_TMP_MB:-?} MB"
+fi
+
+# --- DNS-Auflösung ---
+if ! getent hosts pypi.org >/dev/null 2>&1; then
+  echo "  ❌ DNS-Auflösung fehlgeschlagen (pypi.org nicht erreichbar)"
+  echo "     → cat /etc/resolv.conf  →  ggf. nameserver 1.1.1.1 eintragen"
+  _PRE_OK=false
+else
+  echo "  ✅ DNS-Auflösung funktioniert"
+fi
+
+# --- HTTPS-Verbindung zu pypi.org ---
+if command -v curl >/dev/null 2>&1; then
+  if ! curl -fsSL --max-time 15 https://pypi.org/simple/ -o /dev/null 2>/dev/null; then
+    echo "  ❌ HTTPS-Verbindung zu pypi.org fehlgeschlagen!"
+    echo "     → Firewall / Netzwerk prüfen: curl -v https://pypi.org"
+    echo "     → Uhrzeit korrekt? (SSL-Fehler bei falscher Systemzeit)"
+    echo "        Aktuelle Zeit: $(date)  → Prüfen: timedatectl"
+    _PRE_OK=false
+  else
+    echo "  ✅ HTTPS-Verbindung zu pypi.org erfolgreich"
+  fi
+fi
+
+# --- Systemzeit (SSL-Zertifikate versagen bei falscher Uhrzeit) ---
+_NOW_TS=$(date +%s)
+if [ "$_NOW_TS" -lt 1700000000 ]; then
+  echo "  ⚠️  Systemzeit scheint falsch: $(date)"
+  echo "     → timedatectl set-ntp true  oder  date -s 'YYYY-MM-DD HH:MM:SS'"
+fi
+
+# --- Abbruch wenn kritische Checks fehlgeschlagen ---
+if [ "$_PRE_OK" = "false" ]; then
+  echo
+  echo "❌ ABBRUCH: Kritische Voraussetzungen nicht erfüllt."
+  echo "   Probleme beheben und Skript erneut starten."
+  echo "   (Bereits abgeschlossene Schritte werden beim Neustart übersprungen)"
+  exit 1
+fi
+
+echo "✅ Alle Voraussetzungen erfüllt — Installation wird gestartet"
+echo
+
+# -------------------------------------------------------------------
 # Projektname -> /srv/<name> (mit Validierung!)
 # -------------------------------------------------------------------
 if [[ "$_RESUME" != "true" ]]; then
