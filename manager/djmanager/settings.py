@@ -57,7 +57,8 @@ DATABASES = {
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_DIRS = [BASE_DIR / 'static']
+_STATIC_SRC = BASE_DIR / 'static'
+STATICFILES_DIRS = [_STATIC_SRC] if _STATIC_SRC.exists() else []
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
