@@ -166,44 +166,60 @@ def install_stream(request, log_name):
     def event_stream():
         idle_count = 0
         max_idle = 300      # 300 × 0.5s = 150s ohne neue Ausgabe
-        retry_count = 0
-        max_retry = 20      # bis zu 10s warten bis Datei erscheint
+        wait_count = 0
+        max_wait = 40       # bis zu 20s warten bis Datei erscheint
+        pos = 0             # gelesene Bytes (zum Wiederöffnen nach EIO)
+        eio_retries = 0
+        max_eio = 10        # max 10 EIO-Retries (~5s) bevor Abbruch
 
-        # Warten bis Log-Datei existiert
         while not os.path.exists(log_path):
-            if retry_count >= max_retry:
+            if wait_count >= max_wait:
                 yield 'data: [Fehler: Log-Datei nicht gefunden]\n\ndata: __TIMEOUT__\n\n'
                 return
             time.sleep(0.5)
-            retry_count += 1
+            wait_count += 1
 
-        try:
-            buf = b''
-            with open(log_path, 'rb') as f:
-                while idle_count < max_idle:
-                    chunk = f.read(8192)
-                    if chunk:
-                        idle_count = 0
-                        buf += chunk
-                        # Zeilenweise ausgeben, unvollständige letzte Zeile puffern
-                        while b'\n' in buf:
-                            line, buf = buf.split(b'\n', 1)
-                            text = line.decode('utf-8', errors='replace').rstrip('\r')
-                            yield f'data: {text}\n\n'
-                    else:
-                        idle_count += 1
-                        time.sleep(0.5)
-                        if _install_finished(log_path, f.tell()):
-                            # Restpuffer ausgeben
-                            if buf:
-                                text = buf.decode('utf-8', errors='replace').rstrip('\r\n')
-                                if text:
-                                    yield f'data: {text}\n\n'
-                            yield 'data: __DONE__\n\n'
-                            return
-        except OSError as e:
-            yield f'data: [stream error: {e}]\n\ndata: __TIMEOUT__\n\n'
-            return
+        buf = b''
+        while idle_count < max_idle:
+            try:
+                with open(log_path, 'rb') as f:
+                    f.seek(pos)
+                    while idle_count < max_idle:
+                        try:
+                            chunk = f.read(8192)
+                        except OSError:
+                            # EIO auf LXC overlayfs → Position merken, kurz warten, neu öffnen
+                            break
+                        if chunk:
+                            eio_retries = 0
+                            idle_count = 0
+                            pos += len(chunk)
+                            buf += chunk
+                            while b'\n' in buf:
+                                line, buf = buf.split(b'\n', 1)
+                                text = line.decode('utf-8', errors='replace').rstrip('\r')
+                                yield f'data: {text}\n\n'
+                        else:
+                            idle_count += 1
+                            time.sleep(0.5)
+                            if _install_finished(log_path, pos):
+                                if buf:
+                                    text = buf.decode('utf-8', errors='replace').rstrip('\r\n')
+                                    if text:
+                                        yield f'data: {text}\n\n'
+                                yield 'data: __DONE__\n\n'
+                                return
+                # Datei wurde nach einem EIO-Break neu geöffnet
+                eio_retries += 1
+                if eio_retries >= max_eio:
+                    yield 'data: [Warnung: Dateisystem-Fehler (EIO) — Installation läuft weiter]\n\n'
+                    yield 'data: __TIMEOUT__\n\n'
+                    return
+                time.sleep(0.5)
+
+            except OSError as e:
+                yield f'data: [stream error: {e}]\n\ndata: __TIMEOUT__\n\n'
+                return
 
         yield 'data: __TIMEOUT__\n\n'
 

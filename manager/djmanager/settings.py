@@ -69,6 +69,7 @@ LOGOUT_REDIRECT_URL = '/login/'
 # Manager-specific settings
 INSTALL_SCRIPT = os.getenv('INSTALL_SCRIPT', '/opt/DjangoMultiDeploy/Installv2.sh')
 REGISTRY_DIR = os.getenv('REGISTRY_DIR', '/etc/django-servers.d')
-INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', str(BASE_DIR / 'logs'))
+# Log-Dir auf /tmp (tmpfs/RAM) — verhindert EIO-Fehler auf LXC overlayfs
+INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', '/tmp/djmanager_logs')
 
 os.makedirs(INSTALL_LOG_DIR, exist_ok=True)
