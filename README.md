@@ -1,234 +1,187 @@
-🚀 Django Installer (Debian & Ubuntu)
+# DjangoMultiDeploy
 
-Ein interaktives Installationsskript für einen Django-Server auf Debian oder Ubuntu, inkl.:
-	•	Python venv (projektgebunden)
-	•	Django + Gunicorn
-	•	PostgreSQL (lokal oder remote)
-	•	systemd Service
-	•	nginx Reverse Proxy
-	•	DEV / PROD Modus
-	•	automatische Host- & CSRF-Konfiguration
-	•	Update-Skript mit Fehler-Logging
+Interaktives Bash-Installationsskript für **mehrere Django-Projekte auf einem Server** — jedes mit eigenem Gunicorn-Port, nginx-Site, systemd-Service, Datenbank und App-User.
 
-Optimiert für:
-	•	Proxmox LXC
-	•	normale Debian/Ubuntu Server
-	•	Reverse-Proxy-Setups (HTTPS extern)
+Zoraxy Reverse Proxy ready · LXC/Container ready · Debian & Ubuntu
 
-⸻
+---
 
-✨ Features
-	•	Debian 12 & Ubuntu 22.04+ kompatibel
-	•	eigener Linux-App-User
-	•	separater PostgreSQL-User
-	•	.env-basierte Konfiguration
-	•	automatisches ALLOWED_HOSTS
-	•	automatisches CSRF_TRUSTED_ORIGINS
-	•	nginx server_name automatisch gesetzt
-	•	reproduzierbares Setup
-	•	Update-Skript mit Logs
+## Was das Skript macht
 
-⸻
+Ein einziger Aufruf von `Installv2.sh` richtet ein komplettes Django-Projekt ein:
 
-🧠 Architektur (wichtig!)
+| Schritt | Was passiert |
+|---|---|
+| **App-User** | eigener Linux-User wird angelegt |
+| **SSH-Key** | ed25519-Key für WinSCP/PuTTY/GitHub |
+| **Python venv** | projektgebunden unter `/srv/<projekt>/.venv` |
+| **Django + Gunicorn** | inkl. aller DB-Treiber |
+| **Datenbank** | PostgreSQL / MySQL / SQLite (lokal oder remote) |
+| **systemd Service** | Autostart, Restart, Logging |
+| **nginx Site** | server_name-basiert, static/media files |
+| **Backup-Skript** | DB-Dump + Projekt-Archiv, 14 Tage Rotation |
+| **Update-Skript** | git pull + migrate + collectstatic + restart |
+| **MOTD** | zeigt beim Login alle laufenden Django-Projekte |
 
-Bereich	Zweck
-Linux-User (APPUSER)	Startet Django, besitzt venv
-PostgreSQL-User (DBUSER)	DB-Zugriff für Django
-/srv/<projekt>	Projekt + venv
-.env	Einziger Ort für Secrets
+---
 
-👉 Linux-User ≠ DB-User (Absicht!)
+## Multi-Server-Betrieb
 
-⸻
+Mehrere Django-Projekte laufen parallel auf demselben Server — jedes bekommt einen eigenen Gunicorn-Port. Das Skript erkennt automatisch den nächsten freien Port ab 8000.
 
-📦 Installation
+```
+webapp   →  Gunicorn: 127.0.0.1:8000  →  nginx (server_name: webapp.example.com)
+shopapp  →  Gunicorn: 127.0.0.1:8001  →  nginx (server_name: shop.example.com)
+intranet →  Gunicorn: 127.0.0.1:8002  →  nginx (server_name: intern.example.com)
+```
 
-chmod +x install.sh
-sudo ./install.sh
+**PostgreSQL**: Ein einziger PostgreSQL-Server (Port 5432) reicht für alle Projekte — nur DB-Name und DB-User müssen pro Projekt unterschiedlich sein.
 
-Das Skript fragt u. a. ab:
-	•	Projektname → /srv/<projekt>
-	•	DEV oder PROD
-	•	ALLOWED_HOSTS
-	•	Linux-App-User
-	•	PostgreSQL DB-Name
-	•	PostgreSQL DB-User
-	•	PostgreSQL Passwort
-	•	lokale oder Remote-DB
-	•	Django SECRET_KEY
+---
 
-⸻
+## Zoraxy Reverse Proxy
 
-🔧 DEV / PROD Modus
+Zoraxy läuft auf einem **anderen Server** und terminiert SSL. nginx auf diesem Server hört auf Port 80 und leitet per `server_name` weiter.
 
-DEV
-	•	DEBUG=True
-	•	geeignet für LAN / Tests
+```
+Internet
+   ↓
+Zoraxy (anderer Server, SSL)
+   ↓  http://DIESE-SERVER-IP:80  +  Host-Header weiterleiten
+nginx (dieser Server, Port 80)
+   ↓  server_name-basiertes Routing
+Gunicorn  (127.0.0.1:8000 / :8001 / :8002 …)
+   ↓
+Django
+```
 
-PROD
-	•	DEBUG=False
-	•	vorbereitet für Reverse Proxy (HTTPS)
-	•	SECURE_PROXY_SSL_HEADER aktiv
+**Zoraxy-Einstellung:** `Pass Host Header` / `Preserve Host` aktivieren.
 
-Modus wird in .env gespeichert:
+---
 
-MODE=dev | prod
+## Login-Anzeige (MOTD)
 
+Beim Login wird automatisch eine Übersicht aller installierten Django-Projekte angezeigt:
 
-⸻
+```
+╔══════════════════════════════════════════════════════════════════════════╗
+║  Django Server Übersicht - mein-server.local                             ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║  PROJEKT                PORT    MODUS  DATENBANK  STATUS     BENUTZER   ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║  webapp                 8000    prod   postgresql aktiv ✅   webuser    ║
+║  shopapp                8001    prod   postgresql aktiv ✅   shopuser   ║
+╚══════════════════════════════════════════════════════════════════════════╝
 
-🌍 Hosts & CSRF (automatisch!)
+  [1] webapp
+  ┌─────────────────────────────────────────────────────────────────
+  │  👤 App-User:    webuser
+  │  📁 Pfad:        /srv/webapp
+  │  🔄 Git Pull:    su - webuser -s /bin/bash -c "cd /srv/webapp && git pull"
+  │  🚀 Update:      webapp_update.sh      (pull+migrate+static+restart)
+  │  🔁 Neustart:    systemctl restart webapp
+  │  📋 Logs live:   journalctl -u webapp -f
+  └─────────────────────────────────────────────────────────────────
+```
 
-Du gibst nur ALLOWED_HOSTS an:
+---
 
-ALLOWED_HOSTS=192.168.1.10,localhost,gps.example.com
+## Datenbanken
 
-Das Skript erzeugt automatisch:
+| Typ | Lokal installieren | Remote-Verbindung |
+|---|---|---|
+| **PostgreSQL** | ✅ | ✅ |
+| **MySQL / MariaDB** | ✅ | ✅ |
+| **SQLite** | ✅ (nur DEV) | — |
 
-CSRF_TRUSTED_ORIGINS=https://abc.example.com
+---
 
-✔ IPs & localhost werden ignoriert
-✔ nur DNS-Namen → https://…
-✔ perfekt für Reverse-Proxy-Setups
+## DEV / PROD Modus
 
-⸻
+| | DEV | PROD |
+|---|---|---|
+| `DEBUG` | `True` | `False` |
+| SSL-Proxy-Header | — | ✅ aktiv |
+| Secure Cookies | — | ✅ aktiv |
+| Geeignet für | LAN / Tests | Zoraxy / HTTPS |
 
-🌐 nginx
+---
 
-server_name wird automatisch aus ALLOWED_HOSTS gebaut:
+## Installation
 
-server_name gps.example.com 192.168.1.10 localhost;
+```bash
+chmod +x Installv2.sh
+sudo ./Installv2.sh
+```
 
-nginx kümmert sich nicht um CSRF – das ist rein Django.
+Das Skript fragt interaktiv ab:
 
-⸻
+- Projektname → `/srv/<projekt>`
+- GitHub Repository (optional, öffentlich oder privat)
+- DEV oder PROD Modus
+- Gunicorn-Port (Vorschlag: nächster freier ab 8000)
+- ALLOWED_HOSTS (automatisch vorbelegt mit Server-IPs)
+- Datenbank-Typ + Zugangsdaten
+- Linux App-User
+- Django SECRET_KEY (auto-generiert wenn leer)
+- SSH-Key Passphrase
 
-🗄️ Datenbank
+---
 
-Lokal
-	•	PostgreSQL wird installiert
-	•	DB + User werden angelegt
+## Checkpoint / Resume
 
-Remote
-	•	DB-Zugangsdaten werden abgefragt
-	•	kein lokaler PostgreSQL nötig
+Wird die Installation unterbrochen, kann sie beim nächsten Aufruf an der Stelle fortgesetzt werden, an der sie abgebrochen hat. Laufende State-Dateien liegen unter `/tmp/django_install_<projekt>.state`.
 
-Alle DB-Zugangsdaten landen nur in:
+---
 
-/srv/<projekt>/.env
+## Architektur
 
-Rechte:
+```
+/srv/<projekt>/
+├── .venv/          ← Python Virtual Environment
+├── .env            ← Secrets (chmod 600, nur App-User)
+├── manage.py
+├── <django-modul>/
+│   └── settings.py
+└── staticfiles/
 
-chmod 600 .env
-chown <appuser>:<appuser> .env
+/etc/systemd/system/<projekt>.service
+/etc/nginx/sites-available/<projekt>
+/etc/django-servers.d/<projekt>.conf   ← Registry für MOTD
+/etc/profile.d/00_django_motd.sh       ← Geteiltes MOTD-Skript
+/usr/local/bin/<projekt>_update.sh
+/usr/local/bin/<projekt>_backup.sh
+/var/log/<projekt>/
+/var/backups/<projekt>/
+```
 
+**Trennung:** Linux-User ≠ DB-User (Absicht — minimale Rechte)
 
-⸻
+---
 
-🔐 Security-Hinweise
+## Security
 
-✔ keine Secrets im Code
-✔ keine Secrets im systemd-Service
-✔ .env nur für root + App-User
-❌ .env darf niemals ins Git-Repo
+- keine Secrets im Code oder systemd-Service
+- `.env` nur für root + App-User (`chmod 600`)
+- `.env` niemals ins Git-Repo (`.gitignore` wird automatisch erstellt)
+- fail2ban optional installierbar
+- Django-Admin erreichbar unter `/djadmin/` (nicht `/admin/`)
 
-Empfohlene .gitignore:
+---
 
-.env
-.venv/
-__pycache__/
+## Was das Skript bewusst nicht macht
 
+- kein HTTPS (macht Zoraxy / dein Reverse Proxy)
+- kein Firewall-Setup
+- kein Auto-Scaling
 
-⸻
+→ Ziel: klarer, stabiler Unterbau. Kein Hosting-Framework.
 
-▶️ Superuser anlegen
+---
 
-sudo -u <appuser> /srv/<projekt>/.venv/bin/python /srv/<projekt>/manage.py createsuperuser
+## Kompatibilität
 
-Admin:
-
-http://SERVER-IP/djadmin
-
-(Extern über deinen Reverse Proxy)
-
-⸻
-
-🔄 Update-Skript (mit Logging)
-
-Bei der Installation wird automatisch erstellt:
-
-/usr/local/sbin/<projekt>_update.sh
-
-Update ausführen
-
-sudo /usr/local/sbin/<projekt>_update.sh
-
-Was macht es?
-	1.	git pull (wenn Repo vorhanden)
-	2.	pip install -r requirements.txt (optional)
-	3.	python manage.py migrate
-	4.	systemctl restart <projekt>
-	5.	Logging in /var/log/<projekt>/
-
-Logs ansehen
-
-ls -lah /var/log/<projekt>/
-tail -n 200 /var/log/<projekt>/update-*.log
-
-
-⸻
-
-🔑 GitHub SSH Setup (für private Repos)
-
-SSH-Key erzeugen (als App-User!)
-
-su - <appuser>
-ssh-keygen -t ed25519 -f ~/.ssh/github_ed25519 -C "github-$(hostname)"
-
-SSH Config
-
-nano ~/.ssh/config
-
-Host github.com
-  HostName github.com
-  User git
-  IdentityFile ~/.ssh/github_ed25519
-  IdentitiesOnly yes
-
-Test
-
-ssh -T git@github.com
-
-Repo klonen
-
-git clone git@github.com:USER/REPO.git
-
-
-⸻
-
-⚠️ Proxmox LXC Hinweis
-
-Container braucht:
-
-nesting=1
-keyctl=1
-
-
-⸻
-
-❌ Was das Skript bewusst NICHT macht
-	•	kein HTTPS (macht dein Reverse Proxy)
-	•	kein Firewall-Setup
-	•	kein Backup-System
-	•	kein Auto-Scaling
-
-➡️ Ziel: klarer, stabiler Unterbau, kein Hosting-Framework.
-
-⸻
-
-🎯 Gedacht für
-	•	interne Tools
-	•	Projekt- & Behörden-Systeme
-	•	LXC / VM / Bare-Metal
-	•	reproduzierbare Server-Setups
+- Debian 12+
+- Ubuntu 22.04+
+- Proxmox LXC (nesting=1, keyctl=1)
+- Normale VMs und Bare-Metal-Server
