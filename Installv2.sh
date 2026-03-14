@@ -2184,6 +2184,59 @@ MANAGERENV
   # Statische Dateien
   "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" collectstatic --noinput -v 0
 
+  # Manager Self-Update Script
+  cat > /usr/local/bin/djmanager_update.sh <<MGRUPDEOF
+#!/bin/bash
+set -euo pipefail
+MANAGER_DIR="${_MANAGER_DIR}"
+SCRIPT_DIR="${_SCRIPT_DIR}"
+SERVICE="djmanager"
+
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║              DjangoMultiDeploy Manager — UPDATE               ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
+
+# Git Pull des gesamten Repos
+if [ -d "\$SCRIPT_DIR/.git" ]; then
+  echo "📥 Git Pull..."
+  GITHUB_DEPLOY_KEY="/root/.ssh/djmanager_github_ed25519"
+  if [ -f "\$GITHUB_DEPLOY_KEY" ]; then
+    GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
+      git -C "\$SCRIPT_DIR" pull
+  else
+    git -C "\$SCRIPT_DIR" pull
+  fi
+else
+  echo "⏭️  Kein Git-Repository gefunden — überspringe git pull"
+fi
+
+# Python-Abhängigkeiten aktualisieren
+if [ -f "\$MANAGER_DIR/requirements.txt" ]; then
+  echo "📦 Installiere Requirements..."
+  "\$MANAGER_DIR/venv/bin/pip" install -r "\$MANAGER_DIR/requirements.txt" -q
+fi
+
+# Migrationen
+echo "📊 Führe Migrationen aus..."
+"\$MANAGER_DIR/venv/bin/python" "\$MANAGER_DIR/manage.py" migrate --run-syncdb
+
+# Statische Dateien
+echo "📦 Sammle statische Dateien..."
+"\$MANAGER_DIR/venv/bin/python" "\$MANAGER_DIR/manage.py" collectstatic --noinput -v 0
+
+# Service neu starten
+echo "🔄 Neustart Manager-Service..."
+systemctl restart "\$SERVICE"
+sleep 2
+systemctl is-active --quiet "\$SERVICE" && echo "✅ Manager läuft" || echo "❌ Manager-Start fehlgeschlagen"
+
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║                    MANAGER UPDATE DONE ✅                     ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
+MGRUPDEOF
+  chmod 755 /usr/local/bin/djmanager_update.sh
+  echo "✅ Manager-Update-Script: djmanager_update.sh"
+
   # Berechtigungen
   chown -R "$_MANAGER_USER:$_MANAGER_USER" "$_MANAGER_DIR"
   chmod 750 "$_MANAGER_DIR"
@@ -2224,6 +2277,7 @@ MANSERVEOF
   echo "🌐 Manager-URL:    http://${_MGR_IP}:${_MANAGER_PORT}/"
   echo "📊 Status:         systemctl status djmanager"
   echo "📋 Logs:           journalctl -u djmanager -f"
+  echo "🔄 Update:         djmanager_update.sh"
   echo
   echo "⚠️  Der Manager läuft als root — nur im internen Netz verwenden!"
   echo "   Für externen Zugriff: Zoraxy/nginx mit Authentifizierung vorschalten."
