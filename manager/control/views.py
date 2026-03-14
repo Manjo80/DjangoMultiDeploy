@@ -44,7 +44,6 @@ from .utils import (
 # Dashboard
 # ──────────────────────────────────────────────────────────────────────────────
 
-@login_required
 def dashboard(request):
     projects = get_all_projects()
     return render(request, 'control/dashboard.html', {'projects': projects})
