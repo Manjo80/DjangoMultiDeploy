@@ -2527,6 +2527,14 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MANAGER_PORT="${MANAGER_PORT:-8888}"
   _MANAGER_USER="${MANAGER_USER:-djmanager}"
 
+  # nginx sicherstellen (falls Manager standalone installiert wird)
+  if ! command -v nginx >/dev/null 2>&1; then
+    echo "📦 nginx nicht gefunden — wird installiert..."
+    _apt_install nginx
+  fi
+  systemctl enable nginx 2>/dev/null || true
+  systemctl start  nginx 2>/dev/null || true
+
   # Hostname für Manager-nginx-Site abfragen
   # Der Manager ist über nginx (Port 80) erreichbar UND direkt über Port 8888.
   # Port 8888 ist ab Installation via ufw geöffnet (vor der Gunicorn-Range).
@@ -2687,6 +2695,7 @@ SECRET_KEY=${_MANAGER_SECRET}
 DEBUG=False
 ALLOWED_HOSTS=${_MGR_ALLOWED_HOSTS}
 CSRF_TRUSTED_ORIGINS=${_MGR_CSRF_ORIGINS}
+USE_X_FORWARDED_HOST=True
 MANAGER_PORT=${_MANAGER_PORT}
 MANAGER_HOSTNAME=${MANAGER_HOSTNAME}
 MANAGER_EXTRA_HOSTS=${MANAGER_EXTRA_HOSTS}
@@ -2901,10 +2910,12 @@ MGNGINXEOF
   [ "$_ACTIVE_MGR_SITES" -le 1 ] && rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
   if nginx -t 2>/dev/null; then
-    systemctl reload nginx
-    echo "✅ nginx neu geladen — Manager über http://${_MGR_PRIMARY_HOST}/ erreichbar"
+    systemctl enable nginx 2>/dev/null || true
+    systemctl restart nginx
+    echo "✅ nginx gestartet — Manager über http://${_MGR_PRIMARY_HOST}/ erreichbar"
   else
     echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
+    nginx -t
   fi
 
   # Port 8888 ist ab Installation offen (ufw allow 8888/tcp).
