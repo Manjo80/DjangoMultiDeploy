@@ -111,8 +111,8 @@
           <tr><th class="text-muted">DB</th><td>{{ p.DBTYPE|default:"-" }}{% if p.DBNAME %} / {{ p.DBNAME }}{% endif %}</td></tr>
           <tr><th class="text-muted">Host</th><td class="text-truncate" style="max-width:150px">{{ p.PRIMARY_HOST|default:p.LOCAL_IP|default:"-" }}</td></tr>
           <tr><th class="text-muted">Letztes Backup</th>
-              <td class="{% if not p._last_backup %}text-warning{% endif %}">
-                {{ p._last_backup|default:"⚠️ noch keins" }}
+              <td class="{% if not p.last_backup %}text-warning{% endif %}">
+                {{ p.last_backup|default:"⚠️ noch keins" }}
               </td>
           </tr>
         </table>
