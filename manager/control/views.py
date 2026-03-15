@@ -591,21 +591,27 @@ def firewall_view(request):
 
 @login_required
 def dashboard(request):
-    all_projects = get_all_projects()
-    allowed      = _allowed_projects(request.user)
-    if allowed is not None:
-        all_projects = [p for p in all_projects if p.get('PROJECTNAME') in allowed]
-    for p in all_projects:
-        p['_last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
-    ufw          = get_ufw_status()
-    server_stats = get_server_stats()
-    role         = _get_role(request.user)
-    return render(request, 'control/dashboard.html', {
-        'projects':     all_projects,
-        'ufw':          ufw,
-        'server_stats': server_stats,
-        'role':         role,
-    })
+    import logging, traceback
+    _log = logging.getLogger(__name__)
+    try:
+        all_projects = get_all_projects()
+        allowed      = _allowed_projects(request.user)
+        if allowed is not None:
+            all_projects = [p for p in all_projects if p.get('PROJECTNAME') in allowed]
+        for p in all_projects:
+            p['_last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
+        ufw          = get_ufw_status()
+        server_stats = get_server_stats()
+        role         = _get_role(request.user)
+        return render(request, 'control/dashboard.html', {
+            'projects':     all_projects,
+            'ufw':          ufw,
+            'server_stats': server_stats,
+            'role':         role,
+        })
+    except Exception:
+        _log.error('dashboard() crashed:\n%s', traceback.format_exc())
+        raise
 
 
 # ──────────────────────────────────────────────────────────────────────────────
