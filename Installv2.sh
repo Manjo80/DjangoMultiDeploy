@@ -463,14 +463,48 @@ fi
 echo "✅ Gunicorn-Port: $GUNICORN_PORT"
 
 # -------------------------------------------------------------------
-# Hosts
+# Hosts / nginx-Name
 # -------------------------------------------------------------------
-DEFAULT_ALLOWED_HOSTS="${ALL_LOCAL_IPS},127.0.0.1,localhost,${HOSTNAME_FQDN}"
-[ "$MODE" = "prod" ] && echo "PROD: DNS-Namen eintragen (z.B. app.intern.lan)"
-_read -p "ALLOWED_HOSTS (Komma-separiert) [${DEFAULT_ALLOWED_HOSTS}]: " ALLOWED_HOSTS
-ALLOWED_HOSTS="${ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS}"
-NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ' | xargs)"
+# Netz-Domain ermitteln (z.B. "iot", "lan")
+_WEBAPP_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
+if [ -z "$_WEBAPP_DOMAIN" ] && echo "$HOSTNAME_FQDN" | grep -q '\.'; then
+  _WEBAPP_DOMAIN="${HOSTNAME_FQDN#*.}"
+fi
+_WEBAPP_SHORT="$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
+
+# Prompt 1: nginx-Hostname
+_DEFAULT_NGINX_HOST="${_WEBAPP_SHORT}"
+echo
+echo "nginx-Hostname für diese App:"
+echo "   Automatisch erkannt: IP=${LOCAL_IP}  Kurz=${_WEBAPP_SHORT}  FQDN=${HOSTNAME_FQDN}"
+if [ -n "$_WEBAPP_DOMAIN" ]; then
+  echo "   Netz-Domain: .${_WEBAPP_DOMAIN}  → Name ohne Punkt wird zu: ${_WEBAPP_SHORT}.${_WEBAPP_DOMAIN}"
+fi
+_read -p "nginx-Hostname [${_DEFAULT_NGINX_HOST}]: " NGINX_PRIMARY_HOST
+NGINX_PRIMARY_HOST="${NGINX_PRIMARY_HOST:-$_DEFAULT_NGINX_HOST}"
+# Domain-Suffix anhängen wenn kein Punkt und Domain bekannt
+if [ -n "$_WEBAPP_DOMAIN" ] && ! echo "$NGINX_PRIMARY_HOST" | grep -q '\.'; then
+  NGINX_PRIMARY_HOST="${NGINX_PRIMARY_HOST}.${_WEBAPP_DOMAIN}"
+  echo "   → Ergänzt zu: ${NGINX_PRIMARY_HOST}"
+fi
+NGINX_SERVER_NAMES="$NGINX_PRIMARY_HOST"
+# Auto: Kurzname, FQDN, IP ebenfalls in server_name
+for _n in "${_WEBAPP_SHORT}" "${HOSTNAME_FQDN}" "${LOCAL_IP}"; do
+  [ -z "$_n" ] && continue
+  echo "$NGINX_SERVER_NAMES" | grep -qF "$_n" || NGINX_SERVER_NAMES="${NGINX_SERVER_NAMES} ${_n}"
+done
 [ -z "${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
+
+# Prompt 2: Extra-Namen nur für ALLOWED_HOSTS (nicht nginx)
+echo ""
+echo "   Weitere Namen für ALLOWED_HOSTS (nicht in nginx):"
+echo "   z.B. Reverse-Proxy, Internet-Domain — komma-getrennt, leer = keiner."
+_read -p "Extra ALLOWED_HOSTS []: " EXTRA_ALLOWED_HOSTS
+EXTRA_ALLOWED_HOSTS="${EXTRA_ALLOWED_HOSTS:-}"
+
+# ALLOWED_HOSTS: nginx-Name + Extra + alle IPs + Loopback (auto, kein weiterer Prompt)
+ALLOWED_HOSTS="${NGINX_PRIMARY_HOST},${EXTRA_ALLOWED_HOSTS},${_WEBAPP_SHORT},${HOSTNAME_FQDN},${ALL_LOCAL_IPS},127.0.0.1,localhost"
+ALLOWED_HOSTS="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
 # -------------------------------------------------------------------
 # CSRF_TRUSTED_ORIGINS automatisch bauen (für alle Modi)
@@ -2508,31 +2542,54 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
     _HOSTNAME_DOMAIN="${_HOSTNAME_FQDN#*.}"
   fi
 
-  # nginx-Hostnamen vollautomatisch bestimmen — kein Prompt nötig
-  # Primärname: FQDN wenn er eine Domain enthält, sonst IP
-  if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
-    MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-${_HOSTNAME_FQDN}}"
+  # ── Prompt 1: nginx-Hostname ────────────────────────────────────────────────
+  # Default-Vorschlag: Kurzname (wird gleich mit Domain ergänzt) oder IP
+  if [ -n "$_HOSTNAME_SHORT" ]; then
+    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_SHORT}}"
   else
-    MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP}}"
+    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP}}"
   fi
-  _MGR_PRIMARY_HOST="$MANAGER_HOSTNAME"
 
   echo
-  echo "🌐 nginx-Konfiguration (automatisch):"
+  echo "🌐 nginx-Hostname für den Manager:"
+  echo "   Automatisch erkannt:"
   echo "   • IP:   ${_MGR_DEFAULT_IP}"
   [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurz: ${_HOSTNAME_SHORT}"
   [ -n "$_HOSTNAME_FQDN"  ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && \
     echo "   • FQDN: ${_HOSTNAME_FQDN}"
-  [ -n "$_HOSTNAME_DOMAIN" ] && \
-    echo "   • Netz: ${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}  (hostname -d = ${_HOSTNAME_DOMAIN})"
+  if [ -n "$_HOSTNAME_DOMAIN" ]; then
+    echo ""
+    echo "   Netz-Domain erkannt: .${_HOSTNAME_DOMAIN}  (hostname -d)"
+    echo "   → Name ohne Punkt wird automatisch zu: ${_DEFAULT_MGR_HOST}.${_HOSTNAME_DOMAIN}"
+  fi
   echo ""
-  echo "   Werden automatisch in nginx server_name + ALLOWED_HOSTS eingetragen."
+  _read -p "nginx-Hostname [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
-  # ── Einziger Prompt: Extra-Namen nur für ALLOWED_HOSTS ──────────────────────
+  # Domain-Suffix anhängen wenn kein Punkt im Namen und Domain bekannt
+  if [ -n "$_HOSTNAME_DOMAIN" ] && ! echo "$MANAGER_HOSTNAME" | grep -q '\.'; then
+    MANAGER_HOSTNAME="${MANAGER_HOSTNAME}.${_HOSTNAME_DOMAIN}"
+    echo "   → Ergänzt zu: ${MANAGER_HOSTNAME}"
+  fi
+  _MGR_PRIMARY_HOST="$MANAGER_HOSTNAME"
+
+  # DNS-Check
+  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    _RESOLVED=$(getent hosts "$_MGR_PRIMARY_HOST" 2>/dev/null | awk '{print $1}' | head -1 || true)
+    if [ -z "$_RESOLVED" ]; then
+      echo "   ⚠️  '$_MGR_PRIMARY_HOST' nicht im DNS — Eintrag später ergänzen:"
+      echo "   ${_MGR_DEFAULT_IP}  ${_MGR_PRIMARY_HOST}"
+    elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
+      echo "   ℹ️  '$_MGR_PRIMARY_HOST' → $_RESOLVED (Server-IP: ${_MGR_DEFAULT_IP})"
+    else
+      echo "   ✅ '$_MGR_PRIMARY_HOST' löst korrekt auf."
+    fi
+  fi
+
+  # ── Prompt 2: Extra-Namen nur für ALLOWED_HOSTS (nicht nginx) ───────────────
   echo ""
-  echo "   Reverse-Proxy oder Internet-Domain (optional):"
-  echo "   → geht nur in ALLOWED_HOSTS/CSRF, nicht in nginx server_name"
-  echo "   Komma-getrennt, leer = keiner."
+  echo "   Weitere Namen für ALLOWED_HOSTS (nicht in nginx):"
+  echo "   z.B. Reverse-Proxy-Hostname, Internet-Domain — komma-getrennt, leer = keiner."
   _read -p "Extra ALLOWED_HOSTS []: " MANAGER_EXTRA_HOSTS
   MANAGER_EXTRA_HOSTS="${MANAGER_EXTRA_HOSTS:-}"
 
