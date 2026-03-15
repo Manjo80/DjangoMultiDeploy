@@ -24,6 +24,7 @@ urlpatterns = [
     path('project/<str:name>/update/', views.project_update, name='project_update'),
     path('project/<str:name>/allowed-hosts/', views.project_allowed_hosts, name='project_allowed_hosts'),
     path('project/<str:name>/backup/delete/', views.backup_delete, name='backup_delete'),
+    path('project/<str:name>/upload-zip/', views.project_upload_zip, name='project_upload_zip'),
     path('project/<str:name>/stats/', views.project_stats, name='project_stats'),
     path('project/<str:name>/logs/', views.log_viewer, name='log_viewer'),
     path('project/<str:name>/remove/', views.remove_confirm, name='remove_confirm'),

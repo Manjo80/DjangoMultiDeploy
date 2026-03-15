@@ -143,6 +143,129 @@ def run_update(name):
         return False, str(e)
 
 
+def extract_project_zip(zip_path, dest_dir, skip_tops=None):
+    """
+    Extract a ZIP to dest_dir.
+    - Strips single top-level directory (GitHub-style: repo-main/)
+    - Path-traversal protected
+    - Skips entries whose top-level component is in skip_tops
+    Returns (extracted_count, skipped_count)
+    """
+    import zipfile, shutil
+    skip_tops = set(skip_tops or [])
+    real_dest = os.path.realpath(dest_dir)
+
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        names = zf.namelist()
+        # Security: reject any path with '..'
+        for n in names:
+            if '..' in n.replace('\\', '/').split('/'):
+                raise ValueError(f'Unsicherer Pfad in ZIP: {n}')
+
+        # Detect single top-level directory (GitHub zip: repo-main/...)
+        tops_with_slash = {n.split('/')[0] for n in names if '/' in n}
+        tops_all = {n.split('/')[0].rstrip('/') for n in names}
+        prefix = ''
+        if len(tops_with_slash) == 1 and tops_all == tops_with_slash:
+            prefix = list(tops_with_slash)[0] + '/'
+
+        extracted, skipped = 0, 0
+        for member in zf.infolist():
+            rel = member.filename[len(prefix):] if (prefix and member.filename.startswith(prefix)) else member.filename
+            if not rel or rel.endswith('/'):
+                continue  # skip directory entries
+            top = rel.split('/')[0]
+            if top in skip_tops:
+                skipped += 1
+                continue
+            target = os.path.join(dest_dir, rel)
+            if not os.path.realpath(os.path.dirname(target)).startswith(real_dest):
+                skipped += 1
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(member) as src, open(target, 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+            extracted += 1
+    return extracted, skipped
+
+
+def update_project_from_zip(name, uploaded_file):
+    """
+    Update an existing project by extracting an uploaded ZIP over the project directory.
+    Preserves: .env, .venv, media/, staticfiles/
+    Then runs: pip install, migrate, collectstatic, restarts service.
+    Returns (ok: bool, output: str)
+    """
+    import tempfile
+    conf = get_project(name)
+    if not conf:
+        return False, 'Projekt nicht gefunden'
+    appdir = conf.get('APPDIR', f'/srv/{name}')
+    appuser = conf.get('APPUSER', name)
+    output_lines = []
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip', prefix=f'dmd_{name}_') as tmp:
+            for chunk in uploaded_file.chunks():
+                tmp.write(chunk)
+            zip_path = tmp.name
+    except Exception as e:
+        return False, f'Fehler beim Speichern der ZIP: {e}'
+
+    try:
+        extracted, skipped = extract_project_zip(
+            zip_path, appdir, skip_tops={'.env', '.venv', 'media', 'staticfiles'}
+        )
+        output_lines.append(f'✅ {extracted} Dateien extrahiert, {skipped} geschützte Pfade übersprungen')
+
+        subprocess.run(['chown', '-R', f'{appuser}:{appuser}', appdir],
+                       check=True, capture_output=True)
+
+        venv_activate = os.path.join(appdir, '.venv', 'bin', 'activate')
+        req_file = os.path.join(appdir, 'requirements.txt')
+
+        def _run_as(cmd, timeout=300):
+            r = subprocess.run(
+                ['su', '-', appuser, '-s', '/bin/bash', '-c', cmd],
+                capture_output=True, text=True, timeout=timeout
+            )
+            return r.returncode, (r.stdout + r.stderr).strip()[-800:]
+
+        if os.path.isfile(req_file):
+            rc, out = _run_as(
+                f'source {venv_activate} && pip install --no-cache-dir --prefer-binary -r {req_file}'
+            )
+            output_lines.append(f'📦 pip install {"✅" if rc == 0 else "❌"}\n{out}')
+
+        rc, out = _run_as(
+            f'cd {appdir} && source {venv_activate} && python manage.py migrate --noinput',
+            timeout=120
+        )
+        output_lines.append(f'🔄 migrate {"✅" if rc == 0 else "❌"}\n{out}')
+
+        rc, out = _run_as(
+            f'cd {appdir} && source {venv_activate} && python manage.py collectstatic --noinput',
+            timeout=60
+        )
+        output_lines.append(f'📁 collectstatic {"✅" if rc == 0 else "⚠️"}\n{out[-200:]}')
+
+        r = subprocess.run(['systemctl', 'restart', name],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            output_lines.append('✅ Service neu gestartet')
+        else:
+            output_lines.append(f'⚠️ Service-Restart: {r.stderr.strip()}')
+
+        return True, '\n'.join(output_lines)
+    except Exception as e:
+        return False, f'Fehler: {e}'
+    finally:
+        try:
+            os.unlink(zip_path)
+        except OSError:
+            pass
+
+
 def delete_backup(project, filename):
     """
     Delete a single backup file for a project.

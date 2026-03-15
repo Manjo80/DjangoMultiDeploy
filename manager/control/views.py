@@ -39,6 +39,7 @@ from .utils import (
     get_global_deploy_key, get_allowed_hosts, get_nginx_server_names,
     update_allowed_hosts, get_ufw_status, get_server_stats, get_last_backup,
     get_nginx_stats, get_service_restarts,
+    extract_project_zip, update_project_from_zip,
 )
 
 
@@ -95,12 +96,15 @@ def install_run(request):
     """Receive install form, launch background install, redirect to progress page."""
     data = request.POST
 
+    source_type = data.get('source_type', 'github').strip()  # 'github', 'zip', 'new'
+
     # Build env-var dict for NONINTERACTIVE mode
     params = {
         'PROJECTNAME':        data.get('projectname', '').strip(),
         'APPUSER':            data.get('appuser', '').strip(),
         'MODESEL':            data.get('modesel', '1'),
-        'GITHUB_REPO_URL':    data.get('github_repo_url', '').strip(),
+        'GITHUB_REPO_URL':    data.get('github_repo_url', '').strip() if source_type == 'github' else '',
+        'SOURCE_TYPE':        source_type,
         'GUNICORN_PORT':      data.get('gunicorn_port', '').strip(),
         'GUNICORN_WORKERS':   data.get('gunicorn_workers', '').strip(),
         'ALLOWED_HOSTS':      data.get('allowed_hosts', '').strip(),
@@ -137,6 +141,23 @@ def install_run(request):
     if not project:
         return render(request, 'control/install_form.html',
                       {'error': 'Projektname darf nicht leer sein.'})
+
+    # Handle ZIP upload for SOURCE_TYPE=zip
+    if source_type == 'zip':
+        zip_file = request.FILES.get('zip_file')
+        if not zip_file:
+            return render(request, 'control/install_form.html',
+                          {'error': 'Bitte eine ZIP-Datei auswählen.'})
+        if not zip_file.name.endswith('.zip'):
+            return render(request, 'control/install_form.html',
+                          {'error': 'Nur .zip Dateien erlaubt.'})
+        upload_dir = '/tmp/dmd_uploads'
+        os.makedirs(upload_dir, exist_ok=True)
+        zip_path = os.path.join(upload_dir, f'{project}.zip')
+        with open(zip_path, 'wb') as f:
+            for chunk in zip_file.chunks():
+                f.write(chunk)
+        params['UPLOAD_ZIP_PATH'] = zip_path
 
     run_id = str(uuid.uuid4())[:8]
     log_dir = settings.INSTALL_LOG_DIR
@@ -379,6 +400,21 @@ def backup_delete(request, name):
         {'name': b['name'], 'size_mb': b['size_mb'], 'mtime': b['mtime'], 'mtime_str': b.get('mtime_str', '')}
         for b in backups
     ]})
+
+
+@admin_required
+@require_POST
+def project_upload_zip(request, name):
+    """Update an existing project by uploading a new ZIP file."""
+    zip_file = request.FILES.get('zip_file')
+    if not zip_file:
+        return JsonResponse({'ok': False, 'output': 'Keine Datei empfangen.'})
+    if not zip_file.name.endswith('.zip'):
+        return JsonResponse({'ok': False, 'output': 'Nur .zip Dateien erlaubt.'})
+    if zip_file.size > 200 * 1024 * 1024:  # 200 MB limit
+        return JsonResponse({'ok': False, 'output': 'ZIP-Datei zu groß (max 200 MB).'})
+    ok, output = update_project_from_zip(name, zip_file)
+    return JsonResponse({'ok': ok, 'output': output})
 
 
 @login_required
