@@ -2561,10 +2561,14 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   # .env für Manager
   _MANAGER_SECRET="$(openssl rand -hex 32)"
+  # ALLOWED_HOSTS: Hostname + Server-IP + Loopback — immer alles eintragen
+  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_MGR_DEFAULT_IP},127.0.0.1,localhost"
+  _MGR_CSRF_ORIGINS="http://${MANAGER_HOSTNAME},http://${_MGR_DEFAULT_IP},http://127.0.0.1,http://localhost"
   cat > "$_MANAGER_DIR/.env" <<MANAGERENV
 SECRET_KEY=${_MANAGER_SECRET}
 DEBUG=False
-ALLOWED_HOSTS=${MANAGER_HOSTNAME},127.0.0.1,localhost
+ALLOWED_HOSTS=${_MGR_ALLOWED_HOSTS}
+CSRF_TRUSTED_ORIGINS=${_MGR_CSRF_ORIGINS}
 MANAGER_PORT=${_MANAGER_PORT}
 MANAGER_HOSTNAME=${MANAGER_HOSTNAME}
 INSTALL_SCRIPT=${_SCRIPT_DIR}/Installv2.sh
@@ -2692,8 +2696,9 @@ MANSERVEOF
 
   cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
 server {
-    listen 80;
-    server_name ${_MGR_NGINX_NAMES};
+    listen 80 default_server;
+    server_name ${_MGR_NGINX_NAMES} _;
+    # default_server: fängt alle Anfragen die kein anderer Block matcht (z.B. direkt per IP)
     client_max_body_size 10M;
 
     # Security Headers
