@@ -35,9 +35,9 @@ def admin_required(view_func):
 from .utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
-    list_backups, run_update, run_backup, get_ssh_key, start_install,
+    list_backups, run_update, run_backup, delete_backup, get_ssh_key, start_install,
     get_global_deploy_key, get_allowed_hosts, get_nginx_server_names,
-    update_allowed_hosts, get_ufw_status,
+    update_allowed_hosts, get_ufw_status, get_server_stats, get_last_backup,
 )
 
 
@@ -47,8 +47,15 @@ from .utils import (
 
 def dashboard(request):
     projects = get_all_projects()
+    for p in projects:
+        p['_last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
     ufw = get_ufw_status()
-    return render(request, 'control/dashboard.html', {'projects': projects, 'ufw': ufw})
+    server_stats = get_server_stats()
+    return render(request, 'control/dashboard.html', {
+        'projects': projects,
+        'ufw': ufw,
+        'server_stats': server_stats,
+    })
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -345,13 +352,32 @@ def project_action(request, name):
 
     conf = get_project(name)
     backups = list_backups(name)
+    allowed_hosts = get_allowed_hosts(name)
+    nginx_names = get_nginx_server_names(name)
+    ufw = get_ufw_status(conf.get('GUNICORN_PORT') if conf else None)
     return render(request, 'control/project_detail.html', {
         'conf': conf,
         'name': name,
         'backups': backups,
+        'allowed_hosts': allowed_hosts,
+        'nginx_names': nginx_names,
+        'ufw': ufw,
         'message': message,
         'error': error,
     })
+
+
+@admin_required
+@require_POST
+def backup_delete(request, name):
+    """Delete a single backup file for a project."""
+    filename = request.POST.get('filename', '').strip()
+    ok, msg = delete_backup(name, filename)
+    backups = list_backups(name)
+    return JsonResponse({'ok': ok, 'message': msg, 'backups': [
+        {'name': b['name'], 'size_mb': b['size_mb'], 'mtime': b['mtime'], 'mtime_str': b.get('mtime_str', '')}
+        for b in backups
+    ]})
 
 
 # ──────────────────────────────────────────────────────────────────────────────

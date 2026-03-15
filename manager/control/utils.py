@@ -114,6 +114,7 @@ def list_backups(project):
         glob.glob(os.path.join(backup_dir, '*.tar.gz')),
         reverse=True
     )
+    import datetime
     result = []
     for f in files:
         stat = os.stat(f)
@@ -122,6 +123,7 @@ def list_backups(project):
             'name': os.path.basename(f),
             'size_mb': round(stat.st_size / 1024 / 1024, 2),
             'mtime': stat.st_mtime,
+            'mtime_str': datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%d.%m.%Y %H:%M'),
         })
     return result
 
@@ -138,6 +140,35 @@ def run_update(name):
         )
         return result.returncode == 0, (result.stdout + result.stderr)
     except Exception as e:
+        return False, str(e)
+
+
+def delete_backup(project, filename):
+    """
+    Delete a single backup file for a project.
+    Returns (ok, message). Path-traversal protected.
+    """
+    # Reject any filename with path components
+    if not filename or os.path.basename(filename) != filename or '/' in filename or '..' in filename:
+        return False, 'Ungültiger Dateiname'
+    if not filename.endswith('.tar.gz'):
+        return False, 'Nur .tar.gz Dateien können gelöscht werden'
+    backup_dir = f'/var/backups/{project}'
+    full_path = os.path.join(backup_dir, filename)
+    # Resolve and verify the path stays inside backup_dir
+    try:
+        real_path = os.path.realpath(full_path)
+        real_dir = os.path.realpath(backup_dir)
+        if not real_path.startswith(real_dir + os.sep):
+            return False, 'Zugriff verweigert'
+    except Exception as e:
+        return False, str(e)
+    if not os.path.isfile(real_path):
+        return False, f'Datei nicht gefunden: {filename}'
+    try:
+        os.remove(real_path)
+        return True, f'{filename} gelöscht'
+    except OSError as e:
         return False, str(e)
 
 
@@ -383,6 +414,57 @@ def get_ufw_status(gunicorn_port=None):
     except Exception:
         pass
     return result
+
+
+def get_server_stats():
+    """Return basic server resource stats: RAM, disk, load average."""
+    stats = {}
+    # Memory
+    try:
+        with open('/proc/meminfo') as f:
+            mem = {}
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mem[parts[0].rstrip(':')] = int(parts[1])
+        total_kb = mem.get('MemTotal', 0)
+        available_kb = mem.get('MemAvailable', 0)
+        stats['mem_total_mb'] = round(total_kb / 1024)
+        stats['mem_used_mb'] = round((total_kb - available_kb) / 1024)
+        stats['mem_percent'] = round((total_kb - available_kb) / total_kb * 100) if total_kb else 0
+    except Exception:
+        stats['mem_total_mb'] = stats['mem_used_mb'] = stats['mem_percent'] = None
+    # Disk (root filesystem)
+    try:
+        st = os.statvfs('/')
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bfree * st.f_frsize
+        used = total - free
+        stats['disk_total_gb'] = round(total / 1024 ** 3, 1)
+        stats['disk_used_gb'] = round(used / 1024 ** 3, 1)
+        stats['disk_percent'] = round(used / total * 100) if total else 0
+    except Exception:
+        stats['disk_total_gb'] = stats['disk_used_gb'] = stats['disk_percent'] = None
+    # Load average
+    try:
+        with open('/proc/loadavg') as f:
+            parts = f.read().split()
+        stats['load1'] = parts[0]
+        stats['load5'] = parts[1]
+        stats['load15'] = parts[2]
+    except Exception:
+        stats['load1'] = stats['load5'] = stats['load15'] = None
+    return stats
+
+
+def get_last_backup(project):
+    """Return mtime of most recent backup, or None."""
+    backups = list_backups(project)
+    if backups:
+        import datetime
+        ts = backups[0]['mtime']
+        return datetime.datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M')
+    return None
 
 
 def start_install(params):

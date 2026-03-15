@@ -844,13 +844,10 @@ if ! ufw status | grep -q "Status: active"; then
   ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
   echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt"
 
-  # Manager-Port 8888: nur aus privaten Netzwerken (LAN) erlauben
-  # 10.x.x.x / 172.16-31.x.x / 192.168.x.x
-  ufw allow from 10.0.0.0/8     to any port 8888 proto tcp comment 'Manager LAN (10.x)'
-  ufw allow from 172.16.0.0/12  to any port 8888 proto tcp comment 'Manager LAN (172.x)'
-  ufw allow from 192.168.0.0/16 to any port 8888 proto tcp comment 'Manager LAN (192.168)'
-  ufw deny  8888/tcp comment 'Manager (extern gesperrt)'
-  echo "  ✅ Port 8888 (Manager) nur LAN-Zugriff (192.168.x / 10.x / 172.x)"
+  # Manager-Port 8888: komplett von außen sperren
+  # Der Manager ist nur über nginx (Port 80) mit Hostnamen erreichbar
+  ufw deny 8888/tcp comment 'Manager-Port (nur via nginx Hostname)'
+  echo "  ✅ Port 8888 (Manager) extern gesperrt — Zugriff nur über nginx Hostname"
 
   # Firewall aktivieren
   ufw --force enable
@@ -1864,8 +1861,8 @@ fi
 tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.log' \\
     -czf "\$BACKUP_DIR/project_\${TIMESTAMP}.tar.gz" -C /srv "\$PROJECT" 2>/dev/null || echo "⚠️ Projekt-Backup fehlgeschlagen"
 
-# Alte Backups bereinigen (>14 Tage)
-find "\$BACKUP_DIR" -type f -mtime +14 -delete 2>/dev/null
+# Maximal 5 Backups behalten (älteste löschen)
+ls -t "\$BACKUP_DIR"/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
 
 echo "✅ Backup fertig in \$BACKUP_DIR"
 BACKUPEOF
@@ -2309,8 +2306,23 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MANAGER_PORT="${MANAGER_PORT:-8888}"
   _MANAGER_USER="${MANAGER_USER:-djmanager}"
 
+  # Hostname für Manager-nginx-Site abfragen
+  # Der Manager ist NUR über diesen Hostnamen via nginx (Port 80) erreichbar.
+  # Port 8888 ist komplett gesperrt — läuft nur intern auf 127.0.0.1:8888
+  _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
+  [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-djmanager.intern}"
+  echo
+  echo "🌐 nginx-Hostname für den Manager:"
+  echo "   Der Manager wird über nginx (Port 80) erreichbar sein."
+  echo "   Beispiele: djmanager.intern  |  manager.firma.de  |  ${_MGR_DEFAULT_IP}"
+  echo "   → Trage diesen Namen in deinem DNS oder /etc/hosts ein."
+  _read -p "Manager-Hostname [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
+
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
-  echo "🔌 Manager-Port:         $_MANAGER_PORT"
+  echo "🔌 Manager intern:       127.0.0.1:$_MANAGER_PORT (nur lokal)"
+  echo "🌐 nginx Hostname:       http://$MANAGER_HOSTNAME/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   echo
   # Manager-Dateien werden vom Installer aus dem Repo geladen
@@ -2363,8 +2375,9 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   cat > "$_MANAGER_DIR/.env" <<MANAGERENV
 SECRET_KEY=${_MANAGER_SECRET}
 DEBUG=False
-ALLOWED_HOSTS=*
+ALLOWED_HOSTS=${MANAGER_HOSTNAME},127.0.0.1,localhost
 MANAGER_PORT=${_MANAGER_PORT}
+MANAGER_HOSTNAME=${MANAGER_HOSTNAME}
 INSTALL_SCRIPT=${_SCRIPT_DIR}/Installv2.sh
 REGISTRY_DIR=/etc/django-servers.d
 MANAGERENV
@@ -2440,6 +2453,9 @@ systemctl restart "\$SERVICE"
 sleep 2
 systemctl is-active --quiet "\$SERVICE" && echo "✅ Manager läuft" || echo "❌ Manager-Start fehlgeschlagen"
 
+# nginx neu laden (statische Dateien könnten sich geändert haben)
+nginx -t 2>/dev/null && systemctl reload nginx && echo "✅ nginx neu geladen" || true
+
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║                    MANAGER UPDATE DONE ✅                     ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
@@ -2461,7 +2477,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/python ${_MANAGER_DIR}/manage.py runserver 0.0.0.0:${_MANAGER_PORT}
+ExecStart=${_MANAGER_DIR}/venv/bin/python ${_MANAGER_DIR}/manage.py runserver 127.0.0.1:${_MANAGER_PORT}
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
@@ -2472,10 +2488,60 @@ MANSERVEOF
 
   systemctl daemon-reload
   systemctl enable --now djmanager
-  echo "✅ Manager-Service gestartet"
+  echo "✅ Manager-Service gestartet (intern auf 127.0.0.1:${_MANAGER_PORT})"
 
-  # nginx Reverse Proxy für Manager (optional, eigener Port reicht auch)
-  # Manager läuft direkt auf Port 8888, kein nginx nötig
+  # nginx Reverse Proxy für Manager
+  # Manager ist NUR über diesen nginx-Vhost erreichbar — Port 8888 ist gesperrt
+  echo "🌐 Erstelle nginx-Konfiguration für Manager..."
+  cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
+server {
+    listen 80;
+    server_name ${MANAGER_HOSTNAME};
+    client_max_body_size 10M;
+
+    # Security Headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Statische Dateien des Managers
+    location /static/ {
+        alias ${_MANAGER_DIR}/staticfiles/;
+        expires 1h;
+        access_log off;
+    }
+
+    # Manager-App (Django runserver auf 127.0.0.1)
+    location / {
+        proxy_pass http://127.0.0.1:${_MANAGER_PORT};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 30s;
+        proxy_read_timeout 300s;
+    }
+}
+MGNGINXEOF
+
+  ln -sf /etc/nginx/sites-available/djmanager /etc/nginx/sites-enabled/djmanager
+  # Default-Site nur entfernen wenn noch keine anderen Sites aktiv sind
+  _ACTIVE_MGR_SITES=$(ls /etc/nginx/sites-enabled/ 2>/dev/null | grep -v "^default$" | wc -l)
+  [ "$_ACTIVE_MGR_SITES" -le 1 ] && rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+  if nginx -t 2>/dev/null; then
+    systemctl reload nginx
+    echo "✅ nginx neu geladen — Manager über http://${MANAGER_HOSTNAME}/ erreichbar"
+  else
+    echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
+  fi
+
+  # ufw: Port 8888 nach außen sperren (Manager läuft jetzt via nginx)
+  if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+    ufw deny 8888/tcp comment 'Manager-Port (nur via nginx)' 2>/dev/null || true
+    ufw reload 2>/dev/null || true
+    echo "✅ Port 8888 via ufw gesperrt"
+  fi
 
   _MGR_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
   [ -z "${_MGR_IP:-}" ] && _MGR_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -2484,16 +2550,20 @@ MANSERVEOF
   echo "╔════════════════════════════════════════════════════════════════════╗"
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
-  echo "🌐 Manager-URL:    http://${_MGR_IP}:${_MANAGER_PORT}/"
+  echo "🌐 Manager-URL:    http://${MANAGER_HOSTNAME}/"
+  echo "   (nginx auf Port 80 → intern 127.0.0.1:${_MANAGER_PORT})"
   echo "📊 Status:         systemctl status djmanager"
   echo "📋 Logs:           journalctl -u djmanager -f"
   echo "🔄 Update:         djmanager_update.sh"
   echo
-  echo "🔒 Firewall:"
-  echo "   Port ${_MANAGER_PORT} ist nur aus dem LAN erreichbar (10.x / 172.x / 192.168.x)"
-  echo "   Externer Zugriff: SSH-Tunnel empfohlen:"
-  echo "     ssh -L ${_MANAGER_PORT}:127.0.0.1:${_MANAGER_PORT} root@${_MGR_IP}"
-  echo "     → dann http://127.0.0.1:${_MANAGER_PORT}/ im Browser"
+  echo "🔒 Sicherheit:"
+  echo "   Port ${_MANAGER_PORT} ist komplett gesperrt — Zugriff NUR via nginx"
+  echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
+  echo
+  echo "📌 DNS/Hosts-Eintrag nötig:"
+  echo "   ${_MGR_IP}  ${MANAGER_HOSTNAME}"
+  echo "   → Windows: C:\\Windows\\System32\\drivers\\etc\\hosts"
+  echo "   → Linux/Mac: /etc/hosts   oder DNS-Server konfigurieren"
   echo "════════════════════════════════════════════════════════════════════"
 fi  # end INSTALL_MANAGER
 

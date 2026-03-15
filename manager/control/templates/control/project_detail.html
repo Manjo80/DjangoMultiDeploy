@@ -149,7 +149,7 @@
           <span class="badge bg-success font-monospace">80 HTTP ✅</span>
           <span class="badge bg-success font-monospace">443 HTTPS ✅</span>
           <span class="badge bg-danger font-monospace">{{ conf.GUNICORN_PORT }} Gunicorn 🔒</span>
-          <span class="badge bg-warning text-dark font-monospace">8888 Manager LAN only</span>
+          <span class="badge bg-danger font-monospace">8888 Manager 🔒 (via nginx)</span>
         </div>
         {% endif %}
       </div>
@@ -200,29 +200,44 @@
   </div>
 
   <!-- Backups list -->
-  {% if backups %}
   <div class="col-12">
     <div class="card">
-      <div class="card-header">Vorhandene Backups</div>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-archive me-1"></i> Backups
+          {% if backups %}<span class="badge bg-secondary ms-1">{{ backups|length }}/5</span>{% endif %}
+        </span>
+        <div id="backup-msg" class="alert alert-sm py-1 px-2 mb-0 d-none" style="font-size:.85rem"></div>
+      </div>
+      {% if backups %}
       <div class="card-body p-0">
-        <table class="table table-sm table-dark mb-0">
+        <table id="backup-table" class="table table-sm table-dark mb-0">
           <thead>
-            <tr><th>Datei</th><th>Größe</th><th>Datum</th></tr>
+            <tr><th>Datei</th><th>Größe</th><th>Datum</th>{% if request.user.is_staff %}<th></th>{% endif %}</tr>
           </thead>
           <tbody>
             {% for b in backups %}
-            <tr>
-              <td class="font-monospace">{{ b.name }}</td>
-              <td>{{ b.size_mb }} MB</td>
-              <td>{{ b.mtime|stringformat:".0f" }}</td>
+            <tr id="backup-row-{{ forloop.counter }}">
+              <td class="font-monospace small">{{ b.name }}</td>
+              <td class="text-nowrap">{{ b.size_mb }} MB</td>
+              <td class="text-nowrap text-muted small">{{ b.mtime_str }}</td>
+              {% if request.user.is_staff %}
+              <td class="text-end pe-2">
+                <button class="btn btn-sm btn-outline-danger py-0 px-1"
+                        onclick="deleteBackup('{{ b.name }}', this)" title="Löschen">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </td>
+              {% endif %}
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+      {% else %}
+      <div class="card-body text-muted small">Noch keine Backups vorhanden.</div>
+      {% endif %}
     </div>
   </div>
-  {% endif %}
 
 </div>
 {% endblock %}
@@ -230,6 +245,66 @@
 {% block extra_js %}
 {% if request.user.is_staff %}
 <script>
+// ── Backup delete ──────────────────────────────────────────────────────────
+const backupDeleteUrl = "{% url 'backup_delete' name %}";
+
+function showBackupMsg(msg, ok) {
+  const el = document.getElementById('backup-msg');
+  el.className = `alert py-1 px-2 mb-0 ${ok ? 'alert-success' : 'alert-danger'}`;
+  el.style.fontSize = '.85rem';
+  el.textContent = msg;
+  el.classList.remove('d-none');
+  setTimeout(() => el.classList.add('d-none'), 4000);
+}
+
+async function deleteBackup(filename, btn) {
+  if (!confirm(`Backup "${filename}" wirklich löschen?`)) return;
+  btn.disabled = true;
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('filename', filename);
+  try {
+    const r = await fetch(backupDeleteUrl, {method: 'POST', body: fd});
+    const data = await r.json();
+    if (data.ok) {
+      renderBackups(data.backups);
+      showBackupMsg('✅ ' + data.message, true);
+    } else {
+      btn.disabled = false;
+      showBackupMsg('❌ ' + data.message, false);
+    }
+  } catch(e) {
+    btn.disabled = false;
+    showBackupMsg('❌ Verbindungsfehler', false);
+  }
+}
+
+function renderBackups(backups) {
+  const tbody = document.querySelector('#backup-table tbody');
+  if (!tbody) return;
+  if (!backups.length) {
+    document.getElementById('backup-table').closest('.card-body').innerHTML =
+      '<div class="card-body text-muted small">Noch keine Backups vorhanden.</div>';
+    return;
+  }
+  tbody.innerHTML = backups.map((b, i) => `
+    <tr>
+      <td class="font-monospace small">${b.name}</td>
+      <td class="text-nowrap">${b.size_mb} MB</td>
+      <td class="text-nowrap text-muted small">${b.mtime_str || ''}</td>
+      <td class="text-end pe-2">
+        <button class="btn btn-sm btn-outline-danger py-0 px-1"
+                onclick="deleteBackup('${b.name}', this)" title="Löschen">
+          <i class="bi bi-trash"></i>
+        </button>
+      </td>
+    </tr>`).join('');
+  // Update counter badge
+  const badge = document.querySelector('.card-header .badge.bg-secondary');
+  if (badge) badge.textContent = `${backups.length}/5`;
+}
+
+// ── ALLOWED_HOSTS ──────────────────────────────────────────────────────────
 const hostsUrl = "{% url 'project_allowed_hosts' name %}";
 const csrfToken = "{{ csrf_token }}";
 
