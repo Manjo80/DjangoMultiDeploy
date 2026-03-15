@@ -2499,10 +2499,16 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
-  # Hostnamen automatisch erkennen (kurz + FQDN)
+  # Hostnamen automatisch erkennen (kurz + FQDN + Netz-Domain)
   _HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null | cut -d. -f1 || echo '')"
   _HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo '')"
+  _HOSTNAME_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
+  # Domain-Fallback aus FQDN
+  if [ -z "$_HOSTNAME_DOMAIN" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
+    _HOSTNAME_DOMAIN="${_HOSTNAME_FQDN#*.}"
+  fi
 
+  # ── Prompt 1: nginx-Hostname ────────────────────────────────────────────────
   # Default: FQDN wenn er eine Domain enthält, sonst IP
   if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
     _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_FQDN}}"
@@ -2511,42 +2517,48 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   fi
 
   echo
-  echo "🌐 nginx-Hostname / IP für den Manager:"
-  echo "   Automatisch erkannte Hostnamen dieses Servers:"
-  echo "   • IP:     ${_MGR_DEFAULT_IP}"
-  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurz:   ${_HOSTNAME_SHORT}"
+  echo "🌐 nginx-Hostname für den Manager:"
+  echo "   Automatisch erkannt:"
+  echo "   • IP:   ${_MGR_DEFAULT_IP}"
+  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurz: ${_HOSTNAME_SHORT}"
   [ -n "$_HOSTNAME_FQDN"  ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && \
-    echo "   • FQDN:   ${_HOSTNAME_FQDN}"
+    echo "   • FQDN: ${_HOSTNAME_FQDN}"
   echo ""
-  echo "   Diese Namen werden automatisch in nginx + ALLOWED_HOSTS eingetragen."
-  echo ""
-  echo "   Hier zusätzliche Namen angeben falls nötig, z.B.:"
-  echo "   • Netz-Domain-Suffix  → ${_HOSTNAME_SHORT}.iot  (wenn 'hostname -d' z.B. 'iot' liefert)"
-  echo "   • Reverse-Proxy-Name  → manager.example.com"
-  echo "   Für rein lokalen Betrieb: einfach Enter drücken."
-  _read -p "Zusätzlicher Hostname / Reverse-Proxy-Name [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  if [ -n "$_HOSTNAME_DOMAIN" ]; then
+    echo "   Netz-Domain erkannt: .${_HOSTNAME_DOMAIN}  (aus hostname -d)"
+    echo "   → Kurzname ohne Punkt wird automatisch zu: ${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}"
+  fi
+  echo "   Für rein lokalen Betrieb (nur IP/FQDN): Enter drücken."
+  _read -p "nginx-Hostname [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
-  # Primären Namen extrahieren (erster Eintrag) — für DNS-Check und Anzeige
-  _MGR_PRIMARY_HOST="$(echo "$MANAGER_HOSTNAME" | cut -d, -f1 | tr -d ' ')"
+  # Domain-Suffix automatisch anhängen wenn: kein Punkt im Namen, Domain bekannt
+  if [ -n "$_HOSTNAME_DOMAIN" ] && ! echo "$MANAGER_HOSTNAME" | grep -q '\.'; then
+    MANAGER_HOSTNAME="${MANAGER_HOSTNAME}.${_HOSTNAME_DOMAIN}"
+    echo "   → Ergänzt zu: ${MANAGER_HOSTNAME}"
+  fi
+  _MGR_PRIMARY_HOST="$MANAGER_HOSTNAME"
 
-  # DNS-Check: nur für den ersten Eintrag (und nur wenn kein Komma = mehrere Einträge)
-  if ! echo "$MANAGER_HOSTNAME" | grep -q ','; then
-    if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      _RESOLVED=$(getent hosts "$_MGR_PRIMARY_HOST" 2>/dev/null || true)
-      _RESOLVED=$(echo "$_RESOLVED" | awk '{print $1}' | head -1)
-      if [ -z "$_RESOLVED" ]; then
-        echo "⚠️  Hostname '$_MGR_PRIMARY_HOST' ist aktuell nicht im DNS auflösbar."
-        echo "   Die IP-Adresse ${_MGR_DEFAULT_IP} wird als zusätzlicher server_name eingetragen,"
-        echo "   damit der Manager auch direkt über die IP erreichbar ist."
-        echo "   DNS-/Hosts-Eintrag später ergänzen: ${_MGR_DEFAULT_IP}  ${_MGR_PRIMARY_HOST}"
-      elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
-        echo "ℹ️  '$_MGR_PRIMARY_HOST' löst zu $_RESOLVED auf (Server-IP: ${_MGR_DEFAULT_IP})."
-      else
-        echo "✅ Hostname '$_MGR_PRIMARY_HOST' löst korrekt zu ${_MGR_DEFAULT_IP} auf."
-      fi
+  # DNS-Check
+  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    _RESOLVED=$(getent hosts "$_MGR_PRIMARY_HOST" 2>/dev/null | awk '{print $1}' | head -1 || true)
+    if [ -z "$_RESOLVED" ]; then
+      echo "⚠️  Hostname '$_MGR_PRIMARY_HOST' ist aktuell nicht im DNS auflösbar."
+      echo "   DNS-/Hosts-Eintrag später ergänzen: ${_MGR_DEFAULT_IP}  ${_MGR_PRIMARY_HOST}"
+    elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
+      echo "ℹ️  '$_MGR_PRIMARY_HOST' löst zu $_RESOLVED auf (Server-IP: ${_MGR_DEFAULT_IP})."
+    else
+      echo "✅ '$_MGR_PRIMARY_HOST' löst korrekt zu ${_MGR_DEFAULT_IP} auf."
     fi
   fi
+
+  # ── Prompt 2: Nur-ALLOWED_HOSTS-Namen (nicht in nginx) ─────────────────────
+  echo ""
+  echo "   Weitere Namen nur für ALLOWED_HOSTS (nicht in nginx server_name):"
+  echo "   z.B. Reverse-Proxy-Hostname, Internet-Domain"
+  echo "   Komma-getrennt, leer = keiner."
+  _read -p "Weitere ALLOWED_HOSTS-Namen []: " MANAGER_EXTRA_HOSTS
+  MANAGER_EXTRA_HOSTS="${MANAGER_EXTRA_HOSTS:-}"
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
   echo "🔌 Manager-Port:         0.0.0.0:$_MANAGER_PORT (direkt erreichbar)"
@@ -2605,7 +2617,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Alle IPs aller Interfaces erfassen — verhindert "Bad Request (400)" bei
   # Zugriff über eine IP die beim Install nicht die primäre war
   _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
-  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
+  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${MANAGER_EXTRA_HOSTS},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
   # Doppelte + leere Einträge entfernen
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
@@ -2614,15 +2626,11 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # → diese URL MUSS in CSRF_TRUSTED_ORIGINS stehen, sonst 403 beim Login-POST
   # Hilfsfunktion: host → "http://host,http://host:PORT"
   _csrf_pair() { echo "http://${1},http://${1}:${_MANAGER_PORT}"; }
-  # Alle eingegebenen Hostnamen (Komma-getrennt) in CSRF aufnehmen
-  _MGR_CSRF_ORIGINS=""
-  for _mh in $(echo "$MANAGER_HOSTNAME" | tr ',' ' '); do
+  # MANAGER_HOSTNAME + MANAGER_EXTRA_HOSTS in CSRF aufnehmen
+  _MGR_CSRF_ORIGINS="$(_csrf_pair "$MANAGER_HOSTNAME")"
+  for _mh in $(echo "$MANAGER_EXTRA_HOSTS" | tr ',' ' '); do
     [ -z "$_mh" ] && continue
-    if [ -z "$_MGR_CSRF_ORIGINS" ]; then
-      _MGR_CSRF_ORIGINS="$(_csrf_pair "$_mh")"
-    else
-      _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_mh")"
-    fi
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_mh")"
   done
   # Alle erkannten Hostnamen (kurz, FQDN) mit und ohne Port
   for _h in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}" "127.0.0.1" "localhost"; do
@@ -2643,6 +2651,7 @@ ALLOWED_HOSTS=${_MGR_ALLOWED_HOSTS}
 CSRF_TRUSTED_ORIGINS=${_MGR_CSRF_ORIGINS}
 MANAGER_PORT=${_MANAGER_PORT}
 MANAGER_HOSTNAME=${MANAGER_HOSTNAME}
+MANAGER_EXTRA_HOSTS=${MANAGER_EXTRA_HOSTS}
 INSTALL_SCRIPT=${_SCRIPT_DIR}/Installv2.sh
 REGISTRY_DIR=/etc/django-servers.d
 MANAGERENV
@@ -2801,10 +2810,9 @@ MANSERVEOF
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 
-  # server_name: alle Hostnamen + IP + .iot-Variante + catch-all (_)
-  # Damit ist der Manager per IP, Kurzname und FQDN erreichbar
-  # nginx server_name: Komma-getrennte Eingabe → leerzeichen-getrennt
-  _MGR_NGINX_NAMES="$(echo "$MANAGER_HOSTNAME" | tr ',' ' ')"
+  # nginx server_name: nur MANAGER_HOSTNAME + auto-erkannte lokale Namen
+  # MANAGER_EXTRA_HOSTS kommt bewusst NICHT rein (nur ALLOWED_HOSTS/CSRF)
+  _MGR_NGINX_NAMES="$MANAGER_HOSTNAME"
   for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}"; do
     [ -z "$_n" ] && continue
     # Nur hinzufügen wenn noch nicht enthalten
