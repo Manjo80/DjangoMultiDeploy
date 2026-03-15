@@ -2499,13 +2499,26 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
-  # Alle Hostname-Varianten erkennen (kurz, FQDN, .iot-Suffix für mDNS/lokales DNS)
+  # ── Hostname-Varianten automatisch erkennen ─────────────────────────────────
   _HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null | cut -d. -f1 || echo '')"
   _HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo '')"
-  # .iot-Variante: manche lokalen Netzwerke verwenden dieses Suffix (mDNS/Avahi/lokaler DNS)
-  _HOSTNAME_IOT="${_HOSTNAME_SHORT}.iot"
 
-  # Default für Manager-Hostname: FQDN bevorzugen falls er aussagekräftig ist
+  # Netzwerk-Domain aus hostname -d, Fallback: Domain-Teil des FQDN
+  _HOSTNAME_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
+  if [ -z "$_HOSTNAME_DOMAIN" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
+    _HOSTNAME_DOMAIN="${_HOSTNAME_FQDN#*.}"   # alles nach dem ersten Punkt
+  fi
+
+  # Kombination kurz+domain nur wenn sie nicht schon gleich dem FQDN ist
+  if [ -n "$_HOSTNAME_DOMAIN" ] && [ "${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}" != "$_HOSTNAME_FQDN" ]; then
+    _HOSTNAME_WITH_DOMAIN="${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}"
+  else
+    _HOSTNAME_WITH_DOMAIN=""   # bereits via FQDN abgedeckt
+  fi
+  # Alias: für den Rest des Skripts weiter als _HOSTNAME_IOT nutzbar
+  _HOSTNAME_IOT="$_HOSTNAME_WITH_DOMAIN"
+
+  # Default für Manager-Hostname: FQDN bevorzugen falls er eine Domain enthält
   if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
     _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_FQDN}}"
   else
@@ -2516,14 +2529,23 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   echo "🌐 nginx-Hostname / IP für den Manager:"
   echo "   Der Manager wird über nginx (Port 80) erreichbar sein."
   echo ""
-  echo "   Erkannte Hostnamen dieses Servers:"
+  echo "   Automatisch erkannte Hostnamen dieses Servers:"
   echo "   • IP-Adresse: ${_MGR_DEFAULT_IP}"
-  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurzname:   ${_HOSTNAME_SHORT}"
-  [ -n "$_HOSTNAME_FQDN"  ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "   • FQDN:       ${_HOSTNAME_FQDN}"
-  echo "   • .iot-Name:  ${_HOSTNAME_IOT}  (wird automatisch mit eingetragen)"
+  [ -n "$_HOSTNAME_SHORT"  ] && echo "   • Kurzname:   ${_HOSTNAME_SHORT}"
+  if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ]; then
+    echo "   • FQDN:       ${_HOSTNAME_FQDN}"
+    [ -n "$_HOSTNAME_DOMAIN" ] && echo "   • Netz-Domain: .${_HOSTNAME_DOMAIN}  (aus hostname -d)"
+  fi
   echo ""
-  echo "   Tipp: Einfach Enter drücken für den vorgeschlagenen Wert."
-  _read -p "Primärer Manager-Hostname oder IP [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  echo "   Alle erkannten Namen werden automatisch in nginx + ALLOWED_HOSTS eingetragen."
+  echo ""
+  echo "   ┌─ Internet-Hostname (optional) ──────────────────────────────────────┐"
+  echo "   │ Falls der Manager über das Internet erreichbar sein soll,           │"
+  echo "   │ gib hier deinen öffentlichen DNS-Namen ein (z.B. manager.example.com)│"
+  echo "   │ Für rein lokalen Betrieb: leer lassen / Enter drücken.              │"
+  echo "   └─────────────────────────────────────────────────────────────────────┘"
+  echo "   Tipp: Lokaler Zugriff → einfach Enter drücken (${_DEFAULT_MGR_HOST})"
+  _read -p "Primärer Hostname / Internet-Domain [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
   # DNS-Check: Hostname prüfen und ggf. warnen
@@ -2696,10 +2718,20 @@ if [ -f "\$_ENV_FILE" ]; then
   _CUR_CSRF="\$(grep '^CSRF_TRUSTED_ORIGINS=' "\$_ENV_FILE" | cut -d= -f2-)"
   _MGR_PORT_UP="\$(grep '^MANAGER_PORT=' "\$_ENV_FILE" | cut -d= -f2- | tr -d '\"')"
   _MGR_PORT_UP="\${_MGR_PORT_UP:-8888}"
-  # Alle aktuellen Hostnamen des Servers ermitteln
+  # Alle aktuellen Hostnamen des Servers ermitteln (automatisch, kein hardcoded Suffix)
   _UPD_SHORT="\$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
   _UPD_FQDN="\$(hostname -f 2>/dev/null || echo '')"
-  _UPD_IOT="\${_UPD_SHORT}.iot"
+  _UPD_DOMAIN="\$(hostname -d 2>/dev/null || echo '')"
+  # Domain-Fallback aus FQDN extrahieren
+  if [ -z "\$_UPD_DOMAIN" ] && echo "\$_UPD_FQDN" | grep -q '\.'; then
+    _UPD_DOMAIN="\${_UPD_FQDN#*.}"
+  fi
+  # Kurzname+Domain nur wenn nicht schon gleich dem FQDN
+  if [ -n "\$_UPD_DOMAIN" ] && [ "\${_UPD_SHORT}.\${_UPD_DOMAIN}" != "\$_UPD_FQDN" ]; then
+    _UPD_IOT="\${_UPD_SHORT}.\${_UPD_DOMAIN}"
+  else
+    _UPD_IOT=""
+  fi
   _ALL_IPS="\$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^\$|^::' | paste -sd, -)"
   _NEEDS_FIX=0
   # Prüfen ob Port-Variante und .iot bereits vorhanden
