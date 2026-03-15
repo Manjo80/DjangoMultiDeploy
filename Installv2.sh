@@ -2650,6 +2650,11 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Alle IPs aller Interfaces erfassen — verhindert "Bad Request (400)" bei
   # Zugriff über eine IP die beim Install nicht die primäre war
   _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
+  if [ -n "$_HOSTNAME_DOMAIN" ] && [ -n "$_HOSTNAME_SHORT" ]; then
+    _HOSTNAME_WITH_DOMAIN="${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}"
+  else
+    _HOSTNAME_WITH_DOMAIN=""
+  fi
   _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${MANAGER_EXTRA_HOSTS},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_HOSTNAME_WITH_DOMAIN},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
   # Doppelte + leere Einträge entfernen
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
