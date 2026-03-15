@@ -5,7 +5,7 @@ set -euo pipefail
 # DjangoMultiDeploy - Multi-Server Django Installer
 # Mehrere Django-Projekte auf einem Server, jedes mit eigenem Port,
 # Gunicorn, nginx, systemd, PostgreSQL/MySQL/SQLite, Backup & MOTD
-# Zoraxy Reverse Proxy ready | LXC/Container ready
+# Reverse Proxy ready | LXC/Container ready
 # Version: 3.0
 # ===================================================================
 
@@ -1762,7 +1762,7 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none';" always;
-    # HSTS: wird vom Zoraxy/Reverse-Proxy weitergeleitet an den Browser
+    # HSTS: wird vom Reverse-Proxy weitergeleitet an den Browser
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
     # Bekannte Angriffspfade direkt blockieren (404 statt proxying)
@@ -1832,15 +1832,14 @@ systemctl restart nginx
 
 mark_done "nginx_done"
 
-# Zoraxy Konfiguration direkt anzeigen
-_ZORAXY_HOST=$(echo "${ALLOWED_HOSTS:-$LOCAL_IP}" | cut -d, -f1 | tr -d ' ')
+_RP_HOST=$(echo "${ALLOWED_HOSTS:-$LOCAL_IP}" | cut -d, -f1 | tr -d ' ')
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔀 Zoraxy Reverse Proxy — so eintragen:"
+echo "🔀 Reverse Proxy Konfiguration (optional):"
 echo
-echo "   Zoraxy → Proxy Rules → New Proxy Rule:"
+echo "   Reverse Proxy → Neuer Proxy-Eintrag:"
 echo "   ┌──────────────────────────────────────────────────────────────┐"
-echo "   │  Matching Domain:  ${_ZORAXY_HOST}"
+echo "   │  Matching Domain:  ${_RP_HOST}"
 echo "   │  Target:           http://${LOCAL_IP}:80"
 echo "   │  ✅ Pass / Preserve Host Header aktivieren"
 echo "   └──────────────────────────────────────────────────────────────┘"
@@ -1858,7 +1857,7 @@ fi  # end nginx_done
 if ! is_done "registry_done"; then
   mkdir -p /etc/django-servers.d
   chmod 755 /etc/django-servers.d
-  # Ersten ALLOWED_HOST als Primary-Domain ermitteln (für Zoraxy-Anzeige)
+  # Ersten ALLOWED_HOST als Primary-Domain ermitteln
   _PRIMARY_HOST=$(echo "${ALLOWED_HOSTS:-$LOCAL_IP}" | cut -d, -f1 | tr -d ' ')
   cat > /etc/django-servers.d/${PROJECTNAME}.conf <<REGEOF
 PROJECTNAME="${PROJECTNAME}"
@@ -2373,9 +2372,9 @@ for _conf in "$CONF_DIR"/*.conf; do
   _idx=$(( _idx + 1 ))
 done
 
-echo "  🔀 Zoraxy Reverse Proxy Konfiguration:"
+echo "  🔀 Reverse Proxy Konfiguration (optional):"
 echo "     nginx auf diesem Server hört auf Port 80, leitet per server_name."
-echo "     In Zoraxy (anderer Server) je Domain einen Eintrag anlegen:"
+echo "     Im Reverse Proxy je Domain einen Eintrag anlegen:"
 for _conf in "$CONF_DIR"/*.conf; do
   [ -f "$_conf" ] || continue
   _LIP=$(grep '^LOCAL_IP=' "$_conf" | cut -d= -f2 | tr -d '"')
@@ -2383,7 +2382,7 @@ for _conf in "$CONF_DIR"/*.conf; do
   _PROJ=$(grep '^PROJECTNAME=' "$_conf" | cut -d= -f2 | tr -d '"')
   printf "     %-32s →  http://%s:80\n" "${_PHOST:-$_PROJ}" "${_LIP:-$_IP}"
 done
-echo "     ⚠️  'Pass Host Header' / 'Preserve Host' in Zoraxy aktivieren!"
+echo "     ⚠️  'Pass Host Header' / 'Preserve Host' im Reverse Proxy aktivieren!"
 echo "  ════════════════════════════════════════════════════════════════════"
 echo
 MOTDEOF
@@ -2433,10 +2432,10 @@ echo
 echo "🌐 Django Admin: http://${LOCAL_IP}/djadmin/"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔀 Zoraxy Reverse Proxy Konfiguration:"
-echo "   Datenfluss:  Internet → Zoraxy (SSL) → nginx:80 → gunicorn:${GUNICORN_PORT}"
+echo "🔀 Reverse Proxy Konfiguration (optional):"
+echo "   Datenfluss:  Internet → Reverse Proxy (SSL) → nginx:80 → gunicorn:${GUNICORN_PORT}"
 echo
-echo "   In Zoraxy einen neuen Proxy-Eintrag anlegen:"
+echo "   Im Reverse Proxy einen neuen Proxy-Eintrag anlegen:"
 echo "   ┌─────────────────────────────────────────────────────────────┐"
 echo "   │  Incoming:  <your-domain.example.com>                      │"
 echo "   │  Target:    http://${LOCAL_IP}:80                          │"
@@ -2480,21 +2479,34 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   # Default: IP-Adresse des Servers — funktioniert immer ohne DNS-Eintrag
-  _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP:-djmanager.intern}}"
+  _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP}}"
   echo
   echo "🌐 nginx-Hostname / IP für den Manager:"
   echo "   Der Manager wird über nginx (Port 80) erreichbar sein."
   echo ""
   echo "   Optionen (was soll in der Adressleiste stehen?):"
   echo "   • IP-Adresse:    ${_MGR_DEFAULT_IP}  ← empfohlen, kein DNS nötig"
-  echo "   • Lokaler Name:  webserver.intern, proxmox.home, ..."
-  echo "     (muss im DNS-Server oder /etc/hosts eintragen sein)"
-  echo "   • Dein UniFi-DNS: Unter UniFi → Network → System → DNS"
-  echo "     kann ein eigener Hostname wie 'manager.home.arpa' vergeben werden."
+  echo "   • Lokaler Name:  z.B. 'django-manager' oder 'deploy.local'"
+  echo "     (muss im DNS-Server oder /etc/hosts eingetragen sein)"
   echo ""
   echo "   Tipp: Einfach Enter drücken um die IP-Adresse (${_MGR_DEFAULT_IP}) zu verwenden."
   _read -p "Manager-Hostname oder IP [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
+
+  # DNS-Check: Hostname prüfen und ggf. warnen
+  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    _RESOLVED=$(getent hosts "$MANAGER_HOSTNAME" 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -z "$_RESOLVED" ]; then
+      echo "⚠️  Hostname '$MANAGER_HOSTNAME' ist aktuell nicht im DNS auflösbar."
+      echo "   Die IP-Adresse ${_MGR_DEFAULT_IP} wird als zusätzlicher server_name eingetragen,"
+      echo "   damit der Manager auch direkt über die IP erreichbar ist."
+      echo "   DNS-/Hosts-Eintrag später ergänzen: ${_MGR_DEFAULT_IP}  ${MANAGER_HOSTNAME}"
+    elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
+      echo "ℹ️  '$MANAGER_HOSTNAME' löst zu $_RESOLVED auf (Server-IP: ${_MGR_DEFAULT_IP})."
+    else
+      echo "✅ Hostname '$MANAGER_HOSTNAME' löst korrekt zu ${_MGR_DEFAULT_IP} auf."
+    fi
+  fi
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
   echo "🔌 Manager intern:       127.0.0.1:$_MANAGER_PORT (nur lokal)"
@@ -2671,10 +2683,16 @@ MANSERVEOF
   # Manager ist NUR über diesen nginx-Vhost erreichbar — Port 8888 ist gesperrt
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+  # server_name: Hostname + IP — damit Zugriff per IP immer funktioniert
+  _MGR_NGINX_NAMES="${MANAGER_HOSTNAME}"
+  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -n "${_MGR_DEFAULT_IP:-}" ]; then
+    _MGR_NGINX_NAMES="${MANAGER_HOSTNAME} ${_MGR_DEFAULT_IP}"
+  fi
+
   cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
 server {
     listen 80;
-    server_name ${MANAGER_HOSTNAME};
+    server_name ${_MGR_NGINX_NAMES};
     client_max_body_size 10M;
 
     # Security Headers
@@ -2728,7 +2746,10 @@ MGNGINXEOF
   echo "╔════════════════════════════════════════════════════════════════════╗"
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
-  echo "🌐 Manager-URL:    http://${MANAGER_HOSTNAME}/"
+  echo "🌐 Manager-URL:    http://${_MGR_IP}/"
+  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "               oder http://${MANAGER_HOSTNAME}/ (wenn DNS eingetragen)"
+  fi
   echo "   (nginx auf Port 80 → intern 127.0.0.1:${_MANAGER_PORT})"
   echo "📊 Status:         systemctl status djmanager"
   echo "📋 Logs:           journalctl -u djmanager -f"
@@ -2737,11 +2758,14 @@ MGNGINXEOF
   echo "🔒 Sicherheit:"
   echo "   Port ${_MANAGER_PORT} ist komplett gesperrt — Zugriff NUR via nginx"
   echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
-  echo
-  echo "📌 DNS/Hosts-Eintrag nötig:"
-  echo "   ${_MGR_IP}  ${MANAGER_HOSTNAME}"
-  echo "   → Windows: C:\\Windows\\System32\\drivers\\etc\\hosts"
-  echo "   → Linux/Mac: /etc/hosts   oder DNS-Server konfigurieren"
+  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo
+    echo "📌 Optionaler DNS/Hosts-Eintrag für Hostnamen-Zugriff:"
+    echo "   ${_MGR_IP}  ${MANAGER_HOSTNAME}"
+    echo "   → Windows: C:\\Windows\\System32\\drivers\\etc\\hosts"
+    echo "   → Linux/Mac: /etc/hosts   oder DNS-Server konfigurieren"
+    echo "   (Zugriff per IP funktioniert ohne DNS-Eintrag)"
+  fi
   echo "════════════════════════════════════════════════════════════════════"
 fi  # end INSTALL_MANAGER
 
