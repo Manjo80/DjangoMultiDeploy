@@ -105,3 +105,47 @@ REGISTRY_DIR   = os.getenv('REGISTRY_DIR',   '/etc/django-servers.d')
 INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', '/tmp/djmanager_logs')
 
 os.makedirs(INSTALL_LOG_DIR, exist_ok=True)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+_LOG_DIR = '/var/log/djmanager'
+os.makedirs(_LOG_DIR, exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(_LOG_DIR, 'error.log'),
+            'formatter': 'verbose',
+            'level': 'WARNING',
+        },
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+            'level': 'DEBUG',
+        },
+    },
+    'root': {
+        'handlers': ['file', 'console'],
+        'level': 'WARNING',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['file', 'console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['file', 'console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}

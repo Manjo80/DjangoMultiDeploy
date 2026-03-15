@@ -2839,7 +2839,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind 0.0.0.0:${_MANAGER_PORT} --workers 2 --timeout 120
+ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind 0.0.0.0:${_MANAGER_PORT} --workers 1 --timeout 120
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
