@@ -137,12 +137,18 @@ def install_run(request):
     env.update(params)
     env['NONINTERACTIVE'] = 'true'
 
+    # setsid: startet den Installer in einer neuen Prozessgruppe.
+    # Wenn Django/Manager wegen OOM gekillt wird, läuft die Installation weiter.
+    # start_new_session=True ersetzt das externe setsid-Kommando (Python 3.2+)
+    os.makedirs(log_dir, exist_ok=True)
     with open(log_path, 'w') as log_f:
         subprocess.Popen(
             ['bash', settings.INSTALL_SCRIPT],
             env=env,
             stdout=log_f,
             stderr=subprocess.STDOUT,
+            start_new_session=True,   # = setsid: eigene Prozessgruppe / Session
+            close_fds=True,
         )
 
     return redirect('install_progress', project=project, run_id=run_id)

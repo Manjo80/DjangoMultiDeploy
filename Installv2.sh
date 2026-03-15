@@ -18,6 +18,10 @@ NONINTERACTIVE="${NONINTERACTIVE:-false}"
 # _read: überspringt read-Prompts wenn NONINTERACTIVE=true
 _read() { [ "$NONINTERACTIVE" = "true" ] && return 0; read "$@"; }
 
+# DEBIAN_FRONTEND=noninteractive: verhindert interaktive dpkg-Dialoge
+# und stoppt ldconfig/systemd-reload von unnötigen Prozess-Forks beim apt install
+export DEBIAN_FRONTEND=noninteractive
+
 # ionice + nice für apt (reduziert I/O-Last auf LXC overlayfs)
 # Wird hier initialisiert damit Manager-only-Installation ebenfalls davon profitiert
 if command -v ionice >/dev/null 2>&1; then
@@ -25,6 +29,15 @@ if command -v ionice >/dev/null 2>&1; then
 else
   _APT="apt-get"
 fi
+
+# _apt_install: Installiert Pakete einzeln mit sync+sleep zwischen jedem Block
+# Reduziert Peak-Speicher (verhindert OOM im LXC-Container bei cgroup-Limit)
+_apt_install() {
+  # Alle Argumente als eine Gruppe installieren, dann sync
+  $_APT install -y --no-install-recommends "$@"
+  sync
+  sleep 1
+}
 
 # ===================================================================
 # Checkpoint / Resume System
@@ -195,6 +208,48 @@ if [ -n "$_FREE_TMP_MB" ] && [ "$_FREE_TMP_MB" -lt 512 ]; then
   _PRE_OK=false
 else
   echo "  ✅ Freier Speicher auf /tmp: ${_FREE_TMP_MB:-?} MB"
+fi
+
+# --- LXC / Proxmox Erkennung und Diagnose ---
+if [ -f /proc/1/environ ] && grep -qa 'container=lxc' /proc/1/environ 2>/dev/null; then
+  echo "  ℹ️  LXC-Container erkannt"
+  # Overlayfs-Erkennung
+  if grep -q ' overlay ' /proc/mounts 2>/dev/null || \
+     grep -q 'upperdir' /proc/mounts 2>/dev/null; then
+    echo "  ⚠️  overlayfs Dateisystem erkannt!"
+    echo "     overlayfs kann unter Last EIO-Fehler erzeugen und systemd zum Absturz bringen."
+    echo "     → Empfehlung: In Proxmox 'local-lvm' statt 'local' (dir) Speicher verwenden."
+    echo "     → Oder: pct-Konfiguration prüfen: grep storage /etc/pve/lxc/<ID>.conf"
+  fi
+  # cgroup Speicherlimit prüfen (Proxmox setzt dieses für den Container)
+  _CGROUP_MEM_FILE=""
+  for _f in /sys/fs/cgroup/memory/memory.limit_in_bytes \
+             /sys/fs/cgroup/memory.max; do
+    [ -f "$_f" ] && _CGROUP_MEM_FILE="$_f" && break
+  done
+  if [ -n "$_CGROUP_MEM_FILE" ]; then
+    _CGROUP_MEM=$(cat "$_CGROUP_MEM_FILE" 2>/dev/null || echo "")
+    # max bedeutet kein Limit gesetzt
+    if [ "$_CGROUP_MEM" != "max" ] && [ -n "$_CGROUP_MEM" ] && [ "$_CGROUP_MEM" -lt 9223372036854771712 ] 2>/dev/null; then
+      _CGROUP_MB=$(( _CGROUP_MEM / 1024 / 1024 ))
+      if [ "$_CGROUP_MB" -lt 1500 ]; then
+        echo "  ❌ Proxmox RAM-Limit für diesen Container: ${_CGROUP_MB} MB — zu wenig!"
+        echo "     → In Proxmox: Container → Ressourcen → Arbeitsspeicher auf ≥ 2048 MB erhöhen"
+        _PRE_OK=false
+      else
+        echo "  ✅ Proxmox RAM-Limit: ${_CGROUP_MB} MB"
+      fi
+    fi
+  fi
+  # OOM-Score von Prozess 1 (systemd) prüfen
+  _OOM1=$(cat /proc/1/oom_score_adj 2>/dev/null || echo "")
+  if [ "$_OOM1" = "-1000" ]; then
+    echo "  ✅ systemd ist gegen OOM-Killer geschützt (oom_score_adj=-1000)"
+  else
+    echo "  ⚠️  systemd OOM-Score: ${_OOM1:-?} — systemd könnte bei Speicherdruck gekillt werden"
+    echo "     Dies kann zum kompletten Container-Absturz führen während apt/pip läuft."
+    echo "     → Proxmox RAM erhöhen ODER Swap aktivieren (lxc.cgroup2.memory.swap.max=2G)"
+  fi
 fi
 
 # --- DNS-Auflösung ---
@@ -667,34 +722,52 @@ if [ -n "$_FREE_NOW" ] && [ "$_FREE_NOW" -lt 2048 ]; then
   echo "   LXC: Container-Disk in Proxmox vergrößern empfohlen (Minimum 8 GB)"
 fi
 
-# Basis-Pakete (--no-install-recommends spart ~300-500 MB auf LXC overlayfs!)
-echo "📦 Installiere Basis-Pakete..."
-$_APT install -y --no-install-recommends \
-  curl git nano ca-certificates openssl net-tools nginx \
-  python3 python3-venv python3-pip build-essential iproute2
+# Basis-Pakete — in kleinen Gruppen installieren, mit sync+sleep zwischen jeder Gruppe.
+# Verhindert OOM-Peak im LXC-Container (2 GB cgroup-Limit wird sonst beim parallelen
+# dpkg-Entpacken überschritten → OOM-Killer killt systemd → Container startet nicht mehr)
+echo "📦 Installiere Netzwerk + Basis..."
+_apt_install curl ca-certificates openssl iproute2 net-tools
+
+echo "📦 Installiere git, nano..."
+_apt_install git nano
+
+echo "📦 Installiere nginx..."
+_apt_install nginx
+
+echo "📦 Installiere Python..."
+_apt_install python3 python3-venv python3-pip
+
+echo "📦 Installiere build-essential..."
+_apt_install build-essential
+
 # sudo ist in LXC-Containern oft nicht verfügbar — optional installieren
 $_APT install -y --no-install-recommends sudo 2>/dev/null \
   || echo "ℹ️  sudo nicht installierbar (LXC?) — wird nicht benötigt"
+sync
+
 # Versionsspezifisches venv-Paket installieren (z.B. python3.11-venv auf Debian/Ubuntu)
 _PY_VER_MAIN=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
-[ -n "$_PY_VER_MAIN" ] && $_APT install -y --no-install-recommends "python${_PY_VER_MAIN}-venv" 2>/dev/null || true
+[ -n "$_PY_VER_MAIN" ] && _apt_install "python${_PY_VER_MAIN}-venv" 2>/dev/null || sync
 
-# Bildverarbeitung (Pillow)
+# Bildverarbeitung (Pillow) — in einem Block, das sind nur Header-Files
 echo "🖼️  Installiere Pillow-Abhängigkeiten..."
-$_APT install -y --no-install-recommends libjpeg-dev zlib1g-dev libpng-dev libwebp-dev
+_apt_install libjpeg-dev zlib1g-dev libpng-dev libwebp-dev
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
-  $_APT install -y --no-install-recommends libpq-dev
+  echo "📦 Installiere PostgreSQL-Entwicklungspakete..."
+  _apt_install libpq-dev
 elif [ "$DBTYPE" = "mysql" ]; then
-  $_APT install -y --no-install-recommends libmysqlclient-dev python3-dev default-libmysqlclient-dev
+  echo "📦 Installiere MySQL-Entwicklungspakete..."
+  _apt_install libmysqlclient-dev python3-dev default-libmysqlclient-dev
 fi
 
-# Paket-Cache leeren — spart erheblich Platz auf LXC overlayfs (apt-Cache = 200-500 MB!)
-echo "🧹 Leere apt-Cache (spart Disk-Platz auf LXC)..."
+# Paket-Cache leeren — frees ~200-500 MB apt cache
+echo "🧹 Leere apt-Cache..."
 $_APT autoremove -y -qq
 $_APT clean
 sync
+sleep 2
 
 # -------------------------------------------------------------------
 # fail2ban installieren
@@ -703,7 +776,7 @@ _read -p "fail2ban installieren (schützt SSH)? [J/n]: " INSTALL_FAIL2BAN
 INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-J}"
 if [[ "$INSTALL_FAIL2BAN" =~ ^[Jj]$ ]]; then
   echo "🛡️  Installiere fail2ban..."
-  $_APT install -y --no-install-recommends fail2ban
+  _apt_install fail2ban
   cat > /etc/fail2ban/jail.local <<EOF
 [sshd]
 enabled = true
@@ -928,7 +1001,8 @@ if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
   echo "🗄️  Installiere lokale ${DBTYPE^^} Datenbank..."
 
   if [ "$DBTYPE" = "postgresql" ]; then
-    ${_APT:-apt-get} install -y --no-install-recommends $DB_PACKAGE_LOCAL
+    echo "📦 Installiere PostgreSQL..."
+    _apt_install $DB_PACKAGE_LOCAL
     systemctl enable --now postgresql
     
     # Warten bis PostgreSQL läuft
@@ -955,7 +1029,8 @@ psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null ||
 PGEOF
     
   elif [ "$DBTYPE" = "mysql" ]; then
-    ${_APT:-apt-get} install -y --no-install-recommends $DB_PACKAGE_LOCAL
+    echo "📦 Installiere MariaDB..."
+    _apt_install $DB_PACKAGE_LOCAL
     systemctl enable --now mariadb
     
     # Warten bis MariaDB läuft
@@ -977,7 +1052,7 @@ SQL
   fi
 elif [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "2" ]; then
   echo "🌐 Installiere ${DBTYPE^^} Client für Remote-Verbindung..."
-  ${_APT:-apt-get} install -y --no-install-recommends $DB_PACKAGE_CLIENT
+  _apt_install $DB_PACKAGE_CLIENT
 fi
 
 mark_done "db_setup"
@@ -1030,19 +1105,20 @@ cd "$APPDIR"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --no-cache-dir --upgrade pip
-pip install --no-cache-dir django gunicorn python-dotenv pillow
+# --prefer-binary: verwendet fertige Binary-Wheels statt Kompilierung (spart ~300 MB RAM-Peak)
+pip install --no-cache-dir --prefer-binary django gunicorn python-dotenv pillow
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
-  pip install --no-cache-dir "psycopg[binary]"
+  pip install --no-cache-dir --prefer-binary "psycopg[binary]"
 elif [ "$DBTYPE" = "mysql" ]; then
-  pip install --no-cache-dir mysqlclient
+  pip install --no-cache-dir --prefer-binary mysqlclient
 fi
 
 # Requirements installieren (falls vorhanden)
 if [ -f "$APPDIR/requirements.txt" ]; then
   echo "📦 Installiere requirements.txt..."
-  pip install --no-cache-dir -r "$APPDIR/requirements.txt"
+  pip install --no-cache-dir --prefer-binary -r "$APPDIR/requirements.txt"
 fi
 EOF
 
@@ -1055,13 +1131,14 @@ cd "$APPDIR"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --no-cache-dir --upgrade pip
-pip install --no-cache-dir django gunicorn python-dotenv pillow
+# --prefer-binary: verwendet fertige Binary-Wheels statt Kompilierung (spart ~300 MB RAM-Peak)
+pip install --no-cache-dir --prefer-binary django gunicorn python-dotenv pillow
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
-  pip install --no-cache-dir "psycopg[binary]"
+  pip install --no-cache-dir --prefer-binary "psycopg[binary]"
 elif [ "$DBTYPE" = "mysql" ]; then
-  pip install --no-cache-dir mysqlclient
+  pip install --no-cache-dir --prefer-binary mysqlclient
 fi
 
 # Django Projekt erstellen
@@ -2163,14 +2240,15 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   mkdir -p "$_MANAGER_DIR"
   cp -r "$_MANAGER_SRC/." "$_MANAGER_DIR/"
 
-  # Python venv + Abhängigkeiten
+  # Python venv + Abhängigkeiten — in kleinen Gruppen (OOM-Schutz)
   echo "🐍 Installiere Python-Abhängigkeiten für Manager..."
-  ${_APT:-apt-get} install -y --no-install-recommends python3 python3-venv python3-pip build-essential
+  _apt_install python3 python3-venv python3-pip
+  _apt_install build-essential
 
   # Versionsspezifisches venv-Paket installieren (z.B. python3.11-venv auf Debian/Ubuntu)
   _PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
   if [ -n "$_PY_VER" ]; then
-    ${_APT:-apt-get} install -y --no-install-recommends "python${_PY_VER}-venv" 2>/dev/null || true
+    _apt_install "python${_PY_VER}-venv" 2>/dev/null || sync
   fi
 
   # Sicherstellen dass venv wirklich verfügbar ist
@@ -2183,7 +2261,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   echo "🐍 Erstelle Python venv für Manager..."
   python3 -m venv "$_MANAGER_DIR/venv"
   "$_MANAGER_DIR/venv/bin/pip" install --no-cache-dir --upgrade pip -q
-  "$_MANAGER_DIR/venv/bin/pip" install --no-cache-dir -r "$_MANAGER_DIR/requirements.txt" -q
+  "$_MANAGER_DIR/venv/bin/pip" install --no-cache-dir --prefer-binary -r "$_MANAGER_DIR/requirements.txt" -q
   echo "✅ Python-Abhängigkeiten installiert"
 
   # .env für Manager
@@ -2250,7 +2328,7 @@ fi
 # Python-Abhängigkeiten aktualisieren
 if [ -f "\$MANAGER_DIR/requirements.txt" ]; then
   echo "📦 Installiere Requirements..."
-  "\$MANAGER_DIR/venv/bin/pip" install --no-cache-dir -r "\$MANAGER_DIR/requirements.txt" -q
+  "\$MANAGER_DIR/venv/bin/pip" install --no-cache-dir --prefer-binary -r "\$MANAGER_DIR/requirements.txt" -q
 fi
 
 # Migrationen
