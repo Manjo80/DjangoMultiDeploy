@@ -897,14 +897,15 @@ if ! ufw status | grep -q "Status: active"; then
   # Loopback immer erlauben (Gunicorn kommuniziert über 127.0.0.1)
   ufw allow in on lo comment 'Loopback intern'
 
-  # Alle Gunicorn-Ports (8000-8999) von außen sperren
+  # Manager-Port 8888 explizit öffnen — MUSS vor der Gunicorn-Range stehen,
+  # da ufw die erste passende Regel verwendet (Reihenfolge entscheidet!)
+  ufw allow 8888/tcp comment 'DjangoMultiDeploy Manager'
+  echo "  ✅ Port 8888 (Manager) geöffnet"
+
+  # Alle übrigen Gunicorn-Ports (8000-8999) von außen sperren
   # (Gunicorn hört ohnehin auf 127.0.0.1 — das ist eine zweite Absicherung)
   ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
-  echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt"
-
-  # Manager-Port 8888: bleibt offen (Debugging / direkter Zugriff möglich)
-  # Nach erfolgreicher Einrichtung kann Port 8888 manuell gesperrt werden:
-  # ufw deny 8888/tcp
+  echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt (8888 ausgenommen)"
 
   # Firewall aktivieren
   ufw --force enable
@@ -2473,8 +2474,8 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MANAGER_USER="${MANAGER_USER:-djmanager}"
 
   # Hostname für Manager-nginx-Site abfragen
-  # Der Manager ist NUR über diesen Hostnamen via nginx (Port 80) erreichbar.
-  # Port 8888 ist komplett gesperrt — läuft nur intern auf 127.0.0.1:8888
+  # Der Manager ist über nginx (Port 80) erreichbar UND direkt über Port 8888.
+  # Port 8888 ist ab Installation via ufw geöffnet (vor der Gunicorn-Range).
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   # Default: IP-Adresse des Servers — funktioniert immer ohne DNS-Eintrag
@@ -2680,7 +2681,7 @@ MANSERVEOF
   echo "✅ Manager-Service gestartet (intern auf 127.0.0.1:${_MANAGER_PORT})"
 
   # nginx Reverse Proxy für Manager
-  # Manager ist NUR über diesen nginx-Vhost erreichbar — Port 8888 ist gesperrt
+  # Manager ist über nginx (Port 80) und direkt über Port 8888 erreichbar
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
   # server_name: Hostname + IP — damit Zugriff per IP immer funktioniert
@@ -2732,8 +2733,8 @@ MGNGINXEOF
     echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
   fi
 
-  # Port 8888 bleibt offen — nach Debugging kann er manuell gesperrt werden:
-  # ufw deny 8888/tcp && ufw reload
+  # Port 8888 ist ab Installation offen (ufw allow 8888/tcp).
+  # Zum Sperren: Firewall-Seite im Manager oder: ufw deny 8888/tcp && ufw reload
 
   _MGR_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
   [ -z "${_MGR_IP:-}" ] && _MGR_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
