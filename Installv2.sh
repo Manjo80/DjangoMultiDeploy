@@ -2608,7 +2608,8 @@ if [ -f "\$MANAGER_DIR/requirements.txt" ]; then
 fi
 
 # Migrationen
-echo "📊 Führe Migrationen aus..."
+echo "📊 Erstelle und führe Migrationen aus..."
+"\$MANAGER_DIR/venv/bin/python" "\$MANAGER_DIR/manage.py" makemigrations control --no-input
 "\$MANAGER_DIR/venv/bin/python" "\$MANAGER_DIR/manage.py" migrate --run-syncdb
 
 # Statische Dateien
