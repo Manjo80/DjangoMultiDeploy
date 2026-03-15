@@ -2479,13 +2479,21 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Port 8888 ist komplett gesperrt — läuft nur intern auf 127.0.0.1:8888
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-djmanager.intern}"
+  # Default: IP-Adresse des Servers — funktioniert immer ohne DNS-Eintrag
+  _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP:-djmanager.intern}}"
   echo
-  echo "🌐 nginx-Hostname für den Manager:"
+  echo "🌐 nginx-Hostname / IP für den Manager:"
   echo "   Der Manager wird über nginx (Port 80) erreichbar sein."
-  echo "   Beispiele: djmanager.intern  |  manager.firma.de  |  ${_MGR_DEFAULT_IP}"
-  echo "   → Trage diesen Namen in deinem DNS oder /etc/hosts ein."
-  _read -p "Manager-Hostname [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  echo ""
+  echo "   Optionen (was soll in der Adressleiste stehen?):"
+  echo "   • IP-Adresse:    ${_MGR_DEFAULT_IP}  ← empfohlen, kein DNS nötig"
+  echo "   • Lokaler Name:  webserver.intern, proxmox.home, ..."
+  echo "     (muss im DNS-Server oder /etc/hosts eintragen sein)"
+  echo "   • Dein UniFi-DNS: Unter UniFi → Network → System → DNS"
+  echo "     kann ein eigener Hostname wie 'manager.home.arpa' vergeben werden."
+  echo ""
+  echo "   Tipp: Einfach Enter drücken um die IP-Adresse (${_MGR_DEFAULT_IP}) zu verwenden."
+  _read -p "Manager-Hostname oder IP [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
@@ -2662,6 +2670,7 @@ MANSERVEOF
   # nginx Reverse Proxy für Manager
   # Manager ist NUR über diesen nginx-Vhost erreichbar — Port 8888 ist gesperrt
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
+  mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
   cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
 server {
     listen 80;
