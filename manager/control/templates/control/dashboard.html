@@ -2,7 +2,7 @@
 {% block title %}Dashboard — DjangoMultiDeploy{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="d-flex justify-content-between align-items-center mb-3">
   <h2><i class="bi bi-grid-3x3-gap-fill me-2"></i>Dashboard</h2>
   {% if user.is_staff %}
   <a href="{% url 'install_form' %}" class="btn btn-success">
@@ -10,6 +10,23 @@
   </a>
   {% endif %}
 </div>
+
+<!-- Firewall-Status Banner -->
+{% if ufw.available %}
+<div class="alert py-2 mb-3 d-flex align-items-center gap-3
+  {% if ufw.enabled %}alert-success{% else %}alert-warning{% endif %}">
+  <i class="bi bi-shield-{% if ufw.enabled %}lock-fill{% else %}exclamation{% endif %} fs-5"></i>
+  <div>
+    {% if ufw.enabled %}
+    <strong>Firewall aktiv</strong> —
+    Port 22 SSH ✅ | Port 80/443 HTTP ✅ | Ports 8000–8999 extern gesperrt 🔒 | Port 8888 nur LAN 🔒
+    {% else %}
+    <strong>Firewall inaktiv!</strong> — ufw ist installiert aber nicht aktiviert.
+    {% if user.is_staff %}Führe <code>ufw --force enable</code> auf dem Server aus.{% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 
 {% if not projects %}
 <div class="card text-center p-5">
