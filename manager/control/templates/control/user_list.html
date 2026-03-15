@@ -17,6 +17,7 @@
           <th>E-Mail</th>
           <th>Rolle</th>
           <th>2FA</th>
+          <th>Projekte</th>
           <th>Gesperrt</th>
           <th>Letzte IP</th>
           <th></th>
@@ -47,6 +48,19 @@
             {% else %}
               <i class="bi bi-shield-x" style="color:#6e7681" title="2FA inaktiv"></i>
             {% endif %}
+          </td>
+          <td class="text-muted small">
+            {% with role=u.userprofile.role %}
+              {% if role == 'admin' or u.is_superuser %}
+                <span class="text-muted">alle</span>
+              {% else %}
+                {% for pp in u.project_permissions.all %}
+                  <span class="badge" style="background:#1f6feb;font-size:0.65rem">{{ pp.project_name }}</span>
+                {% empty %}
+                  <span class="text-muted">—</span>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
           </td>
           <td>
             {% if u.userprofile.is_locked %}

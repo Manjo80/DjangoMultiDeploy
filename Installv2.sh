@@ -1853,65 +1853,6 @@ else
 fi  # end nginx_done
 
 # -------------------------------------------------------------------
-# Let's Encrypt / Certbot (optional)
-# -------------------------------------------------------------------
-if ! is_done "certbot_done"; then
-  _CERTBOT_DOMAINS=$(echo "$NGINX_SERVER_NAMES" | tr ' ' ',' | sed 's/,$//')
-  # Nur anbieten wenn mindestens ein DNS-Name vorhanden ist (kein reines IP-Setup)
-  _HAS_DOMAIN=false
-  for _h in $NGINX_SERVER_NAMES; do
-    if echo "$_h" | grep -qP '\.'; then
-      if ! echo "$_h" | grep -qP '^\d+\.\d+\.\d+\.\d+$'; then
-        _HAS_DOMAIN=true
-        break
-      fi
-    fi
-  done
-
-  if [[ "$_HAS_DOMAIN" == "true" ]]; then
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║  Let's Encrypt HTTPS-Zertifikat                                  ║"
-    echo "║  Domains: $_CERTBOT_DOMAINS"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
-    _read -p "  Kostenloses HTTPS-Zertifikat via Let's Encrypt einrichten? [j/N]: " _CERTBOT_ANSWER
-    _CERTBOT_ANSWER="${_CERTBOT_ANSWER:-N}"
-
-    if [[ "$_CERTBOT_ANSWER" =~ ^[Jj]$ ]]; then
-      _read -p "  E-Mail für Let's Encrypt (Ablauf-Benachrichtigungen): " _CERTBOT_EMAIL
-      _CERTBOT_EMAIL="${_CERTBOT_EMAIL:-admin@${_CERTBOT_DOMAINS%%,*}}"
-
-      echo "📦 Installiere certbot..."
-      _apt_install certbot python3-certbot-nginx
-
-      # Zertifikat beantragen — --nginx Plugin passt Konfiguration automatisch an
-      _CERTBOT_DOMAIN_ARGS=""
-      for _d in $(echo "$NGINX_SERVER_NAMES" | tr ',' ' '); do
-        _CERTBOT_DOMAIN_ARGS="$_CERTBOT_DOMAIN_ARGS -d $_d"
-      done
-
-      echo "🔐 Beantrage Zertifikat für: $NGINX_SERVER_NAMES"
-      if certbot --nginx $_CERTBOT_DOMAIN_ARGS \
-          --non-interactive --agree-tos \
-          --email "$_CERTBOT_EMAIL" \
-          --redirect 2>&1; then
-        echo "✅ HTTPS-Zertifikat erfolgreich eingerichtet!"
-        echo "   Auto-Renewal: /etc/cron.d/certbot (systemd-Timer bereits aktiv)"
-      else
-        echo "⚠️  Certbot fehlgeschlagen — nginx auf HTTP belassen."
-        echo "   Mögliche Ursachen: Domain löst noch nicht auf diesen Server auf,"
-        echo "   Port 80 von außen nicht erreichbar, oder DNS noch nicht propagiert."
-      fi
-    else
-      echo "⏭️  Let's Encrypt übersprungen — nginx bleibt auf HTTP."
-    fi
-  else
-    echo "ℹ️  Keine DNS-Domains gefunden (nur IPs) — Let's Encrypt übersprungen."
-  fi
-  mark_done "certbot_done"
-fi  # end certbot_done
-
-# -------------------------------------------------------------------
 # Projekt-Registry (für MOTD und Verwaltung aller Django-Server)
 # -------------------------------------------------------------------
 if ! is_done "registry_done"; then
