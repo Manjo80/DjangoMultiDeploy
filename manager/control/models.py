@@ -114,19 +114,23 @@ class AuditLog(models.Model):
 
     @classmethod
     def log(cls, request, action, project='', details='', success=True):
+        import logging
         ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
         if ip and ',' in ip:
             ip = ip.split(',')[0].strip()
         user = request.user if request.user.is_authenticated else None
-        cls.objects.create(
-            user=user,
-            username=user.username if user else 'anonymous',
-            action=action,
-            project=project,
-            details=str(details)[:2000],
-            ip_address=ip[:45] if ip else None,
-            success=success,
-        )
+        try:
+            cls.objects.create(
+                user=user,
+                username=user.username if user else 'anonymous',
+                action=action,
+                project=project,
+                details=str(details)[:2000],
+                ip_address=ip[:45] if ip else None,
+                success=success,
+            )
+        except Exception as e:
+            logging.getLogger(__name__).error('AuditLog.log failed: %s', e, exc_info=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
