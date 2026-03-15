@@ -2527,25 +2527,30 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _read -p "Zusätzlicher Hostname / Reverse-Proxy-Name [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
-  # DNS-Check: Hostname prüfen und ggf. warnen
-  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    _RESOLVED=$(getent hosts "$MANAGER_HOSTNAME" 2>/dev/null || true)
-    _RESOLVED=$(echo "$_RESOLVED" | awk '{print $1}' | head -1)
-    if [ -z "$_RESOLVED" ]; then
-      echo "⚠️  Hostname '$MANAGER_HOSTNAME' ist aktuell nicht im DNS auflösbar."
-      echo "   Die IP-Adresse ${_MGR_DEFAULT_IP} wird als zusätzlicher server_name eingetragen,"
-      echo "   damit der Manager auch direkt über die IP erreichbar ist."
-      echo "   DNS-/Hosts-Eintrag später ergänzen: ${_MGR_DEFAULT_IP}  ${MANAGER_HOSTNAME}"
-    elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
-      echo "ℹ️  '$MANAGER_HOSTNAME' löst zu $_RESOLVED auf (Server-IP: ${_MGR_DEFAULT_IP})."
-    else
-      echo "✅ Hostname '$MANAGER_HOSTNAME' löst korrekt zu ${_MGR_DEFAULT_IP} auf."
+  # Primären Namen extrahieren (erster Eintrag) — für DNS-Check und Anzeige
+  _MGR_PRIMARY_HOST="$(echo "$MANAGER_HOSTNAME" | cut -d, -f1 | tr -d ' ')"
+
+  # DNS-Check: nur für den ersten Eintrag (und nur wenn kein Komma = mehrere Einträge)
+  if ! echo "$MANAGER_HOSTNAME" | grep -q ','; then
+    if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      _RESOLVED=$(getent hosts "$_MGR_PRIMARY_HOST" 2>/dev/null || true)
+      _RESOLVED=$(echo "$_RESOLVED" | awk '{print $1}' | head -1)
+      if [ -z "$_RESOLVED" ]; then
+        echo "⚠️  Hostname '$_MGR_PRIMARY_HOST' ist aktuell nicht im DNS auflösbar."
+        echo "   Die IP-Adresse ${_MGR_DEFAULT_IP} wird als zusätzlicher server_name eingetragen,"
+        echo "   damit der Manager auch direkt über die IP erreichbar ist."
+        echo "   DNS-/Hosts-Eintrag später ergänzen: ${_MGR_DEFAULT_IP}  ${_MGR_PRIMARY_HOST}"
+      elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
+        echo "ℹ️  '$_MGR_PRIMARY_HOST' löst zu $_RESOLVED auf (Server-IP: ${_MGR_DEFAULT_IP})."
+      else
+        echo "✅ Hostname '$_MGR_PRIMARY_HOST' löst korrekt zu ${_MGR_DEFAULT_IP} auf."
+      fi
     fi
   fi
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
   echo "🔌 Manager-Port:         0.0.0.0:$_MANAGER_PORT (direkt erreichbar)"
-  echo "🌐 nginx Hostname:       http://$MANAGER_HOSTNAME/"
+  echo "🌐 nginx Hostname:       http://${_MGR_PRIMARY_HOST}/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   echo
   # Manager-Dateien werden vom Installer aus dem Repo geladen
@@ -2609,7 +2614,16 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # → diese URL MUSS in CSRF_TRUSTED_ORIGINS stehen, sonst 403 beim Login-POST
   # Hilfsfunktion: host → "http://host,http://host:PORT"
   _csrf_pair() { echo "http://${1},http://${1}:${_MANAGER_PORT}"; }
-  _MGR_CSRF_ORIGINS="$(_csrf_pair "${MANAGER_HOSTNAME}")"
+  # Alle eingegebenen Hostnamen (Komma-getrennt) in CSRF aufnehmen
+  _MGR_CSRF_ORIGINS=""
+  for _mh in $(echo "$MANAGER_HOSTNAME" | tr ',' ' '); do
+    [ -z "$_mh" ] && continue
+    if [ -z "$_MGR_CSRF_ORIGINS" ]; then
+      _MGR_CSRF_ORIGINS="$(_csrf_pair "$_mh")"
+    else
+      _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_mh")"
+    fi
+  done
   # Alle erkannten Hostnamen (kurz, FQDN) mit und ohne Port
   for _h in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}" "127.0.0.1" "localhost"; do
     [ -z "$_h" ] && continue
@@ -2789,7 +2803,8 @@ MANSERVEOF
 
   # server_name: alle Hostnamen + IP + .iot-Variante + catch-all (_)
   # Damit ist der Manager per IP, Kurzname und FQDN erreichbar
-  _MGR_NGINX_NAMES="${MANAGER_HOSTNAME}"
+  # nginx server_name: Komma-getrennte Eingabe → leerzeichen-getrennt
+  _MGR_NGINX_NAMES="$(echo "$MANAGER_HOSTNAME" | tr ',' ' ')"
   for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}"; do
     [ -z "$_n" ] && continue
     # Nur hinzufügen wenn noch nicht enthalten
@@ -2836,7 +2851,7 @@ MGNGINXEOF
 
   if nginx -t 2>/dev/null; then
     systemctl reload nginx
-    echo "✅ nginx neu geladen — Manager über http://${MANAGER_HOSTNAME}/ erreichbar"
+    echo "✅ nginx neu geladen — Manager über http://${_MGR_PRIMARY_HOST}/ erreichbar"
   else
     echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
   fi
@@ -2852,8 +2867,8 @@ MGNGINXEOF
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
   echo "🌐 Manager-URL:    http://${_MGR_IP}/"
-  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "               oder http://${MANAGER_HOSTNAME}/ (wenn DNS eingetragen)"
+  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "               oder http://${_MGR_PRIMARY_HOST}/ (wenn DNS eingetragen)"
   fi
   echo "   (nginx Port 80 → 127.0.0.1:${_MANAGER_PORT} | direkt: http://${_MGR_IP}:${_MANAGER_PORT}/)"
   echo "📊 Status:         systemctl status djmanager"
@@ -2871,10 +2886,10 @@ MGNGINXEOF
     echo "   Empfehlung: apt install ufw && ufw allow ${_MANAGER_PORT}/tcp && ufw enable"
   fi
   echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
-  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo
     echo "📌 Optionaler DNS/Hosts-Eintrag für Hostnamen-Zugriff:"
-    echo "   ${_MGR_IP}  ${MANAGER_HOSTNAME}"
+    echo "   ${_MGR_IP}  $(echo "$MANAGER_HOSTNAME" | tr ',' ' ')"
     echo "   → Windows: C:\\Windows\\System32\\drivers\\etc\\hosts"
     echo "   → Linux/Mac: /etc/hosts   oder DNS-Server konfigurieren"
     echo "   (Zugriff per IP funktioniert ohne DNS-Eintrag)"
