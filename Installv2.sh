@@ -463,14 +463,48 @@ fi
 echo "✅ Gunicorn-Port: $GUNICORN_PORT"
 
 # -------------------------------------------------------------------
-# Hosts
+# Hosts / nginx-Name
 # -------------------------------------------------------------------
-DEFAULT_ALLOWED_HOSTS="${ALL_LOCAL_IPS},127.0.0.1,localhost,${HOSTNAME_FQDN}"
-[ "$MODE" = "prod" ] && echo "PROD: DNS-Namen eintragen (z.B. app.intern.lan)"
-_read -p "ALLOWED_HOSTS (Komma-separiert) [${DEFAULT_ALLOWED_HOSTS}]: " ALLOWED_HOSTS
-ALLOWED_HOSTS="${ALLOWED_HOSTS:-$DEFAULT_ALLOWED_HOSTS}"
-NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ' | xargs)"
+# Netz-Domain ermitteln (z.B. "iot", "lan")
+_WEBAPP_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
+if [ -z "$_WEBAPP_DOMAIN" ] && echo "$HOSTNAME_FQDN" | grep -q '\.'; then
+  _WEBAPP_DOMAIN="${HOSTNAME_FQDN#*.}"
+fi
+_WEBAPP_SHORT="$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
+
+# Prompt 1: nginx-Hostname
+_DEFAULT_NGINX_HOST="${_WEBAPP_SHORT}"
+echo
+echo "nginx-Hostname für diese App:"
+echo "   Automatisch erkannt: IP=${LOCAL_IP}  Kurz=${_WEBAPP_SHORT}  FQDN=${HOSTNAME_FQDN}"
+if [ -n "$_WEBAPP_DOMAIN" ]; then
+  echo "   Netz-Domain: .${_WEBAPP_DOMAIN}  → Name ohne Punkt wird zu: ${_WEBAPP_SHORT}.${_WEBAPP_DOMAIN}"
+fi
+_read -p "nginx-Hostname [${_DEFAULT_NGINX_HOST}]: " NGINX_PRIMARY_HOST
+NGINX_PRIMARY_HOST="${NGINX_PRIMARY_HOST:-$_DEFAULT_NGINX_HOST}"
+# Domain-Suffix anhängen wenn kein Punkt und Domain bekannt
+if [ -n "$_WEBAPP_DOMAIN" ] && ! echo "$NGINX_PRIMARY_HOST" | grep -q '\.'; then
+  NGINX_PRIMARY_HOST="${NGINX_PRIMARY_HOST}.${_WEBAPP_DOMAIN}"
+  echo "   → Ergänzt zu: ${NGINX_PRIMARY_HOST}"
+fi
+NGINX_SERVER_NAMES="$NGINX_PRIMARY_HOST"
+# Auto: Kurzname, FQDN, IP ebenfalls in server_name
+for _n in "${_WEBAPP_SHORT}" "${HOSTNAME_FQDN}" "${LOCAL_IP}"; do
+  [ -z "$_n" ] && continue
+  echo "$NGINX_SERVER_NAMES" | grep -qF "$_n" || NGINX_SERVER_NAMES="${NGINX_SERVER_NAMES} ${_n}"
+done
 [ -z "${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
+
+# Prompt 2: Extra-Namen nur für ALLOWED_HOSTS (nicht nginx)
+echo ""
+echo "   Weitere Namen für ALLOWED_HOSTS (nicht in nginx):"
+echo "   z.B. Reverse-Proxy, Internet-Domain — komma-getrennt, leer = keiner."
+_read -p "Extra ALLOWED_HOSTS []: " EXTRA_ALLOWED_HOSTS
+EXTRA_ALLOWED_HOSTS="${EXTRA_ALLOWED_HOSTS:-}"
+
+# ALLOWED_HOSTS: nginx-Name + Extra + alle IPs + Loopback (auto, kein weiterer Prompt)
+ALLOWED_HOSTS="${NGINX_PRIMARY_HOST},${EXTRA_ALLOWED_HOSTS},${_WEBAPP_SHORT},${HOSTNAME_FQDN},${ALL_LOCAL_IPS},127.0.0.1,localhost"
+ALLOWED_HOSTS="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
 # -------------------------------------------------------------------
 # CSRF_TRUSTED_ORIGINS automatisch bauen (für alle Modi)
@@ -2499,53 +2533,69 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
-  # Hostnamen automatisch erkennen (kurz + FQDN)
+  # Hostnamen automatisch erkennen (kurz + FQDN + Netz-Domain)
   _HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null | cut -d. -f1 || echo '')"
   _HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo '')"
+  _HOSTNAME_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
+  # Domain-Fallback aus FQDN
+  if [ -z "$_HOSTNAME_DOMAIN" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
+    _HOSTNAME_DOMAIN="${_HOSTNAME_FQDN#*.}"
+  fi
 
-  # Default: FQDN wenn er eine Domain enthält, sonst IP
-  if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
-    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_FQDN}}"
+  # ── Prompt 1: nginx-Hostname ────────────────────────────────────────────────
+  # Default-Vorschlag: Kurzname (wird gleich mit Domain ergänzt) oder IP
+  if [ -n "$_HOSTNAME_SHORT" ]; then
+    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_SHORT}}"
   else
     _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP}}"
   fi
 
   echo
-  echo "🌐 nginx-Hostname / IP für den Manager:"
-  echo "   Automatisch erkannte Hostnamen dieses Servers:"
-  echo "   • IP:     ${_MGR_DEFAULT_IP}"
-  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurz:   ${_HOSTNAME_SHORT}"
+  echo "🌐 nginx-Hostname für den Manager:"
+  echo "   Automatisch erkannt:"
+  echo "   • IP:   ${_MGR_DEFAULT_IP}"
+  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurz: ${_HOSTNAME_SHORT}"
   [ -n "$_HOSTNAME_FQDN"  ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && \
-    echo "   • FQDN:   ${_HOSTNAME_FQDN}"
+    echo "   • FQDN: ${_HOSTNAME_FQDN}"
+  if [ -n "$_HOSTNAME_DOMAIN" ]; then
+    echo ""
+    echo "   Netz-Domain erkannt: .${_HOSTNAME_DOMAIN}  (hostname -d)"
+    echo "   → Name ohne Punkt wird automatisch zu: ${_DEFAULT_MGR_HOST}.${_HOSTNAME_DOMAIN}"
+  fi
   echo ""
-  echo "   Diese Namen werden automatisch in nginx + ALLOWED_HOSTS eingetragen."
-  echo ""
-  echo "   Hier zusätzliche Namen angeben falls nötig, z.B.:"
-  echo "   • Netz-Domain-Suffix  → ${_HOSTNAME_SHORT}.iot  (wenn 'hostname -d' z.B. 'iot' liefert)"
-  echo "   • Reverse-Proxy-Name  → manager.example.com"
-  echo "   Für rein lokalen Betrieb: einfach Enter drücken."
-  _read -p "Zusätzlicher Hostname / Reverse-Proxy-Name [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  _read -p "nginx-Hostname [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
-  # DNS-Check: Hostname prüfen und ggf. warnen
-  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    _RESOLVED=$(getent hosts "$MANAGER_HOSTNAME" 2>/dev/null || true)
-    _RESOLVED=$(echo "$_RESOLVED" | awk '{print $1}' | head -1)
+  # Domain-Suffix anhängen wenn kein Punkt im Namen und Domain bekannt
+  if [ -n "$_HOSTNAME_DOMAIN" ] && ! echo "$MANAGER_HOSTNAME" | grep -q '\.'; then
+    MANAGER_HOSTNAME="${MANAGER_HOSTNAME}.${_HOSTNAME_DOMAIN}"
+    echo "   → Ergänzt zu: ${MANAGER_HOSTNAME}"
+  fi
+  _MGR_PRIMARY_HOST="$MANAGER_HOSTNAME"
+
+  # DNS-Check
+  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    _RESOLVED=$(getent hosts "$_MGR_PRIMARY_HOST" 2>/dev/null | awk '{print $1}' | head -1 || true)
     if [ -z "$_RESOLVED" ]; then
-      echo "⚠️  Hostname '$MANAGER_HOSTNAME' ist aktuell nicht im DNS auflösbar."
-      echo "   Die IP-Adresse ${_MGR_DEFAULT_IP} wird als zusätzlicher server_name eingetragen,"
-      echo "   damit der Manager auch direkt über die IP erreichbar ist."
-      echo "   DNS-/Hosts-Eintrag später ergänzen: ${_MGR_DEFAULT_IP}  ${MANAGER_HOSTNAME}"
+      echo "   ⚠️  '$_MGR_PRIMARY_HOST' nicht im DNS — Eintrag später ergänzen:"
+      echo "   ${_MGR_DEFAULT_IP}  ${_MGR_PRIMARY_HOST}"
     elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
-      echo "ℹ️  '$MANAGER_HOSTNAME' löst zu $_RESOLVED auf (Server-IP: ${_MGR_DEFAULT_IP})."
+      echo "   ℹ️  '$_MGR_PRIMARY_HOST' → $_RESOLVED (Server-IP: ${_MGR_DEFAULT_IP})"
     else
-      echo "✅ Hostname '$MANAGER_HOSTNAME' löst korrekt zu ${_MGR_DEFAULT_IP} auf."
+      echo "   ✅ '$_MGR_PRIMARY_HOST' löst korrekt auf."
     fi
   fi
 
+  # ── Prompt 2: Extra-Namen nur für ALLOWED_HOSTS (nicht nginx) ───────────────
+  echo ""
+  echo "   Weitere Namen für ALLOWED_HOSTS (nicht in nginx):"
+  echo "   z.B. Reverse-Proxy-Hostname, Internet-Domain — komma-getrennt, leer = keiner."
+  _read -p "Extra ALLOWED_HOSTS []: " MANAGER_EXTRA_HOSTS
+  MANAGER_EXTRA_HOSTS="${MANAGER_EXTRA_HOSTS:-}"
+
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
   echo "🔌 Manager-Port:         0.0.0.0:$_MANAGER_PORT (direkt erreichbar)"
-  echo "🌐 nginx Hostname:       http://$MANAGER_HOSTNAME/"
+  echo "🌐 nginx Hostname:       http://${_MGR_PRIMARY_HOST}/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   echo
   # Manager-Dateien werden vom Installer aus dem Repo geladen
@@ -2600,7 +2650,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Alle IPs aller Interfaces erfassen — verhindert "Bad Request (400)" bei
   # Zugriff über eine IP die beim Install nicht die primäre war
   _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
-  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
+  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${MANAGER_EXTRA_HOSTS},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_HOSTNAME_WITH_DOMAIN},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
   # Doppelte + leere Einträge entfernen
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
@@ -2609,7 +2659,12 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # → diese URL MUSS in CSRF_TRUSTED_ORIGINS stehen, sonst 403 beim Login-POST
   # Hilfsfunktion: host → "http://host,http://host:PORT"
   _csrf_pair() { echo "http://${1},http://${1}:${_MANAGER_PORT}"; }
-  _MGR_CSRF_ORIGINS="$(_csrf_pair "${MANAGER_HOSTNAME}")"
+  # MANAGER_HOSTNAME + MANAGER_EXTRA_HOSTS in CSRF aufnehmen
+  _MGR_CSRF_ORIGINS="$(_csrf_pair "$MANAGER_HOSTNAME")"
+  for _mh in $(echo "$MANAGER_EXTRA_HOSTS" | tr ',' ' '); do
+    [ -z "$_mh" ] && continue
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_mh")"
+  done
   # Alle erkannten Hostnamen (kurz, FQDN) mit und ohne Port
   for _h in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}" "127.0.0.1" "localhost"; do
     [ -z "$_h" ] && continue
@@ -2629,6 +2684,7 @@ ALLOWED_HOSTS=${_MGR_ALLOWED_HOSTS}
 CSRF_TRUSTED_ORIGINS=${_MGR_CSRF_ORIGINS}
 MANAGER_PORT=${_MANAGER_PORT}
 MANAGER_HOSTNAME=${MANAGER_HOSTNAME}
+MANAGER_EXTRA_HOSTS=${MANAGER_EXTRA_HOSTS}
 INSTALL_SCRIPT=${_SCRIPT_DIR}/Installv2.sh
 REGISTRY_DIR=/etc/django-servers.d
 MANAGERENV
@@ -2787,10 +2843,15 @@ MANSERVEOF
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 
-  # server_name: alle Hostnamen + IP + .iot-Variante + catch-all (_)
-  # Damit ist der Manager per IP, Kurzname und FQDN erreichbar
-  _MGR_NGINX_NAMES="${MANAGER_HOSTNAME}"
-  for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}"; do
+  # nginx server_name: auto-erkannte lokale Namen — MANAGER_EXTRA_HOSTS bleibt draussen
+  _MGR_NGINX_NAMES="$MANAGER_HOSTNAME"
+  # Domain-Variante (SHORT.DOMAIN) auch aufnehmen wenn von FQDN abweichend
+  if [ -n "$_HOSTNAME_DOMAIN" ]; then
+    _HOSTNAME_WITH_DOMAIN="${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}"
+  else
+    _HOSTNAME_WITH_DOMAIN=""
+  fi
+  for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_HOSTNAME_WITH_DOMAIN}" "${_MGR_DEFAULT_IP}"; do
     [ -z "$_n" ] && continue
     # Nur hinzufügen wenn noch nicht enthalten
     echo "$_MGR_NGINX_NAMES" | grep -qF "$_n" || _MGR_NGINX_NAMES="${_MGR_NGINX_NAMES} ${_n}"
@@ -2836,7 +2897,7 @@ MGNGINXEOF
 
   if nginx -t 2>/dev/null; then
     systemctl reload nginx
-    echo "✅ nginx neu geladen — Manager über http://${MANAGER_HOSTNAME}/ erreichbar"
+    echo "✅ nginx neu geladen — Manager über http://${_MGR_PRIMARY_HOST}/ erreichbar"
   else
     echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
   fi
@@ -2852,8 +2913,8 @@ MGNGINXEOF
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
   echo "🌐 Manager-URL:    http://${_MGR_IP}/"
-  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "               oder http://${MANAGER_HOSTNAME}/ (wenn DNS eingetragen)"
+  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "               oder http://${_MGR_PRIMARY_HOST}/ (wenn DNS eingetragen)"
   fi
   echo "   (nginx Port 80 → 127.0.0.1:${_MANAGER_PORT} | direkt: http://${_MGR_IP}:${_MANAGER_PORT}/)"
   echo "📊 Status:         systemctl status djmanager"
@@ -2871,10 +2932,10 @@ MGNGINXEOF
     echo "   Empfehlung: apt install ufw && ufw allow ${_MANAGER_PORT}/tcp && ufw enable"
   fi
   echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
-  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo
     echo "📌 Optionaler DNS/Hosts-Eintrag für Hostnamen-Zugriff:"
-    echo "   ${_MGR_IP}  ${MANAGER_HOSTNAME}"
+    echo "   ${_MGR_IP}  $(echo "$MANAGER_HOSTNAME" | tr ',' ' ')"
     echo "   → Windows: C:\\Windows\\System32\\drivers\\etc\\hosts"
     echo "   → Linux/Mac: /etc/hosts   oder DNS-Server konfigurieren"
     echo "   (Zugriff per IP funktioniert ohne DNS-Eintrag)"
