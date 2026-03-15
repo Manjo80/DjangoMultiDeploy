@@ -11,6 +11,58 @@
   {% endif %}
 </div>
 
+<!-- Server Stats -->
+{% if server_stats %}
+<div class="row g-2 mb-3">
+  <div class="col-sm-4">
+    <div class="card py-2 px-3 text-center">
+      <small class="text-muted">RAM</small>
+      {% if server_stats.mem_total_mb %}
+      <div class="fw-bold">{{ server_stats.mem_used_mb }} / {{ server_stats.mem_total_mb }} MB
+        <span class="text-{% if server_stats.mem_percent > 85 %}danger{% elif server_stats.mem_percent > 65 %}warning{% else %}success{% endif %} small">
+          ({{ server_stats.mem_percent }}%)
+        </span>
+      </div>
+      <div class="progress mt-1" style="height:4px">
+        <div class="progress-bar bg-{% if server_stats.mem_percent > 85 %}danger{% elif server_stats.mem_percent > 65 %}warning{% else %}success{% endif %}"
+             style="width:{{ server_stats.mem_percent }}%"></div>
+      </div>
+      {% else %}
+      <div class="text-muted small">–</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="card py-2 px-3 text-center">
+      <small class="text-muted">Disk (/)</small>
+      {% if server_stats.disk_total_gb %}
+      <div class="fw-bold">{{ server_stats.disk_used_gb }} / {{ server_stats.disk_total_gb }} GB
+        <span class="text-{% if server_stats.disk_percent > 90 %}danger{% elif server_stats.disk_percent > 75 %}warning{% else %}success{% endif %} small">
+          ({{ server_stats.disk_percent }}%)
+        </span>
+      </div>
+      <div class="progress mt-1" style="height:4px">
+        <div class="progress-bar bg-{% if server_stats.disk_percent > 90 %}danger{% elif server_stats.disk_percent > 75 %}warning{% else %}success{% endif %}"
+             style="width:{{ server_stats.disk_percent }}%"></div>
+      </div>
+      {% else %}
+      <div class="text-muted small">–</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="card py-2 px-3 text-center">
+      <small class="text-muted">Load (1m / 5m / 15m)</small>
+      {% if server_stats.load1 %}
+      <div class="fw-bold font-monospace">{{ server_stats.load1 }} / {{ server_stats.load5 }} / {{ server_stats.load15 }}</div>
+      {% else %}
+      <div class="text-muted small">–</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Firewall-Status Banner -->
 {% if ufw.available %}
 <div class="alert py-2 mb-3 d-flex align-items-center gap-3
@@ -55,27 +107,46 @@
       </div>
       <div class="card-body small">
         <table class="table table-sm table-dark mb-0">
-          <tr><th class="text-muted">Modus</th><td>{{ p.MODE|default:"-" }}</td></tr>
-          <tr><th class="text-muted">Port</th><td>{{ p.GUNICORN_PORT|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Modus</th><td>{{ p.MODE|default:"-" }} (DEBUG={{ p.DEBUG|default:"-" }})</td></tr>
           <tr><th class="text-muted">DB</th><td>{{ p.DBTYPE|default:"-" }}{% if p.DBNAME %} / {{ p.DBNAME }}{% endif %}</td></tr>
-          <tr><th class="text-muted">User</th><td>{{ p.APPUSER|default:"-" }}</td></tr>
           <tr><th class="text-muted">Host</th><td class="text-truncate" style="max-width:150px">{{ p.PRIMARY_HOST|default:p.LOCAL_IP|default:"-" }}</td></tr>
-          <tr><th class="text-muted">Installiert</th><td>{{ p.INSTALL_DATE|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Letztes Backup</th>
+              <td class="{% if not p._last_backup %}text-warning{% endif %}">
+                {{ p._last_backup|default:"⚠️ noch keins" }}
+              </td>
+          </tr>
         </table>
       </div>
-      <div class="card-footer d-flex gap-2">
-        <a href="{% url 'project_detail' p.PROJECTNAME %}" class="btn btn-sm btn-outline-primary flex-fill">
-          <i class="bi bi-gear"></i> Verwalten
-        </a>
-        <a href="{% url 'log_viewer' p.PROJECTNAME %}" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-file-text"></i>
-        </a>
-        {% if user.is_staff %}
-        <button class="btn btn-sm btn-outline-success" title="Update"
-                onclick="runUpdate('{{ p.PROJECTNAME }}', this)">
-          <i class="bi bi-arrow-repeat"></i>
-        </button>
-        {% endif %}
+      <div class="card-footer">
+        <div class="d-flex gap-1 flex-wrap">
+          <a href="{% url 'project_detail' p.PROJECTNAME %}" class="btn btn-sm btn-outline-primary flex-fill">
+            <i class="bi bi-gear"></i> Verwalten
+          </a>
+          <a href="{% url 'log_viewer' p.PROJECTNAME %}" class="btn btn-sm btn-outline-secondary" title="Logs">
+            <i class="bi bi-file-text"></i>
+          </a>
+          {% if user.is_staff %}
+          <button class="btn btn-sm btn-outline-success" title="Service neu starten"
+                  onclick="quickAction('{{ p.PROJECTNAME }}', 'restart', this)">
+            <i class="bi bi-arrow-clockwise"></i>
+          </button>
+          {% if p.status == 'active' %}
+          <button class="btn btn-sm btn-outline-warning" title="Stoppen"
+                  onclick="quickAction('{{ p.PROJECTNAME }}', 'stop', this)">
+            <i class="bi bi-stop-fill"></i>
+          </button>
+          {% else %}
+          <button class="btn btn-sm btn-outline-success" title="Starten"
+                  onclick="quickAction('{{ p.PROJECTNAME }}', 'start', this)">
+            <i class="bi bi-play-fill"></i>
+          </button>
+          {% endif %}
+          <button class="btn btn-sm btn-outline-info" title="Git Pull + Update"
+                  onclick="runUpdate('{{ p.PROJECTNAME }}', this)">
+            <i class="bi bi-arrow-repeat"></i>
+          </button>
+          {% endif %}
+        </div>
       </div>
     </div>
   </div>
@@ -85,19 +156,41 @@
 
 {% block extra_js %}
 <script>
+const csrf = '{{ csrf_token }}';
+
+async function quickAction(project, action, btn) {
+  if (action === 'stop' && !confirm(`Service "${project}" wirklich stoppen?`)) return;
+  btn.disabled = true;
+  const origHtml = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', csrf);
+  fd.append('action', action);
+  try {
+    await fetch(`/project/${project}/action/`, {method: 'POST', body: fd});
+    // Reload page to show updated status
+    location.reload();
+  } catch {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    alert('Verbindungsfehler.');
+  }
+}
+
 function runUpdate(project, btn) {
   if (!confirm(`Update für "${project}" starten?`)) return;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
   fetch(`/project/${project}/update/`, {
     method: 'POST',
-    headers: {'X-CSRFToken': '{{ csrf_token }}'},
+    headers: {'X-CSRFToken': csrf},
   })
   .then(r => r.json())
   .then(d => {
     btn.disabled = false;
     btn.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
     alert(d.ok ? `✅ Update erfolgreich:\n${d.output}` : `❌ Update fehlgeschlagen:\n${d.output}`);
+    if (d.ok) location.reload();
   })
   .catch(() => {
     btn.disabled = false;

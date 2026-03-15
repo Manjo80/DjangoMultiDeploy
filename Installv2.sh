@@ -1861,8 +1861,8 @@ fi
 tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.log' \\
     -czf "\$BACKUP_DIR/project_\${TIMESTAMP}.tar.gz" -C /srv "\$PROJECT" 2>/dev/null || echo "⚠️ Projekt-Backup fehlgeschlagen"
 
-# Alte Backups bereinigen (>14 Tage)
-find "\$BACKUP_DIR" -type f -mtime +14 -delete 2>/dev/null
+# Maximal 5 Backups behalten (älteste löschen)
+ls -t "\$BACKUP_DIR"/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
 
 echo "✅ Backup fertig in \$BACKUP_DIR"
 BACKUPEOF
