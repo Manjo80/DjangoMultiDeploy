@@ -85,7 +85,11 @@ class UserProfile(models.Model):
 @receiver(post_save, sender=User)
 def _auto_create_profile(sender, instance, created, **kwargs):
     if created:
-        UserProfile.objects.get_or_create(user=instance)
+        try:
+            UserProfile.objects.get_or_create(user=instance)
+        except Exception:
+            # Table may not exist yet during initial migration
+            pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
