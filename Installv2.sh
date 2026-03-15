@@ -799,17 +799,53 @@ INSTALL_FAIL2BAN="${INSTALL_FAIL2BAN:-J}"
 if [[ "$INSTALL_FAIL2BAN" =~ ^[Jj]$ ]]; then
   echo "🛡️  Installiere fail2ban..."
   _apt_install fail2ban
+
+  # SSH + nginx HTTP Schutz
   cat > /etc/fail2ban/jail.local <<EOF
 [sshd]
-enabled = true
-port = ssh
-filter = sshd
-logpath = /var/log/auth.log
+enabled  = true
+port     = ssh
+filter   = sshd
+logpath  = /var/log/auth.log
 maxretry = 3
-bantime = 3600
+bantime  = 3600
+
+[nginx-4xx]
+enabled  = true
+port     = http,https
+filter   = nginx-4xx
+logpath  = /var/log/nginx/*.access.log
+maxretry = 30
+bantime  = 3600
+findtime = 600
+
+[nginx-scan]
+enabled  = true
+port     = http,https
+filter   = nginx-scan
+logpath  = /var/log/nginx/*.access.log
+maxretry = 3
+bantime  = 86400
+findtime = 3600
 EOF
+
+  # fail2ban Filter: zu viele 4xx-Fehler
+  mkdir -p /etc/fail2ban/filter.d
+  cat > /etc/fail2ban/filter.d/nginx-4xx.conf <<'EOF'
+[Definition]
+failregex = ^<HOST> .+ "(GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH) .+ HTTP/\d\.\d" 4[0-9]{2} .+$
+ignoreregex = ^<HOST> .+ "GET /static/ .+ 404 .+$
+EOF
+
+  # fail2ban Filter: Scanner/Bots die typische WordPress/PHP-Pfade anfragen
+  cat > /etc/fail2ban/filter.d/nginx-scan.conf <<'EOF'
+[Definition]
+failregex = ^<HOST> .+ "(GET|POST) /(?:wp-admin|wp-login\.php|xmlrpc\.php|phpMyAdmin|phpmyadmin|\.env|\.git/|shell\.php|eval\.php|upload\.php|backdoor|webshell|config\.php|setup\.php|install\.php|admin\.php|cms/|joomla|drupal)
+ignoreregex =
+EOF
+
   systemctl enable --now fail2ban
-  echo "✅ fail2ban aktiviert"
+  echo "✅ fail2ban aktiviert (SSH + nginx-4xx + nginx-scan)"
 else
   echo "⏭️  fail2ban übersprungen"
 fi
@@ -1680,7 +1716,7 @@ fi  # end logrotate_done
 if ! is_done "nginx_done"; then
 echo "🌐 Konfiguriere Nginx..."
 
-# Globales reqtime-Logformat einmalig anlegen (idempotent)
+# Globales reqtime-Logformat + Rate-Limit-Zones einmalig anlegen (idempotent)
 if [ ! -f /etc/nginx/conf.d/reqtime_log.conf ]; then
   cat > /etc/nginx/conf.d/reqtime_log.conf <<'LOGFMT'
 log_format reqtime '$remote_addr - $remote_user [$time_local] "$request" '
@@ -1688,6 +1724,17 @@ log_format reqtime '$remote_addr - $remote_user [$time_local] "$request" '
                    '"$http_user_agent" $request_time';
 LOGFMT
   echo "✅ Nginx reqtime-Logformat angelegt"
+fi
+
+if [ ! -f /etc/nginx/conf.d/ratelimit.conf ]; then
+  cat > /etc/nginx/conf.d/ratelimit.conf <<'RATELIMIT'
+# Rate Limiting Zonen (global, für alle Django-Projekte)
+limit_req_zone $binary_remote_addr zone=django_login:10m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=django_api:10m   rate=30r/s;
+limit_req_zone $binary_remote_addr zone=django_general:20m rate=120r/m;
+limit_req_status 429;
+RATELIMIT
+  echo "✅ Nginx Rate-Limit-Zonen angelegt"
 fi
 
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
@@ -1712,6 +1759,31 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none';" always;
+    # HSTS: wird vom Zoraxy/Reverse-Proxy weitergeleitet an den Browser
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Bekannte Angriffspfade direkt blockieren (404 statt proxying)
+    location ~* ^/(wp-admin|wp-login\.php|xmlrpc\.php|phpmyadmin|\.env|\.git|shell\.php|eval\.php) {
+        return 404;
+    }
+
+    # Rate Limiting für Login/Admin-Bereich (strenger)
+    location ~* ^/(login|djadmin|accounts/login|api/auth) {
+        limit_req zone=django_login burst=5 nodelay;
+        add_header Retry-After 60 always;
+
+        proxy_pass http://127.0.0.1:${GUNICORN_PORT};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
 
     # Static Files
     location /static/ {
@@ -1728,14 +1800,16 @@ server {
         access_log off;
     }
 
-    # Django App
+    # Django App (allgemeines Rate Limiting)
     location / {
+        limit_req zone=django_general burst=30 nodelay;
+
         proxy_pass http://127.0.0.1:${GUNICORN_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        
+
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
@@ -1777,6 +1851,65 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 else
   echo "⏭️  Nginx bereits konfiguriert - überspringe"
 fi  # end nginx_done
+
+# -------------------------------------------------------------------
+# Let's Encrypt / Certbot (optional)
+# -------------------------------------------------------------------
+if ! is_done "certbot_done"; then
+  _CERTBOT_DOMAINS=$(echo "$NGINX_SERVER_NAMES" | tr ' ' ',' | sed 's/,$//')
+  # Nur anbieten wenn mindestens ein DNS-Name vorhanden ist (kein reines IP-Setup)
+  _HAS_DOMAIN=false
+  for _h in $NGINX_SERVER_NAMES; do
+    if echo "$_h" | grep -qP '\.'; then
+      if ! echo "$_h" | grep -qP '^\d+\.\d+\.\d+\.\d+$'; then
+        _HAS_DOMAIN=true
+        break
+      fi
+    fi
+  done
+
+  if [[ "$_HAS_DOMAIN" == "true" ]]; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  Let's Encrypt HTTPS-Zertifikat                                  ║"
+    echo "║  Domains: $_CERTBOT_DOMAINS"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    _read -p "  Kostenloses HTTPS-Zertifikat via Let's Encrypt einrichten? [j/N]: " _CERTBOT_ANSWER
+    _CERTBOT_ANSWER="${_CERTBOT_ANSWER:-N}"
+
+    if [[ "$_CERTBOT_ANSWER" =~ ^[Jj]$ ]]; then
+      _read -p "  E-Mail für Let's Encrypt (Ablauf-Benachrichtigungen): " _CERTBOT_EMAIL
+      _CERTBOT_EMAIL="${_CERTBOT_EMAIL:-admin@${_CERTBOT_DOMAINS%%,*}}"
+
+      echo "📦 Installiere certbot..."
+      _apt_install certbot python3-certbot-nginx
+
+      # Zertifikat beantragen — --nginx Plugin passt Konfiguration automatisch an
+      _CERTBOT_DOMAIN_ARGS=""
+      for _d in $(echo "$NGINX_SERVER_NAMES" | tr ',' ' '); do
+        _CERTBOT_DOMAIN_ARGS="$_CERTBOT_DOMAIN_ARGS -d $_d"
+      done
+
+      echo "🔐 Beantrage Zertifikat für: $NGINX_SERVER_NAMES"
+      if certbot --nginx $_CERTBOT_DOMAIN_ARGS \
+          --non-interactive --agree-tos \
+          --email "$_CERTBOT_EMAIL" \
+          --redirect 2>&1; then
+        echo "✅ HTTPS-Zertifikat erfolgreich eingerichtet!"
+        echo "   Auto-Renewal: /etc/cron.d/certbot (systemd-Timer bereits aktiv)"
+      else
+        echo "⚠️  Certbot fehlgeschlagen — nginx auf HTTP belassen."
+        echo "   Mögliche Ursachen: Domain löst noch nicht auf diesen Server auf,"
+        echo "   Port 80 von außen nicht erreichbar, oder DNS noch nicht propagiert."
+      fi
+    else
+      echo "⏭️  Let's Encrypt übersprungen — nginx bleibt auf HTTP."
+    fi
+  else
+    echo "ℹ️  Keine DNS-Domains gefunden (nur IPs) — Let's Encrypt übersprungen."
+  fi
+  mark_done "certbot_done"
+fi  # end certbot_done
 
 # -------------------------------------------------------------------
 # Projekt-Registry (für MOTD und Verwaltung aller Django-Server)

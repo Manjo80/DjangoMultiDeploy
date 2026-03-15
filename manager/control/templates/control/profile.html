@@ -1,0 +1,53 @@
+{% extends "control/base.html" %}
+{% block title %}Profil — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-lg-5">
+
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-person me-2"></i>Profil</div>
+  <div class="card-body">
+    <table class="table table-sm">
+      <tr><th>Benutzername</th><td>{{ user.username }}</td></tr>
+      <tr><th>E-Mail</th><td>{{ user.email|default:"—" }}</td></tr>
+      <tr><th>Rolle</th><td>{{ role_label }}</td></tr>
+      <tr><th>2FA</th>
+          <td>{% if profile.totp_enabled %}<span class="badge" style="background:#238636">Aktiv</span>
+              {% else %}<span class="badge" style="background:#6e7681">Inaktiv</span>{% endif %}</td></tr>
+      <tr><th>Letzte Login-IP</th><td>{{ profile.last_login_ip|default:"—" }}</td></tr>
+    </table>
+    <a href="{% url 'two_factor_setup' %}" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-shield-lock me-1"></i>
+      {% if profile.totp_enabled %}2FA verwalten{% else %}2FA einrichten{% endif %}
+    </a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><i class="bi bi-key me-2"></i>Passwort ändern</div>
+  <div class="card-body">
+    {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+    {% if success_msg %}<div class="alert alert-success">{{ success_msg }}</div>{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="change_password">
+      <div class="mb-3">
+        <label class="form-label">Aktuelles Passwort</label>
+        <input type="password" name="old_password" class="form-control" autocomplete="current-password" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Neues Passwort <span class="text-muted small">(min. 10 Zeichen)</span></label>
+        <input type="password" name="new_password" class="form-control" autocomplete="new-password" minlength="10" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Neues Passwort wiederholen</label>
+        <input type="password" name="new_password2" class="form-control" autocomplete="new-password" minlength="10" required>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Passwort ändern</button>
+    </form>
+  </div>
+</div>
+
+</div>
+</div>
+{% endblock %}

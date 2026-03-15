@@ -3,6 +3,7 @@ Utility functions for reading the DjangoMultiDeploy project registry
 and interacting with systemd services.
 """
 import os
+import json
 import subprocess
 import glob
 import shlex
@@ -767,3 +768,94 @@ def start_install(params):
         )
 
     return log_path, proc.pid
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Security scans
+# ──────────────────────────────────────────────────────────────────────────────
+
+def run_pip_audit(project):
+    """
+    Run pip-audit against the project's venv.
+    Returns a dict: {'ok': bool, 'vulnerabilities': [...], 'error': str}
+    """
+    venv_python = f'/srv/{project}/.venv/bin/python'
+    if not os.path.exists(venv_python):
+        return {'ok': False, 'vulnerabilities': [], 'error': 'venv nicht gefunden'}
+
+    try:
+        result = subprocess.run(
+            [venv_python, '-m', 'pip_audit', '--format=json', '--progress-spinner=off'],
+            capture_output=True, text=True, timeout=120,
+        )
+        # pip_audit exits with 1 when vulnerabilities are found — not an error
+        output = result.stdout.strip()
+        if not output:
+            return {'ok': True, 'vulnerabilities': [], 'error': ''}
+        data = json.loads(output)
+        vulns = []
+        for dep in data.get('dependencies', []):
+            for vuln in dep.get('vulns', []):
+                vulns.append({
+                    'package': dep.get('name', ''),
+                    'version': dep.get('version', ''),
+                    'id':      vuln.get('id', ''),
+                    'fix':     vuln.get('fix_versions', []),
+                    'desc':    vuln.get('description', '')[:200],
+                })
+        return {'ok': True, 'vulnerabilities': vulns, 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'vulnerabilities': [], 'error': 'Timeout (pip-audit)'}
+    except json.JSONDecodeError:
+        return {'ok': False, 'vulnerabilities': [], 'error': 'Ungültige pip-audit Ausgabe'}
+    except Exception as e:
+        return {'ok': False, 'vulnerabilities': [], 'error': str(e)}
+
+
+def run_django_deploy_check(project):
+    """
+    Run `manage.py check --deploy` and return parsed issues.
+    Returns a dict: {'ok': bool, 'issues': [...], 'error': str}
+    """
+    venv_python = f'/srv/{project}/.venv/bin/python'
+    manage_py   = f'/srv/{project}/manage.py'
+    if not os.path.exists(venv_python) or not os.path.exists(manage_py):
+        return {'ok': False, 'issues': [], 'error': 'Projekt-Dateien nicht gefunden'}
+
+    conf = _parse_conf(f'/etc/django-servers.d/{project}.conf') if os.path.exists(
+        f'/etc/django-servers.d/{project}.conf') else {}
+    env_file = f'/srv/{project}/.env'
+
+    try:
+        env = os.environ.copy()
+        env['PYTHONPATH'] = f'/srv/{project}'
+        # Load env from .env file so settings can read secrets
+        if os.path.exists(env_file):
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, _, v = line.partition('=')
+                        env.setdefault(k.strip(), v.strip().strip('"\''))
+
+        result = subprocess.run(
+            [venv_python, manage_py, 'check', '--deploy'],
+            capture_output=True, text=True, timeout=30,
+            cwd=f'/srv/{project}', env=env,
+        )
+        output = (result.stdout + result.stderr).strip()
+        issues = []
+        for line in output.splitlines():
+            line = line.strip()
+            if line and (
+                line.startswith('WARNINGS:') or
+                line.startswith('System check') or
+                ': (' in line
+            ):
+                issues.append(line)
+        ok = result.returncode == 0
+        return {'ok': ok, 'issues': issues, 'raw': output[:3000], 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'issues': [], 'raw': '', 'error': 'Timeout (deploy check)'}
+    except Exception as e:
+        return {'ok': False, 'issues': [], 'raw': '', 'error': str(e)}

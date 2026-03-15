@@ -260,6 +260,22 @@
     </div>
   </div>
 
+  <!-- Sicherheitsscan (lazy-loaded) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-exclamation me-1"></i>Sicherheitsscan</span>
+        <button id="scan-btn" class="btn btn-sm btn-outline-warning" onclick="runSecurityScan()">
+          <i class="bi bi-shield-lock me-1"></i>Scan starten
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="text-muted small">pip-audit (CVE-Check) + Django Deploy-Check — wird erst beim Klick ausgeführt.</div>
+        <div id="scan-output"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Statistiken (lazy-loaded) -->
   <div class="col-12">
     <div class="card">
@@ -589,6 +605,56 @@ async function removeHost(host) {
   } else {
     showMsg('❌ ' + (data.error || data.message), false);
   }
+}
+</script>
+
+<!-- Security Scan JS -->
+<script>
+async function runSecurityScan() {
+  const btn = document.getElementById('scan-btn');
+  const out = document.getElementById('scan-output');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Scanne...';
+  out.innerHTML = '<div class="text-muted small">Läuft... (kann bis zu 60 Sekunden dauern)</div>';
+  try {
+    const r = await fetch('{% url "project_security_scan" name %}');
+    const d = await r.json();
+    let html = '';
+
+    // pip-audit results
+    html += '<h6 class="mt-3 mb-2"><i class="bi bi-box-seam me-2"></i>pip-audit — Abhängigkeiten</h6>';
+    if (!d.pip_audit.ok && d.pip_audit.error) {
+      html += `<div class="alert alert-secondary small">${d.pip_audit.error}</div>`;
+    } else if (d.pip_audit.vulnerabilities && d.pip_audit.vulnerabilities.length > 0) {
+      html += `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.pip_audit.vulnerabilities.length} Sicherheitslücke(n) gefunden!</div>`;
+      html += '<table class="table table-sm"><thead><tr><th>Paket</th><th>Version</th><th>CVE/ID</th><th>Fix</th></tr></thead><tbody>';
+      d.pip_audit.vulnerabilities.forEach(v => {
+        html += `<tr class="text-danger"><td>${v.package}</td><td>${v.version}</td><td>${v.id}</td><td>${v.fix.join(', ') || '—'}</td></tr>`;
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine bekannten Sicherheitslücken gefunden.</div>';
+    }
+
+    // Django deploy check
+    html += '<h6 class="mt-3 mb-2"><i class="bi bi-shield-check me-2"></i>Django Deploy Check</h6>';
+    if (!d.deploy_check.ok || (d.deploy_check.issues && d.deploy_check.issues.length > 0)) {
+      if (d.deploy_check.error) {
+        html += `<div class="alert alert-secondary small">${d.deploy_check.error}</div>`;
+      }
+      if (d.deploy_check.raw) {
+        html += `<pre class="log-output" style="max-height:200px;font-size:0.75rem">${d.deploy_check.raw}</pre>`;
+      }
+    } else {
+      html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Sicherheitswarnungen.</div>';
+    }
+
+    out.innerHTML = html;
+  } catch(e) {
+    out.innerHTML = `<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Erneut scannen';
 }
 </script>
 {% endif %}
