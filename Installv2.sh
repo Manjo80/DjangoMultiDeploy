@@ -2510,7 +2510,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   fi
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
-  echo "🔌 Manager intern:       127.0.0.1:$_MANAGER_PORT (nur lokal)"
+  echo "🔌 Manager-Port:         0.0.0.0:$_MANAGER_PORT (direkt erreichbar)"
   echo "🌐 nginx Hostname:       http://$MANAGER_HOSTNAME/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   echo
@@ -2667,7 +2667,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/python ${_MANAGER_DIR}/manage.py runserver 127.0.0.1:${_MANAGER_PORT}
+ExecStart=${_MANAGER_DIR}/venv/bin/python ${_MANAGER_DIR}/manage.py runserver 0.0.0.0:${_MANAGER_PORT}
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
@@ -2678,7 +2678,7 @@ MANSERVEOF
 
   systemctl daemon-reload
   systemctl enable --now djmanager
-  echo "✅ Manager-Service gestartet (intern auf 127.0.0.1:${_MANAGER_PORT})"
+  echo "✅ Manager-Service gestartet (0.0.0.0:${_MANAGER_PORT} + nginx Port 80)"
 
   # nginx Reverse Proxy für Manager
   # Manager ist über nginx (Port 80) und direkt über Port 8888 erreichbar
@@ -2747,13 +2747,18 @@ MGNGINXEOF
   if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "               oder http://${MANAGER_HOSTNAME}/ (wenn DNS eingetragen)"
   fi
-  echo "   (nginx auf Port 80 → intern 127.0.0.1:${_MANAGER_PORT})"
+  echo "   (nginx Port 80 → 127.0.0.1:${_MANAGER_PORT} | direkt: http://${_MGR_IP}:${_MANAGER_PORT}/)"
   echo "📊 Status:         systemctl status djmanager"
   echo "📋 Logs:           journalctl -u djmanager -f"
   echo "🔄 Update:         djmanager_update.sh"
   echo
   echo "🔒 Sicherheit:"
-  echo "   Port ${_MANAGER_PORT} ist komplett gesperrt — Zugriff NUR via nginx"
+  echo "   Port ${_MANAGER_PORT} ist geöffnet (direkt + nginx Port 80)"
+  if command -v ufw >/dev/null 2>&1; then
+    echo "   ufw: Port ${_MANAGER_PORT} via Firewall-Seite im Manager steuerbar"
+  else
+    echo "   ufw nicht installiert — Port ${_MANAGER_PORT} ohne Firewall offen"
+  fi
   echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
   if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo
