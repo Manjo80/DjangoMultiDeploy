@@ -2499,26 +2499,11 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
-  # ── Hostname-Varianten automatisch erkennen ─────────────────────────────────
+  # Hostnamen automatisch erkennen (kurz + FQDN)
   _HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null | cut -d. -f1 || echo '')"
   _HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo '')"
 
-  # Netzwerk-Domain aus hostname -d, Fallback: Domain-Teil des FQDN
-  _HOSTNAME_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
-  if [ -z "$_HOSTNAME_DOMAIN" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
-    _HOSTNAME_DOMAIN="${_HOSTNAME_FQDN#*.}"   # alles nach dem ersten Punkt
-  fi
-
-  # Kombination kurz+domain nur wenn sie nicht schon gleich dem FQDN ist
-  if [ -n "$_HOSTNAME_DOMAIN" ] && [ "${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}" != "$_HOSTNAME_FQDN" ]; then
-    _HOSTNAME_WITH_DOMAIN="${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}"
-  else
-    _HOSTNAME_WITH_DOMAIN=""   # bereits via FQDN abgedeckt
-  fi
-  # Alias: für den Rest des Skripts weiter als _HOSTNAME_IOT nutzbar
-  _HOSTNAME_IOT="$_HOSTNAME_WITH_DOMAIN"
-
-  # Default für Manager-Hostname: FQDN bevorzugen falls er eine Domain enthält
+  # Default: FQDN wenn er eine Domain enthält, sonst IP
   if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
     _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_FQDN}}"
   else
@@ -2527,25 +2512,19 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   echo
   echo "🌐 nginx-Hostname / IP für den Manager:"
-  echo "   Der Manager wird über nginx (Port 80) erreichbar sein."
-  echo ""
   echo "   Automatisch erkannte Hostnamen dieses Servers:"
-  echo "   • IP-Adresse: ${_MGR_DEFAULT_IP}"
-  [ -n "$_HOSTNAME_SHORT"  ] && echo "   • Kurzname:   ${_HOSTNAME_SHORT}"
-  if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ]; then
-    echo "   • FQDN:       ${_HOSTNAME_FQDN}"
-    [ -n "$_HOSTNAME_DOMAIN" ] && echo "   • Netz-Domain: .${_HOSTNAME_DOMAIN}  (aus hostname -d)"
-  fi
+  echo "   • IP:     ${_MGR_DEFAULT_IP}"
+  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurz:   ${_HOSTNAME_SHORT}"
+  [ -n "$_HOSTNAME_FQDN"  ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && \
+    echo "   • FQDN:   ${_HOSTNAME_FQDN}"
   echo ""
-  echo "   Alle erkannten Namen werden automatisch in nginx + ALLOWED_HOSTS eingetragen."
+  echo "   Diese Namen werden automatisch in nginx + ALLOWED_HOSTS eingetragen."
   echo ""
-  echo "   ┌─ Internet-Hostname (optional) ──────────────────────────────────────┐"
-  echo "   │ Falls der Manager über das Internet erreichbar sein soll,           │"
-  echo "   │ gib hier deinen öffentlichen DNS-Namen ein (z.B. manager.example.com)│"
-  echo "   │ Für rein lokalen Betrieb: leer lassen / Enter drücken.              │"
-  echo "   └─────────────────────────────────────────────────────────────────────┘"
-  echo "   Tipp: Lokaler Zugriff → einfach Enter drücken (${_DEFAULT_MGR_HOST})"
-  _read -p "Primärer Hostname / Internet-Domain [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  echo "   Hier zusätzliche Namen angeben falls nötig, z.B.:"
+  echo "   • Netz-Domain-Suffix  → ${_HOSTNAME_SHORT}.iot  (wenn 'hostname -d' z.B. 'iot' liefert)"
+  echo "   • Reverse-Proxy-Name  → manager.example.com"
+  echo "   Für rein lokalen Betrieb: einfach Enter drücken."
+  _read -p "Zusätzlicher Hostname / Reverse-Proxy-Name [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
   # DNS-Check: Hostname prüfen und ggf. warnen
@@ -2621,7 +2600,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Alle IPs aller Interfaces erfassen — verhindert "Bad Request (400)" bei
   # Zugriff über eine IP die beim Install nicht die primäre war
   _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
-  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_HOSTNAME_IOT},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
+  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
   # Doppelte + leere Einträge entfernen
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
@@ -2631,8 +2610,8 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Hilfsfunktion: host → "http://host,http://host:PORT"
   _csrf_pair() { echo "http://${1},http://${1}:${_MANAGER_PORT}"; }
   _MGR_CSRF_ORIGINS="$(_csrf_pair "${MANAGER_HOSTNAME}")"
-  # Alle erkannten Hostnamen (kurz, FQDN, .iot) mit und ohne Port
-  for _h in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_HOSTNAME_IOT}" "${_MGR_DEFAULT_IP}" "127.0.0.1" "localhost"; do
+  # Alle erkannten Hostnamen (kurz, FQDN) mit und ohne Port
+  for _h in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}" "127.0.0.1" "localhost"; do
     [ -z "$_h" ] && continue
     _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_h")"
   done
@@ -2718,30 +2697,18 @@ if [ -f "\$_ENV_FILE" ]; then
   _CUR_CSRF="\$(grep '^CSRF_TRUSTED_ORIGINS=' "\$_ENV_FILE" | cut -d= -f2-)"
   _MGR_PORT_UP="\$(grep '^MANAGER_PORT=' "\$_ENV_FILE" | cut -d= -f2- | tr -d '\"')"
   _MGR_PORT_UP="\${_MGR_PORT_UP:-8888}"
-  # Alle aktuellen Hostnamen des Servers ermitteln (automatisch, kein hardcoded Suffix)
+  # Hostnamen des Servers ermitteln
   _UPD_SHORT="\$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
   _UPD_FQDN="\$(hostname -f 2>/dev/null || echo '')"
-  _UPD_DOMAIN="\$(hostname -d 2>/dev/null || echo '')"
-  # Domain-Fallback aus FQDN extrahieren
-  if [ -z "\$_UPD_DOMAIN" ] && echo "\$_UPD_FQDN" | grep -q '\.'; then
-    _UPD_DOMAIN="\${_UPD_FQDN#*.}"
-  fi
-  # Kurzname+Domain nur wenn nicht schon gleich dem FQDN
-  if [ -n "\$_UPD_DOMAIN" ] && [ "\${_UPD_SHORT}.\${_UPD_DOMAIN}" != "\$_UPD_FQDN" ]; then
-    _UPD_IOT="\${_UPD_SHORT}.\${_UPD_DOMAIN}"
-  else
-    _UPD_IOT=""
-  fi
   _ALL_IPS="\$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^\$|^::' | paste -sd, -)"
   _NEEDS_FIX=0
-  # Prüfen ob Port-Variante und .iot bereits vorhanden
+  # Prüfen ob Port-Variante bereits vorhanden
   echo "\$_CUR_CSRF" | grep -q ":\${_MGR_PORT_UP}" || _NEEDS_FIX=1
-  echo "\$_CUR_CSRF" | grep -qF "\${_UPD_IOT}"      || _NEEDS_FIX=1
   if [ "\$_NEEDS_FIX" = "1" ]; then
-    echo "  🔧 Ergänze CSRF_TRUSTED_ORIGINS (Port :\${_MGR_PORT_UP} + .iot-Hostname)..."
+    echo "  🔧 Ergänze CSRF_TRUSTED_ORIGINS (Port :\${_MGR_PORT_UP})..."
     _NEW_CSRF="\$_CUR_CSRF"
-    # Alle Hostnamen: IPs, kurz, FQDN, .iot, loopback
-    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') "\$_UPD_SHORT" "\$_UPD_FQDN" "\$_UPD_IOT" 127.0.0.1 localhost; do
+    # Alle Hostnamen: IPs, kurz, FQDN, loopback
+    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') "\$_UPD_SHORT" "\$_UPD_FQDN" 127.0.0.1 localhost; do
       [ -z "\$_h" ] && continue
       echo "\$_NEW_CSRF" | grep -qF "http://\${_h}:\${_MGR_PORT_UP}" || \
         _NEW_CSRF="\${_NEW_CSRF},http://\${_h}:\${_MGR_PORT_UP}"
@@ -2751,7 +2718,7 @@ if [ -f "\$_ENV_FILE" ]; then
     # ALLOWED_HOSTS ebenfalls vervollständigen
     _CUR_AH="\$(grep '^ALLOWED_HOSTS=' "\$_ENV_FILE" | cut -d= -f2-)"
     _NEW_AH="\$_CUR_AH"
-    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') "\$_UPD_SHORT" "\$_UPD_FQDN" "\$_UPD_IOT"; do
+    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') "\$_UPD_SHORT" "\$_UPD_FQDN"; do
       [ -z "\$_h" ] && continue
       echo "\$_NEW_AH" | grep -qF "\$_h" || _NEW_AH="\${_NEW_AH},\${_h}"
     done
@@ -2821,9 +2788,9 @@ MANSERVEOF
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 
   # server_name: alle Hostnamen + IP + .iot-Variante + catch-all (_)
-  # Damit ist der Manager per IP, Kurzname, FQDN UND hostname.iot erreichbar
+  # Damit ist der Manager per IP, Kurzname und FQDN erreichbar
   _MGR_NGINX_NAMES="${MANAGER_HOSTNAME}"
-  for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_HOSTNAME_IOT}" "${_MGR_DEFAULT_IP}"; do
+  for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}"; do
     [ -z "$_n" ] && continue
     # Nur hinzufügen wenn noch nicht enthalten
     echo "$_MGR_NGINX_NAMES" | grep -qF "$_n" || _MGR_NGINX_NAMES="${_MGR_NGINX_NAMES} ${_n}"
