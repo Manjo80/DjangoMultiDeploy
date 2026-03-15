@@ -858,24 +858,42 @@ fi  # end pkgs_installed
 # -------------------------------------------------------------------
 # Firewall Grundkonfiguration (ufw) — einmalig für den gesamten Server
 # -------------------------------------------------------------------
-if ! is_done "ufw_base_done"; then
+# Bedingung: noch nicht erledigt ODER ufw fehlt trotz gesetztem Flag (z.B.
+# wegen eines Fehlers beim letzten Lauf oder gesetztem State ohne Installation)
+if ! is_done "ufw_base_done" || ! command -v ufw >/dev/null 2>&1; then
 echo "🔒 Konfiguriere Firewall (ufw)..."
 
-# ufw installieren falls nicht vorhanden (LXC: kein iptables-legacy nötig)
+# ufw installieren falls nicht vorhanden
 if ! command -v ufw >/dev/null 2>&1; then
   echo "  📦 Installiere ufw..."
-  _apt_install ufw
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
+  if ! command -v ufw >/dev/null 2>&1; then
+    echo "  ❌ ufw konnte nicht installiert werden — Firewall wird übersprungen"
+    mark_done "ufw_base_done"
+    # shellcheck disable=SC2209
+    _UFW_SKIP=1
+  fi
 fi
 
-# Prüfen ob ufw in diesem LXC-Container funktioniert (manche LXC haben kein iptables)
-if ! ufw status >/dev/null 2>&1; then
+if [ "${_UFW_SKIP:-0}" != "1" ]; then
+
+# iptables-Module laden (LXC-Container benötigen dies manchmal)
+modprobe iptable_filter   2>/dev/null || true
+modprobe ip6table_filter  2>/dev/null || true
+modprobe iptable_nat      2>/dev/null || true
+
+# Prüfen ob ufw in diesem Container wirklich funktioniert
+_UFW_STATUS_OUT=$(ufw status 2>&1)
+_UFW_STATUS_RC=$?
+if [ $_UFW_STATUS_RC -ne 0 ] && echo "$_UFW_STATUS_OUT" | grep -qi "error\|iptables\|failed"; then
   echo "  ⚠️  ufw nicht verfügbar in diesem Container (LXC ohne iptables-Unterstützung)"
+  echo "     Ausgabe: $_UFW_STATUS_OUT"
   echo "     Firewall-Konfiguration wird übersprungen."
   mark_done "ufw_base_done"
 else
 
-# Regeln nur setzen wenn ufw noch nicht aktiv/konfiguriert ist
-# (verhindert Überschreiben bei Re-Installation)
+# Regeln setzen wenn ufw noch nicht aktiv ist (verhindert Überschreiben bei Re-Installation)
 if ! ufw status | grep -q "Status: active"; then
   echo "  🔧 Setze Basis-Firewall-Regeln..."
 
@@ -920,6 +938,8 @@ fi
 fi  # end ufw available check
 
 mark_done "ufw_base_done"
+fi  # end _UFW_SKIP
+
 else
   echo "⏭️  Firewall-Grundkonfiguration bereits erledigt - überspringe"
 fi  # end ufw_base_done
@@ -2758,11 +2778,14 @@ MGNGINXEOF
   echo "🔄 Update:         djmanager_update.sh"
   echo
   echo "🔒 Sicherheit:"
-  echo "   Port ${_MANAGER_PORT} ist geöffnet (direkt + nginx Port 80)"
-  if command -v ufw >/dev/null 2>&1; then
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    echo "   Port ${_MANAGER_PORT} offen (ufw-Regel aktiv + nginx Port 80)"
     echo "   ufw: Port ${_MANAGER_PORT} via Firewall-Seite im Manager steuerbar"
+  elif command -v ufw >/dev/null 2>&1; then
+    echo "   Port ${_MANAGER_PORT} offen (ufw installiert aber inaktiv — bitte prüfen)"
   else
-    echo "   ufw nicht installiert — Port ${_MANAGER_PORT} ohne Firewall offen"
+    echo "   ⚠️  ufw nicht verfügbar (LXC?) — Port ${_MANAGER_PORT} ohne Firewall offen"
+    echo "   Empfehlung: apt install ufw && ufw allow ${_MANAGER_PORT}/tcp && ufw enable"
   fi
   echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
   if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
