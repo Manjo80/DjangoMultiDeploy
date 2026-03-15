@@ -798,6 +798,78 @@ else
 fi  # end pkgs_installed
 
 # -------------------------------------------------------------------
+# Firewall Grundkonfiguration (ufw) — einmalig für den gesamten Server
+# -------------------------------------------------------------------
+if ! is_done "ufw_base_done"; then
+echo "🔒 Konfiguriere Firewall (ufw)..."
+
+# ufw installieren falls nicht vorhanden (LXC: kein iptables-legacy nötig)
+if ! command -v ufw >/dev/null 2>&1; then
+  echo "  📦 Installiere ufw..."
+  _apt_install ufw
+fi
+
+# Prüfen ob ufw in diesem LXC-Container funktioniert (manche LXC haben kein iptables)
+if ! ufw status >/dev/null 2>&1; then
+  echo "  ⚠️  ufw nicht verfügbar in diesem Container (LXC ohne iptables-Unterstützung)"
+  echo "     Firewall-Konfiguration wird übersprungen."
+  mark_done "ufw_base_done"
+else
+
+# Regeln nur setzen wenn ufw noch nicht aktiv/konfiguriert ist
+# (verhindert Überschreiben bei Re-Installation)
+if ! ufw status | grep -q "Status: active"; then
+  echo "  🔧 Setze Basis-Firewall-Regeln..."
+
+  ufw --force reset 2>/dev/null || true
+
+  # Standard: eingehend verweigern, ausgehend erlauben
+  ufw default deny incoming
+  ufw default allow outgoing
+
+  # SSH — unbedingt zuerst, sonst wird man ausgesperrt!
+  ufw allow 22/tcp comment 'SSH'
+  echo "  ✅ Port 22 (SSH) erlaubt"
+
+  # HTTP + HTTPS für nginx
+  ufw allow 80/tcp  comment 'HTTP nginx'
+  ufw allow 443/tcp comment 'HTTPS nginx'
+  echo "  ✅ Port 80/443 (HTTP/HTTPS) erlaubt"
+
+  # Loopback immer erlauben (Gunicorn kommuniziert über 127.0.0.1)
+  ufw allow in on lo comment 'Loopback intern'
+
+  # Alle Gunicorn-Ports (8000-8999) von außen sperren
+  # (Gunicorn hört ohnehin auf 127.0.0.1 — das ist eine zweite Absicherung)
+  ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
+  echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt"
+
+  # Manager-Port 8888: nur aus privaten Netzwerken (LAN) erlauben
+  # 10.x.x.x / 172.16-31.x.x / 192.168.x.x
+  ufw allow from 10.0.0.0/8     to any port 8888 proto tcp comment 'Manager LAN (10.x)'
+  ufw allow from 172.16.0.0/12  to any port 8888 proto tcp comment 'Manager LAN (172.x)'
+  ufw allow from 192.168.0.0/16 to any port 8888 proto tcp comment 'Manager LAN (192.168)'
+  ufw deny  8888/tcp comment 'Manager (extern gesperrt)'
+  echo "  ✅ Port 8888 (Manager) nur LAN-Zugriff (192.168.x / 10.x / 172.x)"
+
+  # Firewall aktivieren
+  ufw --force enable
+  echo "  ✅ Firewall aktiviert"
+  echo
+  ufw status verbose 2>/dev/null || ufw status
+else
+  echo "  ✅ Firewall bereits aktiv — Basis-Regeln werden nicht überschrieben"
+  ufw status numbered 2>/dev/null | head -20
+fi
+
+fi  # end ufw available check
+
+mark_done "ufw_base_done"
+else
+  echo "⏭️  Firewall-Grundkonfiguration bereits erledigt - überspringe"
+fi  # end ufw_base_done
+
+# -------------------------------------------------------------------
 # SSH-Server: PasswordAuthentication + PermitRootLogin sicherstellen
 # -------------------------------------------------------------------
 if ! is_done "sshd_configured"; then
@@ -1654,6 +1726,25 @@ else
 fi  # end registry_done
 
 # -------------------------------------------------------------------
+# Firewall (ufw) — Gunicorn-Port nach außen sperren
+# -------------------------------------------------------------------
+if ! is_done "firewall_done"; then
+if command -v ufw >/dev/null 2>&1; then
+  echo "🔒 Konfiguriere Firewall für Gunicorn-Port $GUNICORN_PORT..."
+  # Gunicorn-Port von außen sperren (läuft ohnehin auf 127.0.0.1, Doppelabsicherung)
+  ufw deny "${GUNICORN_PORT}/tcp" comment "Gunicorn ${PROJECTNAME} (intern only)" 2>/dev/null || true
+  ufw reload 2>/dev/null || true
+  echo "  ✅ Port $GUNICORN_PORT extern gesperrt (nginx → 127.0.0.1:${GUNICORN_PORT} intern OK)"
+else
+  echo "  ℹ️  ufw nicht gefunden — Firewall muss manuell konfiguriert werden"
+  echo "     Empfehlung: apt install ufw && ufw deny ${GUNICORN_PORT}/tcp"
+fi
+mark_done "firewall_done"
+else
+  echo "⏭️  Firewall bereits konfiguriert - überspringe"
+fi  # end firewall_done
+
+# -------------------------------------------------------------------
 # Sudoers + Update-Skript
 # -------------------------------------------------------------------
 if ! is_done "scripts_done"; then
@@ -2398,8 +2489,11 @@ MANSERVEOF
   echo "📋 Logs:           journalctl -u djmanager -f"
   echo "🔄 Update:         djmanager_update.sh"
   echo
-  echo "⚠️  Der Manager läuft als root — nur im internen Netz verwenden!"
-  echo "   Für externen Zugriff: Zoraxy/nginx mit Authentifizierung vorschalten."
+  echo "🔒 Firewall:"
+  echo "   Port ${_MANAGER_PORT} ist nur aus dem LAN erreichbar (10.x / 172.x / 192.168.x)"
+  echo "   Externer Zugriff: SSH-Tunnel empfohlen:"
+  echo "     ssh -L ${_MANAGER_PORT}:127.0.0.1:${_MANAGER_PORT} root@${_MGR_IP}"
+  echo "     → dann http://127.0.0.1:${_MANAGER_PORT}/ im Browser"
   echo "════════════════════════════════════════════════════════════════════"
 fi  # end INSTALL_MANAGER
 

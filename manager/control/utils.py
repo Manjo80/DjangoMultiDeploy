@@ -344,6 +344,47 @@ def update_allowed_hosts(name, hosts):
     return True, ' | '.join(msgs)
 
 
+def get_ufw_status(gunicorn_port=None):
+    """
+    Returns dict with ufw status and relevant rules.
+    {enabled, rules: [{num, action, to, from, comment}], port_blocked}
+    """
+    result = {'enabled': False, 'rules': [], 'port_blocked': None, 'available': False}
+    try:
+        r = subprocess.run(['ufw', 'status', 'numbered'],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0 and 'not found' in r.stderr:
+            return result
+        result['available'] = True
+        output = r.stdout
+        result['enabled'] = 'Status: active' in output
+        for line in output.splitlines():
+            # Format: [ 1] 80/tcp                     ALLOW IN    Anywhere
+            import re
+            m = re.match(r'\[\s*(\d+)\]\s+(\S+)\s+(ALLOW|DENY|REJECT)\s+(\S+)\s*(.*)', line)
+            if m:
+                result['rules'].append({
+                    'num': m.group(1),
+                    'to': m.group(2),
+                    'action': m.group(3),
+                    'frm': m.group(4),
+                    'comment': m.group(5).strip(),
+                })
+        if gunicorn_port:
+            port_str = str(gunicorn_port)
+            for rule in result['rules']:
+                if port_str in rule['to'] and rule['action'] == 'DENY':
+                    result['port_blocked'] = True
+                    break
+            if result['port_blocked'] is None and result['enabled']:
+                result['port_blocked'] = False
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return result
+
+
 def start_install(params):
     """
     Launch Installv2.sh in NONINTERACTIVE mode as a background process.

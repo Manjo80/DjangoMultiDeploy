@@ -37,7 +37,7 @@ from .utils import (
     service_action, get_journal_logs, get_nginx_log,
     list_backups, run_update, run_backup, get_ssh_key, start_install,
     get_global_deploy_key, get_allowed_hosts, get_nginx_server_names,
-    update_allowed_hosts,
+    update_allowed_hosts, get_ufw_status,
 )
 
 
@@ -47,7 +47,8 @@ from .utils import (
 
 def dashboard(request):
     projects = get_all_projects()
-    return render(request, 'control/dashboard.html', {'projects': projects})
+    ufw = get_ufw_status()
+    return render(request, 'control/dashboard.html', {'projects': projects, 'ufw': ufw})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -279,12 +280,14 @@ def project_detail(request, name):
     backups = list_backups(name)
     allowed_hosts = get_allowed_hosts(name)
     nginx_names = get_nginx_server_names(name)
+    ufw = get_ufw_status(conf.get('GUNICORN_PORT'))
     return render(request, 'control/project_detail.html', {
         'conf': conf,
         'name': name,
         'backups': backups,
         'allowed_hosts': allowed_hosts,
         'nginx_names': nginx_names,
+        'ufw': ufw,
     })
 
 
