@@ -2581,9 +2581,24 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   # .env für Manager
   _MANAGER_SECRET="$(openssl rand -hex 32)"
-  # ALLOWED_HOSTS: Hostname + Server-IP + Loopback — immer alles eintragen
-  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_MGR_DEFAULT_IP},127.0.0.1,localhost"
-  _MGR_CSRF_ORIGINS="http://${MANAGER_HOSTNAME},http://${_MGR_DEFAULT_IP},http://127.0.0.1,http://localhost"
+
+  # ALLOWED_HOSTS: Hostname + ALLE lokalen IPs + Loopback
+  # Alle IPs aller Interfaces erfassen — verhindert "Bad Request (400)" bei
+  # Zugriff über eine IP die beim Install nicht die primäre war
+  _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
+  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
+  # Doppelte Einträge entfernen
+  _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
+
+  # CSRF_TRUSTED_ORIGINS: HTTP-Varianten MIT und OHNE Port
+  # KRITISCH: Browser sendet bei Port-8888-Zugriff "Origin: http://IP:8888"
+  # → diese URL MUSS in CSRF_TRUSTED_ORIGINS stehen, sonst 403 beim Login-POST
+  _MGR_CSRF_ORIGINS="http://${MANAGER_HOSTNAME},http://${MANAGER_HOSTNAME}:${_MANAGER_PORT},http://${_MGR_DEFAULT_IP},http://${_MGR_DEFAULT_IP}:${_MANAGER_PORT},http://127.0.0.1,http://127.0.0.1:${_MANAGER_PORT},http://localhost,http://localhost:${_MANAGER_PORT}"
+  # Alle weiteren IPs ebenfalls mit und ohne Port aufnehmen
+  for _ip in $(echo "${_ALL_MGR_IPS}" | tr ',' ' '); do
+    [ -z "$_ip" ] && continue
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip},http://${_ip}:${_MANAGER_PORT}"
+  done
   cat > "$_MANAGER_DIR/.env" <<MANAGERENV
 SECRET_KEY=${_MANAGER_SECRET}
 DEBUG=False
@@ -2650,6 +2665,42 @@ fi
 if [ -f "\$MANAGER_DIR/requirements.txt" ]; then
   echo "📦 Installiere Requirements..."
   "\$MANAGER_DIR/venv/bin/pip" install --no-cache-dir --prefer-binary -r "\$MANAGER_DIR/requirements.txt" -q
+fi
+
+# .env: CSRF_TRUSTED_ORIGINS aktualisieren falls Port-Varianten fehlen
+# (Fix für Installationen vor dem CSRF-Port-Fix)
+_ENV_FILE="\$MANAGER_DIR/.env"
+if [ -f "\$_ENV_FILE" ]; then
+  _CUR_CSRF="\$(grep '^CSRF_TRUSTED_ORIGINS=' "\$_ENV_FILE" | cut -d= -f2-)"
+  _MGR_PORT_UP="\$(grep '^MANAGER_PORT=' "\$_ENV_FILE" | cut -d= -f2- | tr -d '\"')"
+  _MGR_PORT_UP="\${_MGR_PORT_UP:-8888}"
+  _NEEDS_FIX=0
+  # Prüfen ob Port-Variante bereits vorhanden
+  echo "\$_CUR_CSRF" | grep -q ":\${_MGR_PORT_UP}" || _NEEDS_FIX=1
+  if [ "\$_NEEDS_FIX" = "1" ]; then
+    echo "  🔧 Ergänze CSRF_TRUSTED_ORIGINS um Port-Varianten (:\${_MGR_PORT_UP})..."
+    _ALL_IPS="\$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^\$|^::' | paste -sd, -)"
+    _NEW_CSRF="\$_CUR_CSRF"
+    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') 127.0.0.1 localhost; do
+      [ -z "\$_h" ] && continue
+      # Füge Port-Variante hinzu falls noch nicht vorhanden
+      echo "\$_NEW_CSRF" | grep -qF "http://\${_h}:\${_MGR_PORT_UP}" || \
+        _NEW_CSRF="\${_NEW_CSRF},http://\${_h}:\${_MGR_PORT_UP}"
+      echo "\$_NEW_CSRF" | grep -qF "http://\${_h}" || \
+        _NEW_CSRF="\${_NEW_CSRF},http://\${_h}"
+    done
+    # ALLOWED_HOSTS ebenfalls vervollständigen
+    _CUR_AH="\$(grep '^ALLOWED_HOSTS=' "\$_ENV_FILE" | cut -d= -f2-)"
+    _NEW_AH="\$_CUR_AH"
+    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' '); do
+      echo "\$_NEW_AH" | grep -qF "\$_h" || _NEW_AH="\${_NEW_AH},\${_h}"
+    done
+    sed -i "s|^CSRF_TRUSTED_ORIGINS=.*|CSRF_TRUSTED_ORIGINS=\${_NEW_CSRF}|" "\$_ENV_FILE"
+    sed -i "s|^ALLOWED_HOSTS=.*|ALLOWED_HOSTS=\${_NEW_AH}|" "\$_ENV_FILE"
+    echo "  ✅ CSRF_TRUSTED_ORIGINS und ALLOWED_HOSTS aktualisiert"
+  else
+    echo "  ✅ CSRF_TRUSTED_ORIGINS bereits vollständig"
+  fi
 fi
 
 # Migrationen
@@ -2736,10 +2787,11 @@ server {
     # Manager-App (Django runserver auf 127.0.0.1)
     location / {
         proxy_pass http://127.0.0.1:${_MANAGER_PORT};
-        proxy_set_header Host \$host;
+        proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$http_host;
         proxy_connect_timeout 30s;
         proxy_read_timeout 300s;
     }
