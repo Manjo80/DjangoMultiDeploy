@@ -239,6 +239,63 @@
     </div>
   </div>
 
+  <!-- Statistiken (lazy-loaded) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-bar-chart-line me-1"></i> Zugriffsstatistiken</span>
+        <button id="stats-load-btn" class="btn btn-sm btn-outline-info" onclick="loadStats()">
+          <i class="bi bi-arrow-clockwise me-1"></i> Statistiken laden
+        </button>
+      </div>
+      <div id="stats-container" class="card-body d-none">
+        <div id="stats-loading" class="text-muted small">
+          <span class="spinner-border spinner-border-sm me-1"></span> Lade…
+        </div>
+        <div id="stats-content" class="d-none">
+
+          <!-- Request-Trend -->
+          <div class="row g-3 mb-4">
+            <div class="col-md-8">
+              <h6 class="text-muted mb-2">Requests letzte 7 Tage</h6>
+              <div id="chart-days" class="d-flex gap-1 align-items-end" style="height:80px"></div>
+              <div id="chart-days-labels" class="d-flex gap-1 mt-1" style="font-size:.7rem;color:#888"></div>
+            </div>
+            <div class="col-md-4">
+              <h6 class="text-muted mb-2">Status-Codes</h6>
+              <div id="status-codes" class="d-flex flex-wrap gap-1"></div>
+              <div id="avg-rt" class="mt-2 small text-muted"></div>
+            </div>
+          </div>
+
+          <!-- Top URLs -->
+          <div class="row g-3 mb-3">
+            <div class="col-md-6">
+              <h6 class="text-muted mb-2">Top 10 URLs</h6>
+              <table class="table table-sm table-dark mb-0" id="top-urls">
+                <thead><tr><th>URL</th><th class="text-end">Hits</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="col-md-6">
+              <h6 class="text-muted mb-2">Top 10 IPs</h6>
+              <table class="table table-sm table-dark mb-0" id="top-ips">
+                <thead><tr><th>IP</th><th class="text-end">Hits</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Service Events -->
+          <h6 class="text-muted mb-2 border-top pt-3">Service-Ereignisse (letzte 14 Tage)</h6>
+          <div id="service-summary" class="d-flex gap-2 mb-2"></div>
+          <div id="service-events" style="max-height:220px;overflow-y:auto"></div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 {% endblock %}
 
@@ -302,6 +359,110 @@ function renderBackups(backups) {
   // Update counter badge
   const badge = document.querySelector('.card-header .badge.bg-secondary');
   if (badge) badge.textContent = `${backups.length}/5`;
+}
+
+// ── STATS ──────────────────────────────────────────────────────────────────
+const statsUrl = "{% url 'project_stats' name %}";
+let statsLoaded = false;
+
+async function loadStats() {
+  if (statsLoaded) return;
+  const container = document.getElementById('stats-container');
+  const loading = document.getElementById('stats-loading');
+  const content = document.getElementById('stats-content');
+  const btn = document.getElementById('stats-load-btn');
+  container.classList.remove('d-none');
+  btn.disabled = true;
+  loading.classList.remove('d-none');
+
+  try {
+    const r = await fetch(statsUrl);
+    const d = await r.json();
+    statsLoaded = true;
+
+    // ── Requests per day chart ────────────────────────────────────────────
+    const days = d.nginx.by_day || [];
+    const maxVal = Math.max(1, ...days.map(x => x.count));
+    const chartDays = document.getElementById('chart-days');
+    const chartLabels = document.getElementById('chart-days-labels');
+    if (days.length) {
+      chartDays.innerHTML = days.map(x => {
+        const h = Math.max(4, Math.round((x.count / maxVal) * 76));
+        return `<div title="${x.label}: ${x.count} Req." style="flex:1;height:${h}px;background:#0d6efd;border-radius:3px 3px 0 0;min-width:20px"></div>`;
+      }).join('');
+      chartLabels.innerHTML = days.map(x =>
+        `<div style="flex:1;text-align:center">${x.label}</div>`
+      ).join('');
+    } else {
+      chartDays.innerHTML = '<span class="text-muted small">Keine Log-Daten verfügbar</span>';
+    }
+
+    // ── Status codes ──────────────────────────────────────────────────────
+    const statusColors = {'2xx': 'success', '3xx': 'info', '4xx': 'warning', '5xx': 'danger'};
+    const sc = d.nginx.by_status || {};
+    document.getElementById('status-codes').innerHTML = Object.entries(sc).map(([k, v]) =>
+      `<span class="badge bg-${statusColors[k] || 'secondary'} font-monospace">${k}: ${v}</span>`
+    ).join('') || '<span class="text-muted small">Keine Daten</span>';
+
+    // ── Avg response time ────────────────────────────────────────────────
+    const rtEl = document.getElementById('avg-rt');
+    if (d.nginx.has_rt) {
+      rtEl.innerHTML = `<i class="bi bi-clock me-1"></i>Ø Antwortzeit: <strong>${d.nginx.avg_rt} ms</strong>`;
+    } else {
+      rtEl.innerHTML = '<small class="text-muted">Antwortzeit: kein Log-Format mit $request_time</small>';
+    }
+
+    // ── Total requests summary ────────────────────────────────────────────
+    const totalDiv = document.createElement('div');
+    totalDiv.className = 'mb-2 small text-muted';
+    totalDiv.innerHTML = d.nginx.available
+      ? `Gesamt (letzte ~20000 Log-Zeilen): <strong>${d.nginx.total.toLocaleString()} Requests</strong> · Log: <code>${d.nginx.log_path}</code>`
+      : '<span class="badge bg-secondary">Kein nginx-Log gefunden für dieses Projekt</span>';
+    document.getElementById('chart-days').parentElement.parentElement.prepend(totalDiv);
+
+    // ── Top URLs ──────────────────────────────────────────────────────────
+    document.querySelector('#top-urls tbody').innerHTML =
+      (d.nginx.top_urls || []).map(([url, cnt]) =>
+        `<tr><td class="font-monospace small text-truncate" style="max-width:220px" title="${url}">${url}</td><td class="text-end">${cnt}</td></tr>`
+      ).join('') || '<tr><td colspan="2" class="text-muted small">Keine Daten</td></tr>';
+
+    // ── Top IPs ───────────────────────────────────────────────────────────
+    document.querySelector('#top-ips tbody').innerHTML =
+      (d.nginx.top_ips || []).map(([ip, cnt]) =>
+        `<tr><td class="font-monospace small">${ip}</td><td class="text-end">${cnt}</td></tr>`
+      ).join('') || '<tr><td colspan="2" class="text-muted small">Keine Daten</td></tr>';
+
+    // ── Service events ────────────────────────────────────────────────────
+    const rs = d.restarts;
+    document.getElementById('service-summary').innerHTML = rs.available ? `
+      <span class="badge bg-success"><i class="bi bi-play-fill"></i> ${rs.starts} Starts</span>
+      <span class="badge bg-danger"><i class="bi bi-x-circle"></i> ${rs.failures} Fehler</span>
+      <span class="badge bg-secondary"><i class="bi bi-stop-fill"></i> ${rs.stops} Stops</span>
+    ` : '<span class="text-muted small">journalctl nicht verfügbar</span>';
+
+    if (rs.available && rs.events.length) {
+      const kindCls = {start: 'success', fail: 'danger', stop: 'warning', info: 'secondary'};
+      const kindIcon = {start: 'play-fill', fail: 'x-circle-fill', stop: 'stop-fill', info: 'info-circle'};
+      document.getElementById('service-events').innerHTML = rs.events.map(e =>
+        `<div class="d-flex align-items-start gap-2 mb-1 small">
+          <span class="text-muted font-monospace text-nowrap" style="min-width:90px">${e.time}</span>
+          <i class="bi bi-${kindIcon[e.event] || 'info-circle'} text-${kindCls[e.event] || 'secondary'} mt-1"></i>
+          <span>${e.msg}</span>
+        </div>`
+      ).join('');
+    } else if (rs.available) {
+      document.getElementById('service-events').innerHTML = '<span class="text-muted small">Keine Ereignisse in den letzten 14 Tagen</span>';
+    }
+
+    loading.classList.add('d-none');
+    content.classList.remove('d-none');
+    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i> Neu laden';
+    btn.disabled = false;
+    statsLoaded = false; // allow reload
+  } catch(err) {
+    loading.innerHTML = `<span class="text-danger">Fehler beim Laden: ${err.message}</span>`;
+    btn.disabled = false;
+  }
 }
 
 // ── ALLOWED_HOSTS ──────────────────────────────────────────────────────────
