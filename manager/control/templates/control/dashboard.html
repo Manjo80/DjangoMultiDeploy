@@ -19,7 +19,7 @@
   <div>
     {% if ufw.enabled %}
     <strong>Firewall aktiv</strong> —
-    Port 22 SSH ✅ | Port 80/443 HTTP ✅ | Ports 8000–8999 extern gesperrt 🔒 | Port 8888 nur LAN 🔒
+    Port 22 SSH ✅ | Port 80/443 HTTP ✅ | Ports 8000–8999 Gunicorn 🔒 | Port 8888 Manager 🔒 (via nginx Hostname)
     {% else %}
     <strong>Firewall inaktiv!</strong> — ufw ist installiert aber nicht aktiviert.
     {% if user.is_staff %}Führe <code>ufw --force enable</code> auf dem Server aus.{% endif %}
