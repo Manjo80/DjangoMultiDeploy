@@ -2690,18 +2690,19 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   done
   # Doppelte entfernen
   _MGR_CSRF_ORIGINS="$(echo "$_MGR_CSRF_ORIGINS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
-  cat > "$_MANAGER_DIR/.env" <<MANAGERENV
-SECRET_KEY=${_MANAGER_SECRET}
-DEBUG=False
-ALLOWED_HOSTS=${_MGR_ALLOWED_HOSTS}
-CSRF_TRUSTED_ORIGINS=${_MGR_CSRF_ORIGINS}
-USE_X_FORWARDED_HOST=True
-MANAGER_PORT=${_MANAGER_PORT}
-MANAGER_HOSTNAME=${MANAGER_HOSTNAME}
-MANAGER_EXTRA_HOSTS=${MANAGER_EXTRA_HOSTS}
-INSTALL_SCRIPT=${_SCRIPT_DIR}/Installv2.sh
-REGISTRY_DIR=/etc/django-servers.d
-MANAGERENV
+  # .env zeilenweise mit printf schreiben — verhindert Zusammenlaufen bei langen Werten
+  {
+    printf 'SECRET_KEY=%s\n'            "${_MANAGER_SECRET}"
+    printf 'DEBUG=False\n'
+    printf 'ALLOWED_HOSTS=%s\n'         "${_MGR_ALLOWED_HOSTS}"
+    printf 'CSRF_TRUSTED_ORIGINS=%s\n'  "${_MGR_CSRF_ORIGINS}"
+    printf 'USE_X_FORWARDED_HOST=True\n'
+    printf 'MANAGER_PORT=%s\n'          "${_MANAGER_PORT}"
+    printf 'MANAGER_HOSTNAME=%s\n'      "${MANAGER_HOSTNAME}"
+    printf 'MANAGER_EXTRA_HOSTS=%s\n'   "${MANAGER_EXTRA_HOSTS:-}"
+    printf 'INSTALL_SCRIPT=%s\n'        "${_SCRIPT_DIR}/Installv2.sh"
+    printf 'REGISTRY_DIR=/etc/django-servers.d\n'
+  } > "$_MANAGER_DIR/.env"
   chmod 600 "$_MANAGER_DIR/.env"
 
   # Datenbankmigrationen (inkl. auth-Tabellen)
