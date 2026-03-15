@@ -1,0 +1,61 @@
+{% extends "control/base.html" %}
+{% block title %}2FA Verifizierung — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-sm-10 col-md-6 col-lg-4">
+<div class="card mt-4">
+  <div class="card-header text-center">
+    <i class="bi bi-shield-lock" style="font-size:1.5rem;color:#58a6ff"></i>
+    <div class="mt-1">Zwei-Faktor-Authentifizierung</div>
+  </div>
+  <div class="card-body">
+    {% if error %}
+    <div class="alert alert-danger"><i class="bi bi-exclamation-circle me-2"></i>{{ error }}</div>
+    {% endif %}
+
+    <form method="post" id="totpForm">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label class="form-label">Code aus der Authenticator-App</label>
+        <input type="text" name="code" id="totpCode"
+               class="form-control text-center"
+               style="letter-spacing:8px;font-size:1.6rem"
+               maxlength="8" autocomplete="one-time-code"
+               placeholder="000000" autofocus required>
+        <div class="form-text">6-stelliger TOTP-Code oder 8-stelliger Backup-Code</div>
+      </div>
+      <button type="submit" class="btn btn-primary w-100 mb-3">
+        <i class="bi bi-unlock me-1"></i> Verifizieren
+      </button>
+    </form>
+
+    <details>
+      <summary class="small text-muted">Backup-Code verwenden</summary>
+      <form method="post" class="mt-2">
+        {% csrf_token %}
+        <input type="hidden" name="use_backup" value="1">
+        <div class="mb-2">
+          <input type="text" name="code"
+                 class="form-control text-center"
+                 style="letter-spacing:4px"
+                 maxlength="8" placeholder="XXXXXXXX">
+        </div>
+        <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
+          <i class="bi bi-key me-1"></i>Mit Backup-Code anmelden
+        </button>
+      </form>
+    </details>
+  </div>
+</div>
+</div>
+</div>
+
+<script>
+// Auto-submit when 6 digits entered
+document.getElementById('totpCode').addEventListener('input', function() {
+  if (this.value.replace(/\s/g,'').length === 6) {
+    document.getElementById('totpForm').submit();
+  }
+});
+</script>
+{% endblock %}

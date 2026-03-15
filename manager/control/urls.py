@@ -26,7 +26,27 @@ urlpatterns = [
     path('project/<str:name>/backup/delete/', views.backup_delete, name='backup_delete'),
     path('project/<str:name>/upload-zip/', views.project_upload_zip, name='project_upload_zip'),
     path('project/<str:name>/stats/', views.project_stats, name='project_stats'),
+    path('project/<str:name>/security-scan/', views.project_security_scan, name='project_security_scan'),
     path('project/<str:name>/logs/', views.log_viewer, name='log_viewer'),
     path('project/<str:name>/remove/', views.remove_confirm, name='remove_confirm'),
     path('project/<str:name>/remove/run/', views.remove_run, name='remove_run'),
+
+    # 2FA
+    path('2fa/setup/', views.two_factor_setup, name='two_factor_setup'),
+    path('2fa/verify/', views.two_factor_verify, name='two_factor_verify'),
+
+    # User management (admin only)
+    path('users/', views.user_list, name='user_list'),
+    path('users/create/', views.user_create, name='user_create'),
+    path('users/<int:uid>/edit/', views.user_edit, name='user_edit'),
+    path('users/<int:uid>/delete/', views.user_delete, name='user_delete'),
+
+    # Profile (any logged-in user)
+    path('profile/', views.profile_view, name='profile_view'),
+
+    # Audit log (admin only)
+    path('audit/', views.audit_log_view, name='audit_log'),
+
+    # Security settings (admin only)
+    path('security/', views.security_settings_view, name='security_settings'),
 ]

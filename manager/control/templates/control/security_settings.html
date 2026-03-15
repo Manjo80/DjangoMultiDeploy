@@ -1,0 +1,79 @@
+{% extends "control/base.html" %}
+{% block title %}Sicherheitseinstellungen — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-lg-7">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-shield-lock me-2"></i>Sicherheitseinstellungen</h4>
+  <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if success_msg %}<div class="alert alert-success">{{ success_msg }}</div>{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="save">
+
+  <!-- IP Whitelist -->
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-funnel me-2"></i>IP-Whitelist</div>
+    <div class="card-body">
+      <label class="form-label">Erlaubte IPs / CIDRs <span class="text-muted small">(eine pro Zeile, leer = alle erlaubt)</span></label>
+      <textarea name="ip_whitelist" class="form-control" rows="6"
+                style="font-family:monospace"
+                placeholder="192.168.1.0/24&#10;10.0.0.5&#10;203.0.113.42">{{ sec.ip_whitelist }}</textarea>
+      <div class="form-text">
+        Unterstützt: einzelne IPs (<code>192.168.1.10</code>) und CIDR-Notation (<code>192.168.1.0/24</code>).<br>
+        <strong class="text-warning">Achtung:</strong> Stelle sicher, dass deine eigene IP erlaubt ist, bevor du speicherst — sonst sperrst du dich selbst aus.
+      </div>
+    </div>
+  </div>
+
+  <!-- Session Timeout -->
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-clock me-2"></i>Session-Timeout</div>
+    <div class="card-body">
+      <label class="form-label">Automatischer Logout nach <span class="text-muted small">(Stunden)</span></label>
+      <input type="number" name="session_timeout_hours" class="form-control"
+             style="max-width:150px" min="0" max="720" value="{{ sec.session_timeout_hours }}">
+      <div class="form-text">0 = Sitzung endet beim Schließen des Browsers. Standard: 8 Stunden.</div>
+    </div>
+  </div>
+
+  <!-- 2FA Enforcement -->
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-shield-check me-2"></i>2FA-Pflicht</div>
+    <div class="card-body">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="require_2fa" id="require2fa"
+               {% if sec.require_2fa %}checked{% endif %}>
+        <label class="form-check-label" for="require2fa">
+          Alle Benutzer müssen 2FA einrichten
+        </label>
+      </div>
+      <div class="form-text">Wenn aktiviert, werden Benutzer ohne 2FA nach dem Login zur Einrichtungsseite weitergeleitet.</div>
+    </div>
+  </div>
+
+  <button type="submit" class="btn btn-primary">
+    <i class="bi bi-floppy me-1"></i>Einstellungen speichern
+  </button>
+</form>
+
+<!-- Quick info -->
+<div class="card mt-4">
+  <div class="card-header text-muted small"><i class="bi bi-info-circle me-2"></i>Aktuelle Session-Informationen</div>
+  <div class="card-body small text-muted">
+    <div>Eingeloggt als: <strong>{{ request.user.username }}</strong></div>
+    <div>Ihre IP: <strong>{{ request.META.HTTP_X_FORWARDED_FOR|default:request.META.REMOTE_ADDR }}</strong></div>
+    <div class="mt-2">
+      <a href="{% url 'audit_log' %}">Audit Log ansehen →</a>
+    </div>
+  </div>
+</div>
+
+</div>
+</div>
+{% endblock %}

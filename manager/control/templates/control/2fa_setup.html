@@ -1,0 +1,88 @@
+{% extends "control/base.html" %}
+{% block title %}2FA einrichten — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-6">
+
+{% if done %}
+<div class="card">
+  <div class="card-header"><i class="bi bi-shield-check text-success me-2"></i>2FA erfolgreich aktiviert</div>
+  <div class="card-body">
+    <div class="alert" style="background:#0d2918;border-color:#238636;color:#3fb950;">
+      <i class="bi bi-check-circle me-2"></i>
+      Zwei-Faktor-Authentifizierung ist jetzt aktiv. Speichere deine Backup-Codes an einem sicheren Ort!
+    </div>
+    <h6 class="mb-3">Backup-Codes <span class="text-muted small">(einmalig verwendbar)</span></h6>
+    <div class="row g-2 mb-4">
+      {% for code in backup_codes %}
+      <div class="col-6 col-md-3">
+        <code class="d-block text-center p-2" style="background:#010409;border:1px solid #30363d;border-radius:4px;color:#58a6ff;font-size:1rem;letter-spacing:2px">{{ code }}</code>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="alert alert-secondary small">
+      <i class="bi bi-exclamation-triangle me-1"></i>
+      Jeder Code kann nur einmal verwendet werden. Speichere sie in einem Passwortmanager oder an einem sicheren Ort — du wirst sie nicht wieder angezeigt bekommen.
+    </div>
+    <a href="{% url 'dashboard' %}" class="btn btn-primary">Zum Dashboard</a>
+  </div>
+</div>
+
+{% else %}
+<div class="card">
+  <div class="card-header"><i class="bi bi-shield-lock me-2"></i>Zwei-Faktor-Authentifizierung (TOTP) einrichten</div>
+  <div class="card-body">
+    {% if error %}
+    <div class="alert alert-danger"><i class="bi bi-exclamation-circle me-2"></i>{{ error }}</div>
+    {% endif %}
+
+    <p class="text-muted">Scanne den QR-Code mit einer Authenticator-App (Google Authenticator, Aegis, Bitwarden Authenticator, etc.).</p>
+
+    <div class="text-center mb-4">
+      <img src="data:image/png;base64,{{ qr_b64 }}" alt="QR Code" class="img-fluid" style="max-width:220px;border:8px solid #fff;border-radius:8px;">
+    </div>
+
+    <details class="mb-3">
+      <summary class="small">Manuelle Eingabe (Secret Key)</summary>
+      <code class="d-block mt-2 p-2 text-center" style="background:#010409;border:1px solid #30363d;border-radius:4px;color:#58a6ff;letter-spacing:2px;word-break:break-all">{{ tmp_secret }}</code>
+    </details>
+
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="confirm">
+      <div class="mb-3">
+        <label class="form-label">Code aus der App eingeben</label>
+        <input type="text" name="code" class="form-control text-center"
+               style="letter-spacing:8px;font-size:1.4rem;max-width:200px;margin:0 auto"
+               maxlength="6" minlength="6" pattern="\d{6}" autocomplete="one-time-code"
+               placeholder="000000" autofocus required>
+        <div class="form-text text-center">6-stelliger Code aus deiner Authenticator-App</div>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Bestätigen &amp; aktivieren</button>
+        <a href="{% url 'profile_view' %}" class="btn btn-outline-secondary">Abbrechen</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if profile.totp_enabled %}
+<div class="card mt-3">
+  <div class="card-body">
+    <h6 class="text-danger"><i class="bi bi-shield-x me-2"></i>2FA deaktivieren</h6>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="disable">
+      <button type="submit" class="btn btn-danger btn-sm"
+              onclick="return confirm('2FA wirklich deaktivieren?')">
+        <i class="bi bi-x-circle me-1"></i>2FA deaktivieren
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+</div>
+</div>
+{% endblock %}

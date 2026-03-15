@@ -7,7 +7,7 @@ load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', '*').split(',') if h.strip()]
 
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
@@ -24,6 +24,8 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'control.middleware.TwoFactorMiddleware',      # 2FA enforcement
+    'control.middleware.IPWhitelistMiddleware',     # IP whitelist
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -62,14 +64,37 @@ STATICFILES_DIRS = [_STATIC_SRC] if _STATIC_SRC.exists() else []
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# ── Auth & Session ────────────────────────────────────────────────────────────
+
 LOGIN_URL = '/login/'
 LOGIN_REDIRECT_URL = '/dashboard/'
 LOGOUT_REDIRECT_URL = '/login/'
 
-# Manager-specific settings
+# Session expires after inactivity; absolute timeout handled per-session in login view
+SESSION_COOKIE_AGE = int(os.getenv('SESSION_TIMEOUT_SECONDS', str(8 * 3600)))  # default 8h
+SESSION_SAVE_EVERY_REQUEST = True   # reset timer on each request
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+
+# ── Security headers (relevant even behind reverse proxy) ─────────────────────
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+
+# ── Password validation ───────────────────────────────────────────────────────
+
+AUTH_PASSWORD_VALIDATORS = [
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+     'OPTIONS': {'min_length': 10}},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
+]
+
+# ── Manager-specific ──────────────────────────────────────────────────────────
+
 INSTALL_SCRIPT = os.getenv('INSTALL_SCRIPT', '/opt/DjangoMultiDeploy/Installv2.sh')
-REGISTRY_DIR = os.getenv('REGISTRY_DIR', '/etc/django-servers.d')
-# Log-Dir auf /tmp (tmpfs/RAM) — verhindert EIO-Fehler auf LXC overlayfs
+REGISTRY_DIR   = os.getenv('REGISTRY_DIR',   '/etc/django-servers.d')
 INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', '/tmp/djmanager_logs')
 
 os.makedirs(INSTALL_LOG_DIR, exist_ok=True)
