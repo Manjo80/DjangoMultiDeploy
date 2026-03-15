@@ -38,6 +38,7 @@ from .utils import (
     list_backups, run_update, run_backup, delete_backup, get_ssh_key, start_install,
     get_global_deploy_key, get_allowed_hosts, get_nginx_server_names,
     update_allowed_hosts, get_ufw_status, get_server_stats, get_last_backup,
+    get_nginx_stats, get_service_restarts,
 )
 
 
@@ -378,6 +379,14 @@ def backup_delete(request, name):
         {'name': b['name'], 'size_mb': b['size_mb'], 'mtime': b['mtime'], 'mtime_str': b.get('mtime_str', '')}
         for b in backups
     ]})
+
+
+@login_required
+def project_stats(request, name):
+    """Return nginx stats + service restart history as JSON (lazy-loaded by frontend)."""
+    nginx = get_nginx_stats(name)
+    restarts = get_service_restarts(name)
+    return JsonResponse({'nginx': nginx, 'restarts': restarts})
 
 
 # ──────────────────────────────────────────────────────────────────────────────

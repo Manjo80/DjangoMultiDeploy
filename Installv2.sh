@@ -1599,11 +1599,25 @@ fi  # end logrotate_done
 # -------------------------------------------------------------------
 if ! is_done "nginx_done"; then
 echo "🌐 Konfiguriere Nginx..."
+
+# Globales reqtime-Logformat einmalig anlegen (idempotent)
+if [ ! -f /etc/nginx/conf.d/reqtime_log.conf ]; then
+  cat > /etc/nginx/conf.d/reqtime_log.conf <<'LOGFMT'
+log_format reqtime '$remote_addr - $remote_user [$time_local] "$request" '
+                   '$status $body_bytes_sent "$http_referer" '
+                   '"$http_user_agent" $request_time';
+LOGFMT
+  echo "✅ Nginx reqtime-Logformat angelegt"
+fi
+
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
 server {
     listen 80;
     server_name $NGINX_SERVER_NAMES;
     client_max_body_size 50M;
+
+    # Per-Projekt Access-Log mit Antwortzeit
+    access_log /var/log/nginx/${PROJECTNAME}.access.log reqtime;
 
     # Gzip Komprimierung
     gzip on;
