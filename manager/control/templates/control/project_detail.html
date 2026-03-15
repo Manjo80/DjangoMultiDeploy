@@ -157,19 +157,40 @@
 
     <div class="card mb-3">
       <div class="card-header">Update & Backup</div>
-      <div class="card-body d-flex gap-2 flex-wrap">
-        <form method="post" action="{% url 'project_action' name %}">
-          {% csrf_token %}<input type="hidden" name="action" value="update">
-          <button class="btn btn-primary">
-            <i class="bi bi-cloud-download me-1"></i> Git Pull + Update
-          </button>
-        </form>
-        <form method="post" action="{% url 'project_action' name %}">
-          {% csrf_token %}<input type="hidden" name="action" value="backup">
-          <button class="btn btn-outline-secondary">
-            <i class="bi bi-archive me-1"></i> Backup erstellen
-          </button>
-        </form>
+      <div class="card-body">
+        <div class="d-flex gap-2 flex-wrap mb-3">
+          <form method="post" action="{% url 'project_action' name %}">
+            {% csrf_token %}<input type="hidden" name="action" value="update">
+            <button class="btn btn-primary">
+              <i class="bi bi-cloud-download me-1"></i> Git Pull + Update
+            </button>
+          </form>
+          <form method="post" action="{% url 'project_action' name %}">
+            {% csrf_token %}<input type="hidden" name="action" value="backup">
+            <button class="btn btn-outline-secondary">
+              <i class="bi bi-archive me-1"></i> Backup erstellen
+            </button>
+          </form>
+        </div>
+        {% if request.user.is_staff %}
+        <div class="border-top pt-3">
+          <small class="text-muted d-block mb-2">
+            <i class="bi bi-file-zip me-1"></i>
+            <strong>Update via ZIP</strong> — ersetzt Projektdateien, behält .env / .venv / media
+          </small>
+          <div class="input-group input-group-sm">
+            <input type="file" id="zip-upload-input" class="form-control bg-dark text-light border-secondary" accept=".zip">
+            <button class="btn btn-outline-warning" onclick="uploadZip()" id="zip-upload-btn">
+              <i class="bi bi-upload me-1"></i> Hochladen &amp; Aktualisieren
+            </button>
+          </div>
+          <div id="zip-upload-progress" class="d-none mt-2 text-muted small">
+            <span class="spinner-border spinner-border-sm me-1"></span> Wird verarbeitet… (pip install + migrate)
+          </div>
+          <pre id="zip-upload-output" class="d-none small bg-dark border border-secondary rounded p-2 mt-2"
+               style="max-height:200px;overflow-y:auto;font-size:.78rem;white-space:pre-wrap"></pre>
+        </div>
+        {% endif %}
       </div>
     </div>
 
@@ -360,6 +381,50 @@ function renderBackups(backups) {
   const badge = document.querySelector('.card-header .badge.bg-secondary');
   if (badge) badge.textContent = `${backups.length}/5`;
 }
+
+// ── ZIP UPLOAD ─────────────────────────────────────────────────────────────
+const zipUploadUrl = "{% url 'project_upload_zip' name %}";
+
+async function uploadZip() {
+  const input = document.getElementById('zip-upload-input');
+  const file = input.files[0];
+  if (!file) { alert('Bitte zuerst eine ZIP-Datei auswählen.'); return; }
+  if (!file.name.endsWith('.zip')) { alert('Nur .zip Dateien erlaubt.'); return; }
+  if (!confirm(`ZIP "${file.name}" hochladen und Projekt "${name}" aktualisieren?\n\n` +
+               '.env, .venv und media werden beibehalten.')) return;
+
+  const btn = document.getElementById('zip-upload-btn');
+  const progress = document.getElementById('zip-upload-progress');
+  const output = document.getElementById('zip-upload-output');
+  btn.disabled = true;
+  progress.classList.remove('d-none');
+  output.classList.add('d-none');
+
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('zip_file', file);
+
+  try {
+    const r = await fetch(zipUploadUrl, {method: 'POST', body: fd});
+    const data = await r.json();
+    progress.classList.add('d-none');
+    output.textContent = data.output;
+    output.className = `small rounded p-2 mt-2 border ${data.ok ? 'border-success' : 'border-danger'} bg-dark`;
+    output.style.cssText = 'max-height:200px;overflow-y:auto;font-size:.78rem;white-space:pre-wrap;display:block';
+    if (data.ok) {
+      input.value = '';
+      setTimeout(() => location.reload(), 2000);
+    }
+  } catch(e) {
+    progress.classList.add('d-none');
+    output.textContent = 'Verbindungsfehler: ' + e.message;
+    output.className = 'small rounded p-2 mt-2 border border-danger bg-dark';
+    output.style.display = 'block';
+  }
+  btn.disabled = false;
+}
+
+const name = "{{ name }}";
 
 // ── STATS ──────────────────────────────────────────────────────────────────
 const statsUrl = "{% url 'project_stats' name %}";

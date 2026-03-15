@@ -377,20 +377,40 @@ fi
 if ! is_done "input_saved"; then
 
 # -------------------------------------------------------------------
-# GitHub Repository Option
+# Source-Typ (github / zip / new)
 # -------------------------------------------------------------------
-echo
-echo "GitHub Repository (optional):"
-echo "  • Öffentliches Repo: https://github.com/user/repo.git"
-echo "  • Privates Repo:     git@github.com:user/repo.git"
-echo "  • Leer lassen für neues Django-Projekt (ohne GitHub)"
-_read -p "GitHub URL (leer für neues Projekt): " GITHUB_REPO_URL
-USE_GITHUB="${GITHUB_REPO_URL:+true}"
+SOURCE_TYPE="${SOURCE_TYPE:-}"
+UPLOAD_ZIP_PATH="${UPLOAD_ZIP_PATH:-}"
 
-if [[ "$USE_GITHUB" == "true" ]]; then
-  echo "✅ GitHub-Modus aktiviert: Repository wird geklont"
+if [[ "$SOURCE_TYPE" == "zip" ]]; then
+  # ZIP-Modus — vom Manager übergeben, kein interaktives Prompt
+  USE_GITHUB=""
+  [ -f "$UPLOAD_ZIP_PATH" ] || { echo "❌ FEHLER: UPLOAD_ZIP_PATH='$UPLOAD_ZIP_PATH' nicht gefunden."; exit 1; }
+  echo "✅ ZIP-Modus: $(basename "$UPLOAD_ZIP_PATH") wird als Quellcode verwendet"
+elif [[ -n "$GITHUB_REPO_URL" ]]; then
+  # NONINTERACTIVE mit gesetzter URL
+  USE_GITHUB="true"
+  SOURCE_TYPE="github"
+  echo "✅ GitHub-Modus: $GITHUB_REPO_URL"
 else
-  echo "✅ Lokaler Modus: Neues Django-Projekt wird erstellt"
+  echo
+  echo "Quellcode-Option:"
+  echo "  1) GitHub Repository klonen"
+  echo "  2) Leeres Django-Projekt erstellen"
+  _read -p "Auswahl (1/2) [2]: " _SRC_SEL
+  _SRC_SEL="${_SRC_SEL:-2}"
+  if [[ "$_SRC_SEL" == "1" ]]; then
+    echo "  • Öffentlich:  https://github.com/user/repo.git"
+    echo "  • Privat (SSH): git@github.com:user/repo.git"
+    _read -p "GitHub URL: " GITHUB_REPO_URL
+    USE_GITHUB="${GITHUB_REPO_URL:+true}"
+    SOURCE_TYPE="github"
+    echo "✅ GitHub-Modus aktiviert: $GITHUB_REPO_URL"
+  else
+    USE_GITHUB=""
+    SOURCE_TYPE="new"
+    echo "✅ Leeres Django-Projekt wird erstellt"
+  fi
 fi
 
 # -------------------------------------------------------------------
@@ -657,6 +677,8 @@ echo "✅ Backup täglich um $(printf '%02d:%02d' "$BACKUP_CRON_HOUR" "$BACKUP_C
   cat >> "$STATE_FILE" << STATEEOF
 GITHUB_REPO_URL="${GITHUB_REPO_URL}"
 USE_GITHUB="${USE_GITHUB}"
+SOURCE_TYPE="${SOURCE_TYPE}"
+UPLOAD_ZIP_PATH="${UPLOAD_ZIP_PATH}"
 LOCAL_IP="${LOCAL_IP}"
 ALL_LOCAL_IPS="${ALL_LOCAL_IPS}"
 HOSTNAME_FQDN="${HOSTNAME_FQDN}"
@@ -1138,9 +1160,67 @@ mkdir -p "$APPDIR"
 chown "$APPUSER:$APPUSER" "$APPDIR"
 
 # -------------------------------------------------------------------
-# Django Setup (Neu oder GitHub)
+# Django Setup (ZIP / GitHub / Neues Projekt)
 # -------------------------------------------------------------------
-if [[ "$USE_GITHUB" == "true" ]]; then
+if [[ "$SOURCE_TYPE" == "zip" ]]; then
+  echo "📦 Entpacke ZIP nach $APPDIR..."
+  _ZIP_TMP="/tmp/_dmd_zip_${PROJECTNAME}_$$"
+  mkdir -p "$_ZIP_TMP"
+  unzip -q "$UPLOAD_ZIP_PATH" -d "$_ZIP_TMP" 2>/dev/null \
+    || { echo "❌ FEHLER: ZIP konnte nicht entpackt werden"; exit 1; }
+
+  # Erkennen ob GitHub-Style (einzelnes Top-Level-Verzeichnis) oder flache Struktur
+  _TOP_COUNT=$(ls -1 "$_ZIP_TMP" | wc -l)
+  if [ "$_TOP_COUNT" -eq 1 ]; then
+    _TOP_ITEM="$_ZIP_TMP/$(ls -1 "$_ZIP_TMP")"
+    if [ -d "$_TOP_ITEM" ]; then
+      cp -r "$_TOP_ITEM/." "$APPDIR/"
+    else
+      cp -r "$_ZIP_TMP/." "$APPDIR/"
+    fi
+  else
+    cp -r "$_ZIP_TMP/." "$APPDIR/"
+  fi
+  rm -rf "$_ZIP_TMP"
+  chown -R "$APPUSER:$APPUSER" "$APPDIR"
+  echo "✅ ZIP entpackt nach $APPDIR"
+
+  # Django-Modul erkennen
+  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 -name "wsgi.py" ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null)
+  [ -z "$DJANGO_MODULE" ] && DJANGO_MODULE="core"
+  echo "📌 Django-Modul erkannt: $DJANGO_MODULE"
+
+  # Admin-URL auf /djadmin/ setzen
+  URLS_FILE="$APPDIR/$DJANGO_MODULE/urls.py"
+  if [ -f "$URLS_FILE" ]; then
+    sed -i "s|path('admin/', admin.site.urls)|path('djadmin/', admin.site.urls)|g" "$URLS_FILE"
+    sed -i 's|path("admin/", admin.site.urls)|path("djadmin/", admin.site.urls)|g' "$URLS_FILE"
+    echo "✅ Admin-URL auf /djadmin/ gesetzt in $URLS_FILE"
+  fi
+
+  # Virtual Environment + Dependencies
+  echo "🐍 Erstelle Python Virtual Environment..."
+  su - "$APPUSER" -s /bin/bash <<EOF
+set -e
+cd "$APPDIR"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --no-cache-dir --upgrade pip
+pip install --no-cache-dir --prefer-binary django gunicorn python-dotenv pillow
+
+if [ "$DBTYPE" = "postgresql" ]; then
+  pip install --no-cache-dir --prefer-binary "psycopg[binary]"
+elif [ "$DBTYPE" = "mysql" ]; then
+  pip install --no-cache-dir --prefer-binary mysqlclient
+fi
+
+if [ -f "$APPDIR/requirements.txt" ]; then
+  echo "📦 Installiere requirements.txt..."
+  pip install --no-cache-dir --prefer-binary -r "$APPDIR/requirements.txt"
+fi
+EOF
+
+elif [[ "$USE_GITHUB" == "true" ]]; then
   echo "📥 Klonen GitHub Repository: $GITHUB_REPO_URL"
   
   # Git clone als root mit globalem Deploy-Key

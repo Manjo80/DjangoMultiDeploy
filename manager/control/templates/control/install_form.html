@@ -15,7 +15,7 @@
     <div class="alert alert-danger">{{ error }}</div>
     {% endif %}
 
-    <form method="post" action="{% url 'install_run' %}">
+    <form method="post" action="{% url 'install_run' %}" enctype="multipart/form-data" id="install-form">
       {% csrf_token %}
 
       <h5 class="mt-2 mb-3 text-muted border-bottom pb-2">Projekt</h5>
@@ -49,10 +49,52 @@
             <option value="2">PROD (DEBUG=False)</option>
           </select>
         </div>
-        <div class="col-md-6">
+
+        <!-- Quellcode-Option -->
+        <div class="col-12">
+          <label class="form-label">Quellcode-Quelle</label>
+          <div class="d-flex gap-3">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="source_type"
+                     id="src_new" value="new" checked onchange="updateSourceUI()">
+              <label class="form-check-label" for="src_new">
+                <i class="bi bi-plus-square me-1"></i> Leeres Django-Projekt
+              </label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="source_type"
+                     id="src_github" value="github" onchange="updateSourceUI()">
+              <label class="form-check-label" for="src_github">
+                <i class="bi bi-github me-1"></i> GitHub Repository
+              </label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="source_type"
+                     id="src_zip" value="zip" onchange="updateSourceUI()">
+              <label class="form-check-label" for="src_zip">
+                <i class="bi bi-file-zip me-1"></i> ZIP hochladen
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- GitHub URL (shown when source_type=github) -->
+        <div class="col-md-12" id="src_github_row" style="display:none">
           <label class="form-label">GitHub Repository URL</label>
-          <input type="text" name="github_repo_url" class="form-control"
-                 placeholder="https://github.com/user/repo.git (leer = neues Projekt)">
+          <input type="text" name="github_repo_url" class="form-control" id="github_repo_url_field"
+                 placeholder="https://github.com/user/repo.git oder git@github.com:user/repo.git">
+          <div class="form-text">Öffentlich (HTTPS) oder Privat (SSH mit hinterlegtem Deploy-Key)</div>
+        </div>
+
+        <!-- ZIP upload (shown when source_type=zip) -->
+        <div class="col-md-12" id="src_zip_row" style="display:none">
+          <label class="form-label">ZIP-Datei *</label>
+          <input type="file" name="zip_file" class="form-control" id="zip_file_field"
+                 accept=".zip">
+          <div class="form-text">
+            Django-Projekt als ZIP — funktioniert mit GitHub "Code → Download ZIP" direkt.
+            Erlaubt: flaches ZIP oder ZIP mit einem Top-Level-Verzeichnis. Max 200 MB.
+          </div>
         </div>
         <div class="col-md-6">
           <label class="form-label">Domain / Hostname (nginx server_name)</label>
@@ -239,7 +281,14 @@ function addHost(ip) {
   const cur = f.value.split(',').map(s => s.trim()).filter(Boolean);
   if (!cur.includes(ip)) { cur.push(ip); f.value = cur.join(','); }
 }
-document.querySelector('form').addEventListener('submit', function(e) {
+function updateSourceUI() {
+  const src = document.querySelector('input[name="source_type"]:checked')?.value || 'new';
+  document.getElementById('src_github_row').style.display = src === 'github' ? '' : 'none';
+  document.getElementById('src_zip_row').style.display    = src === 'zip'    ? '' : 'none';
+  document.getElementById('zip_file_field').required      = src === 'zip';
+  document.getElementById('github_repo_url_field').required = src === 'github';
+}
+document.getElementById('install-form').addEventListener('submit', function(e) {
   const checks = [
     [document.getElementById('appuser_pass_field'), document.getElementById('appuser_pass2_field'), 'Linux-User'],
     [document.getElementById('django_admin_pass_field'), document.getElementById('django_admin_pass2_field'), 'Django Admin'],
