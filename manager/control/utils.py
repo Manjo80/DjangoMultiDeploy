@@ -223,6 +223,127 @@ def get_ssh_key(project):
         return None, str(e)
 
 
+def get_allowed_hosts(name):
+    """Read ALLOWED_HOSTS list from the project's .env file."""
+    conf = get_project(name)
+    if not conf:
+        return []
+    env_path = os.path.join(conf.get('APPDIR', f'/srv/{name}'), '.env')
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('ALLOWED_HOSTS='):
+                    val = line[len('ALLOWED_HOSTS='):].strip().strip('"').strip("'")
+                    return [h.strip() for h in val.split(',') if h.strip()]
+    except OSError:
+        pass
+    return []
+
+
+def get_nginx_server_names(name):
+    """Read server_name from nginx site config. Returns list of names."""
+    nginx_path = f'/etc/nginx/sites-available/{name}'
+    if not os.path.exists(nginx_path):
+        return []
+    try:
+        with open(nginx_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('server_name '):
+                    val = line[len('server_name '):].rstrip(';').strip()
+                    return [n for n in val.split() if n and n != '_']
+    except OSError:
+        pass
+    return []
+
+
+def update_allowed_hosts(name, hosts):
+    """
+    Update ALLOWED_HOSTS in .env and server_name in nginx config.
+    Restarts the Django service and reloads nginx.
+    Returns (ok, message).
+    """
+    conf = get_project(name)
+    if not conf:
+        return False, 'Projekt nicht gefunden'
+    appdir = conf.get('APPDIR', f'/srv/{name}')
+    env_path = os.path.join(appdir, '.env')
+
+    # Sanitize host list
+    hosts = [h.strip() for h in hosts if h.strip()]
+    if not hosts:
+        return False, 'Mindestens ein Host erforderlich'
+
+    # --- Update .env ---
+    try:
+        with open(env_path) as f:
+            lines = f.readlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.strip().startswith('ALLOWED_HOSTS='):
+                new_lines.append(f'ALLOWED_HOSTS={",".join(hosts)}\n')
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f'ALLOWED_HOSTS={",".join(hosts)}\n')
+        with open(env_path, 'w') as f:
+            f.writelines(new_lines)
+    except OSError as e:
+        return False, f'.env konnte nicht aktualisiert werden: {e}'
+
+    # --- Update nginx server_name ---
+    nginx_path = f'/etc/nginx/sites-available/{name}'
+    if os.path.exists(nginx_path):
+        try:
+            with open(nginx_path) as f:
+                content = f.read()
+            import re
+            new_names = ' '.join(hosts)
+            content = re.sub(
+                r'server_name\s+[^;]+;',
+                f'server_name {new_names};',
+                content
+            )
+            with open(nginx_path, 'w') as f:
+                f.write(content)
+        except OSError as e:
+            return False, f'nginx-Konfiguration konnte nicht aktualisiert werden: {e}'
+
+    # --- Update registry conf ---
+    conf_path = os.path.join('/etc/django-servers.d', f'{name}.conf')
+    if os.path.exists(conf_path):
+        try:
+            with open(conf_path) as f:
+                lines = f.readlines()
+            new_lines = []
+            for line in lines:
+                if line.strip().startswith('PRIMARY_HOST='):
+                    new_lines.append(f'PRIMARY_HOST="{hosts[0]}"\n')
+                else:
+                    new_lines.append(line)
+            with open(conf_path, 'w') as f:
+                f.writelines(new_lines)
+        except OSError:
+            pass
+
+    # --- Restart service + reload nginx ---
+    msgs = []
+    ok1, out1 = service_action(name, 'restart')
+    msgs.append(f'Service: {"OK" if ok1 else out1}')
+
+    try:
+        subprocess.run(['nginx', '-t'], check=True, capture_output=True)
+        subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, timeout=10)
+        msgs.append('nginx: neu geladen')
+    except Exception as e:
+        msgs.append(f'nginx reload: {e}')
+
+    return True, ' | '.join(msgs)
+
+
 def start_install(params):
     """
     Launch Installv2.sh in NONINTERACTIVE mode as a background process.

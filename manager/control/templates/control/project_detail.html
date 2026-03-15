@@ -32,22 +32,76 @@
 
   <!-- Config Info -->
   <div class="col-md-6">
-    <div class="card h-100">
+    <div class="card mb-3">
       <div class="card-header">Konfiguration</div>
       <div class="card-body">
         <table class="table table-sm table-dark mb-0">
           <tr><th class="text-muted">Verzeichnis</th><td>{{ conf.APPDIR|default:"-" }}</td></tr>
           <tr><th class="text-muted">User</th><td>{{ conf.APPUSER|default:"-" }}</td></tr>
           <tr><th class="text-muted">Modus</th><td>{{ conf.MODE|default:"-" }} (DEBUG={{ conf.DEBUG|default:"-" }})</td></tr>
-          <tr><th class="text-muted">Gunicorn-Port</th><td>{{ conf.GUNICORN_PORT|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Gunicorn intern</th>
+              <td>127.0.0.1:{{ conf.GUNICORN_PORT|default:"-" }}
+                <small class="text-muted ms-1">→ über nginx Port 80 erreichbar</small></td></tr>
           <tr><th class="text-muted">Worker</th><td>{{ conf.GUNICORN_WORKERS|default:"-" }}</td></tr>
           <tr><th class="text-muted">Datenbank</th><td>{{ conf.DBTYPE|default:"-" }}{% if conf.DBNAME %} / {{ conf.DBNAME }}{% endif %}</td></tr>
           <tr><th class="text-muted">DB-Host</th><td>{{ conf.DBHOST|default:"-" }}:{{ conf.DBPORT|default:"-" }}</td></tr>
-          <tr><th class="text-muted">Host</th><td>{{ conf.PRIMARY_HOST|default:"-" }}</td></tr>
           <tr><th class="text-muted">GitHub</th><td class="text-break">{{ conf.GITHUB_REPO_URL|default:"(kein)" }}</td></tr>
           <tr><th class="text-muted">Sprache</th><td>{{ conf.LANGUAGE_CODE|default:"-" }} / {{ conf.TIME_ZONE|default:"-" }}</td></tr>
           <tr><th class="text-muted">Installiert</th><td>{{ conf.INSTALL_DATE|default:"-" }}</td></tr>
         </table>
+      </div>
+    </div>
+
+    <!-- ALLOWED_HOSTS -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-globe me-1"></i> ALLOWED_HOSTS &amp; nginx server_name</span>
+      </div>
+      <div class="card-body">
+        <!-- nginx server_name (read-only, angezeigt für Info) -->
+        {% if nginx_names %}
+        <div class="mb-3">
+          <small class="text-muted d-block mb-1">nginx server_name (automatisch synchronisiert):</small>
+          <div class="d-flex flex-wrap gap-1">
+            {% for n in nginx_names %}
+            <span class="badge bg-secondary font-monospace">{{ n }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Aktuelle ALLOWED_HOSTS -->
+        <small class="text-muted d-block mb-2">Aktuelle Django ALLOWED_HOSTS:</small>
+        <div id="hosts-list" class="d-flex flex-wrap gap-1 mb-3">
+          {% for h in allowed_hosts %}
+          <span class="badge bg-dark border border-secondary font-monospace d-inline-flex align-items-center gap-1">
+            {{ h }}
+            {% if request.user.is_staff %}
+            <button type="button" class="btn-close btn-close-white btn-sm"
+                    style="font-size:.6rem"
+                    onclick="removeHost('{{ h }}')" title="Entfernen"></button>
+            {% endif %}
+          </span>
+          {% empty %}
+          <span class="text-muted small">Keine ALLOWED_HOSTS in .env gefunden</span>
+          {% endfor %}
+        </div>
+
+        <!-- Neuen Host hinzufügen (nur für Admins) -->
+        {% if request.user.is_staff %}
+        <div id="hosts-msg" class="alert alert-sm py-1 d-none mb-2"></div>
+        <div class="input-group input-group-sm">
+          <input type="text" id="new-host-input" class="form-control bg-dark text-light border-secondary"
+                 placeholder="z.B. meinedomain.de oder 192.168.1.10"
+                 onkeydown="if(event.key==='Enter'){addHost();event.preventDefault()}">
+          <button class="btn btn-outline-primary" onclick="addHost()">
+            <i class="bi bi-plus-lg"></i> Hinzufügen
+          </button>
+        </div>
+        <small class="text-muted mt-1 d-block">
+          Wird sofort in <code>.env</code> und nginx <code>server_name</code> gespeichert. Service + nginx werden neu geladen.
+        </small>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -142,4 +196,70 @@
   {% endif %}
 
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{% if request.user.is_staff %}
+<script>
+const hostsUrl = "{% url 'project_allowed_hosts' name %}";
+const csrfToken = "{{ csrf_token }}";
+
+async function hostsRequest(body) {
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', csrfToken);
+  for (const [k, v] of Object.entries(body)) fd.append(k, v);
+  const r = await fetch(hostsUrl, {method: 'POST', body: fd});
+  return r.json();
+}
+
+function showMsg(msg, ok) {
+  const el = document.getElementById('hosts-msg');
+  el.className = `alert py-1 mb-2 ${ok ? 'alert-success' : 'alert-danger'}`;
+  el.textContent = msg;
+  el.classList.remove('d-none');
+  setTimeout(() => el.classList.add('d-none'), 4000);
+}
+
+function renderHosts(hosts) {
+  const container = document.getElementById('hosts-list');
+  container.innerHTML = '';
+  if (!hosts.length) {
+    container.innerHTML = '<span class="text-muted small">Keine ALLOWED_HOSTS</span>';
+    return;
+  }
+  hosts.forEach(h => {
+    const span = document.createElement('span');
+    span.className = 'badge bg-dark border border-secondary font-monospace d-inline-flex align-items-center gap-1';
+    span.innerHTML = `${h} <button type="button" class="btn-close btn-close-white btn-sm"
+      style="font-size:.6rem" onclick="removeHost('${h}')" title="Entfernen"></button>`;
+    container.appendChild(span);
+  });
+}
+
+async function addHost() {
+  const input = document.getElementById('new-host-input');
+  const host = input.value.trim();
+  if (!host) return;
+  const data = await hostsRequest({action: 'add', new_host: host});
+  if (data.ok) {
+    input.value = '';
+    renderHosts(data.hosts);
+    showMsg('✅ ' + host + ' hinzugefügt. ' + data.message, true);
+  } else {
+    showMsg('❌ ' + (data.error || data.message), false);
+  }
+}
+
+async function removeHost(host) {
+  if (!confirm(`Host "${host}" entfernen?`)) return;
+  const data = await hostsRequest({action: 'remove', host: host});
+  if (data.ok) {
+    renderHosts(data.hosts);
+    showMsg('✅ ' + host + ' entfernt. ' + data.message, true);
+  } else {
+    showMsg('❌ ' + (data.error || data.message), false);
+  }
+}
+</script>
+{% endif %}
 {% endblock %}

@@ -36,7 +36,8 @@ from .utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
     list_backups, run_update, run_backup, get_ssh_key, start_install,
-    get_global_deploy_key,
+    get_global_deploy_key, get_allowed_hosts, get_nginx_server_names,
+    update_allowed_hosts,
 )
 
 
@@ -276,11 +277,39 @@ def project_detail(request, name):
     if not conf:
         raise Http404(f'Projekt "{name}" nicht gefunden.')
     backups = list_backups(name)
+    allowed_hosts = get_allowed_hosts(name)
+    nginx_names = get_nginx_server_names(name)
     return render(request, 'control/project_detail.html', {
         'conf': conf,
         'name': name,
         'backups': backups,
+        'allowed_hosts': allowed_hosts,
+        'nginx_names': nginx_names,
     })
+
+
+@admin_required
+@require_POST
+def project_allowed_hosts(request, name):
+    """Add or remove ALLOWED_HOSTS entries for a project."""
+    action = request.POST.get('action', 'add')
+    current = get_allowed_hosts(name)
+
+    if action == 'add':
+        new_host = request.POST.get('new_host', '').strip()
+        if not new_host:
+            return JsonResponse({'ok': False, 'error': 'Kein Host angegeben'})
+        if new_host not in current:
+            current.append(new_host)
+    elif action == 'remove':
+        host = request.POST.get('host', '').strip()
+        current = [h for h in current if h != host]
+    elif action == 'save':
+        raw = request.POST.get('hosts', '')
+        current = [h.strip() for h in raw.split(',') if h.strip()]
+
+    ok, msg = update_allowed_hosts(name, current)
+    return JsonResponse({'ok': ok, 'message': msg, 'hosts': current})
 
 
 @admin_required
