@@ -10,8 +10,10 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', '*').split(',') if h.strip()]
 CSRF_TRUSTED_ORIGINS = [h.strip() for h in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if h.strip()]
 
-# Hinter nginx: echten Host-Header und Proto aus Proxy-Headern lesen
-USE_X_FORWARDED_HOST = True
+# Hinter nginx (Port 80): echten Host-Header übernehmen.
+# Wird aus .env gesteuert — beim Direktzugriff auf Port 8888 MUSS dies False sein,
+# sonst liefert Django 400/500 wegen fehlendem X-Forwarded-Host.
+USE_X_FORWARDED_HOST = os.getenv('USE_X_FORWARDED_HOST', 'False') == 'True'
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 INSTALLED_APPS = [
