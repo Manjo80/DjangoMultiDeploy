@@ -159,3 +159,25 @@ class SecuritySettings(models.Model):
 
     def __str__(self):
         return 'Security Settings'
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ProjectPermission — per-project access for Operator/Viewer users
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ProjectPermission(models.Model):
+    """
+    Restricts non-admin users to specific projects.
+    Admin users always see all projects (no entry needed).
+    If a non-admin user has NO entries here they see NO projects.
+    """
+    user         = models.ForeignKey(User, on_delete=models.CASCADE,
+                                     related_name='project_permissions')
+    project_name = models.CharField(max_length=100)
+
+    class Meta:
+        unique_together = ('user', 'project_name')
+        ordering = ['project_name']
+
+    def __str__(self):
+        return f'{self.user.username} → {self.project_name}'

@@ -18,7 +18,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.conf import settings
 
-from .models import UserProfile, AuditLog, SecuritySettings
+from .models import UserProfile, AuditLog, SecuritySettings, ProjectPermission
 from .utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
@@ -62,6 +62,25 @@ def role_required(*roles):
 # Convenience aliases
 admin_required    = role_required(UserProfile.ROLE_ADMIN)
 operator_required = role_required(UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR)
+
+
+def _allowed_projects(user):
+    """
+    Returns a set of project names the user may access, or None if unrestricted.
+    Admin / superuser → None (all projects).
+    Operator / Viewer → set of assigned project names (may be empty).
+    """
+    if user.is_superuser or _get_role(user) == UserProfile.ROLE_ADMIN:
+        return None
+    return set(
+        ProjectPermission.objects.filter(user=user).values_list('project_name', flat=True)
+    )
+
+
+def _check_project_access(user, name):
+    """Returns True when the user may access this project."""
+    allowed = _allowed_projects(user)
+    return allowed is None or name in allowed
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -346,6 +365,7 @@ def user_create(request):
         password2 = request.POST.get('password2', '')
         role      = request.POST.get('role', UserProfile.ROLE_VIEWER)
 
+        assigned_projects = request.POST.getlist('projects')
         if not username:
             error = 'Benutzername darf nicht leer sein.'
         elif User.objects.filter(username=username).exists():
@@ -357,21 +377,27 @@ def user_create(request):
         elif role not in [r[0] for r in UserProfile.ROLE_CHOICES]:
             error = 'Ungültige Rolle.'
         else:
-            user = User.objects.create_user(
+            new_user = User.objects.create_user(
                 username=username, email=email, password=password,
                 is_staff=(role == UserProfile.ROLE_ADMIN),
             )
-            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile, _ = UserProfile.objects.get_or_create(user=new_user)
             profile.role = role
             profile.save()
-            AuditLog.log(request, f'Benutzer erstellt: {username}', details=f'Rolle: {role}')
+            for pname in assigned_projects:
+                ProjectPermission.objects.get_or_create(user=new_user, project_name=pname)
+            AuditLog.log(request, f'Benutzer erstellt: {username}',
+                         details=f'Rolle: {role}, Projekte: {assigned_projects}')
             messages.success(request, f'Benutzer "{username}" erfolgreich erstellt.')
             return redirect('user_list')
 
+    all_projects = get_all_projects()
     return render(request, 'control/user_form.html', {
-        'action':       'create',
-        'error':        error,
-        'role_choices': UserProfile.ROLE_CHOICES,
+        'action':          'create',
+        'error':           error,
+        'role_choices':    UserProfile.ROLE_CHOICES,
+        'all_projects':    all_projects,
+        'assigned_names':  set(request.POST.getlist('projects')),
     })
 
 
@@ -389,6 +415,8 @@ def user_edit(request, uid):
             role      = request.POST.get('role', profile.role)
             password  = request.POST.get('password', '')
             password2 = request.POST.get('password2', '')
+            # Project assignments (list of project names from checkboxes)
+            assigned_projects = request.POST.getlist('projects')
 
             if role not in [r[0] for r in UserProfile.ROLE_CHOICES]:
                 error = 'Ungültige Rolle.'
@@ -397,7 +425,7 @@ def user_edit(request, uid):
             elif password and len(password) < 10:
                 error = 'Passwort muss mindestens 10 Zeichen haben.'
             else:
-                edit_user.email   = email
+                edit_user.email    = email
                 edit_user.is_staff = (role == UserProfile.ROLE_ADMIN)
                 edit_user.save()
                 profile.role = role
@@ -405,8 +433,13 @@ def user_edit(request, uid):
                 if password:
                     edit_user.set_password(password)
                     edit_user.save()
+                # Update project permissions (only meaningful for non-admin)
+                ProjectPermission.objects.filter(user=edit_user).delete()
+                for pname in assigned_projects:
+                    ProjectPermission.objects.get_or_create(
+                        user=edit_user, project_name=pname)
                 AuditLog.log(request, f'Benutzer bearbeitet: {edit_user.username}',
-                             details=f'Rolle: {role}')
+                             details=f'Rolle: {role}, Projekte: {assigned_projects}')
                 messages.success(request, f'Benutzer "{edit_user.username}" gespeichert.')
                 return redirect('user_list')
 
@@ -427,12 +460,18 @@ def user_edit(request, uid):
             messages.success(request, 'Konto entsperrt.')
             return redirect('user_edit', uid=uid)
 
+    all_projects     = get_all_projects()
+    assigned_names   = set(
+        ProjectPermission.objects.filter(user=edit_user).values_list('project_name', flat=True)
+    )
     return render(request, 'control/user_form.html', {
-        'action':       'edit',
-        'edit_user':    edit_user,
-        'profile':      profile,
-        'role_choices': UserProfile.ROLE_CHOICES,
-        'error':        error,
+        'action':          'edit',
+        'edit_user':       edit_user,
+        'profile':         profile,
+        'role_choices':    UserProfile.ROLE_CHOICES,
+        'error':           error,
+        'all_projects':    all_projects,
+        'assigned_names':  assigned_names,
     })
 
 
@@ -500,14 +539,17 @@ def security_settings_view(request):
 
 @login_required
 def dashboard(request):
-    projects = get_all_projects()
-    for p in projects:
+    all_projects = get_all_projects()
+    allowed      = _allowed_projects(request.user)
+    if allowed is not None:
+        all_projects = [p for p in all_projects if p.get('PROJECTNAME') in allowed]
+    for p in all_projects:
         p['_last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
     ufw          = get_ufw_status()
     server_stats = get_server_stats()
     role         = _get_role(request.user)
     return render(request, 'control/dashboard.html', {
-        'projects':     projects,
+        'projects':     all_projects,
         'ufw':          ufw,
         'server_stats': server_stats,
         'role':         role,
@@ -742,6 +784,8 @@ def global_deploy_key_download(request):
 
 @login_required
 def project_detail(request, name):
+    if not _check_project_access(request.user, name):
+        return render(request, 'control/403.html', status=403)
     conf = get_project(name)
     if not conf:
         raise Http404(f'Projekt "{name}" nicht gefunden.')
@@ -764,6 +808,8 @@ def project_detail(request, name):
 @operator_required
 @require_POST
 def project_allowed_hosts(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'ok': False, 'error': 'Zugriff verweigert'}, status=403)
     action  = request.POST.get('action', 'add')
     current = get_allowed_hosts(name)
 
@@ -789,6 +835,8 @@ def project_allowed_hosts(request, name):
 @operator_required
 @require_POST
 def project_action(request, name):
+    if not _check_project_access(request.user, name):
+        return render(request, 'control/403.html', status=403)
     action  = request.POST.get('action', '')
     message = ''
     error   = ''
@@ -839,6 +887,8 @@ def project_action(request, name):
 @operator_required
 @require_POST
 def backup_delete(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'ok': False, 'message': 'Zugriff verweigert'}, status=403)
     filename = request.POST.get('filename', '').strip()
     ok, msg  = delete_backup(name, filename)
     AuditLog.log(request, f'Backup gelöscht: {filename}', project=name, success=ok)
@@ -853,6 +903,8 @@ def backup_delete(request, name):
 @operator_required
 @require_POST
 def project_upload_zip(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'ok': False, 'output': 'Zugriff verweigert'}, status=403)
     zip_file = request.FILES.get('zip_file')
     if not zip_file:
         return JsonResponse({'ok': False, 'output': 'Keine Datei empfangen.'})
@@ -868,6 +920,8 @@ def project_upload_zip(request, name):
 
 @login_required
 def project_stats(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     nginx    = get_nginx_stats(name)
     restarts = get_service_restarts(name)
     return JsonResponse({'nginx': nginx, 'restarts': restarts})
@@ -875,6 +929,8 @@ def project_stats(request, name):
 
 @login_required
 def project_security_scan(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     """Run pip-audit + manage.py check --deploy (lazy-loaded from frontend)."""
     pip_results   = run_pip_audit(name)
     deploy_issues = run_django_deploy_check(name)
@@ -890,6 +946,8 @@ def project_security_scan(request, name):
 
 @login_required
 def log_viewer(request, name):
+    if not _check_project_access(request.user, name):
+        return render(request, 'control/403.html', status=403)
     conf = get_project(name)
     if not conf:
         raise Http404(f'Projekt "{name}" nicht gefunden.')
@@ -918,6 +976,7 @@ def log_viewer(request, name):
 
 @admin_required
 def remove_confirm(request, name):
+    # Admins can always remove; project access check not needed here
     conf = get_project(name)
     if not conf:
         raise Http404(f'Projekt "{name}" nicht gefunden.')
@@ -951,6 +1010,8 @@ def remove_run(request, name):
 @operator_required
 @require_POST
 def project_update(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'ok': False, 'output': 'Zugriff verweigert'}, status=403)
     ok, output = run_update(name)
     AuditLog.log(request, f'Git-Update: {name}', project=name, success=ok)
     return JsonResponse({'ok': ok, 'output': output})
