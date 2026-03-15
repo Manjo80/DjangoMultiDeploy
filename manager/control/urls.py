@@ -49,4 +49,7 @@ urlpatterns = [
 
     # Security settings (admin only)
     path('security/', views.security_settings_view, name='security_settings'),
+
+    # Firewall / ufw Port-Verwaltung (admin only)
+    path('firewall/', views.firewall_view, name='firewall'),
 ]

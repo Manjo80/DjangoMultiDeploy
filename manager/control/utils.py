@@ -540,6 +540,69 @@ def get_ufw_status(gunicorn_port=None):
     return result
 
 
+def get_ufw_port_rules():
+    """
+    Returns a list of all current ufw rules with port info.
+    [{'port': '8888', 'proto': 'tcp', 'action': 'ALLOW'|'DENY', 'comment': '...'}]
+    """
+    import re
+    rules = []
+    try:
+        r = subprocess.run(['ufw', 'status', 'verbose'],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return rules
+        for line in r.stdout.splitlines():
+            # e.g. "8888/tcp                   DENY IN     Anywhere"
+            # or   "80/tcp (v6)                ALLOW IN    Anywhere (v6)"
+            m = re.match(r'(\d+)(?:/(tcp|udp))?\s+(ALLOW|DENY|REJECT)\s+(?:IN\s+)?Anywhere', line)
+            if m:
+                port  = m.group(1)
+                proto = m.group(2) or 'tcp'
+                action = m.group(3)
+                # extract comment from numbered output if present
+                comment_match = re.search(r'#\s*(.+)', line)
+                comment = comment_match.group(1).strip() if comment_match else ''
+                # avoid duplicates (IPv4/IPv6)
+                if not any(r['port'] == port and r['proto'] == proto for r in rules):
+                    rules.append({'port': port, 'proto': proto, 'action': action, 'comment': comment})
+    except Exception:
+        pass
+    return rules
+
+
+def ufw_toggle_port(port, proto, action):
+    """
+    Open or close a port via ufw.
+    action: 'allow' or 'deny'
+    Returns (success: bool, message: str)
+    """
+    import re
+    port = str(port).strip()
+    proto = proto.strip().lower()
+    action = action.strip().lower()
+
+    if not re.match(r'^\d{1,5}$', port) or int(port) > 65535:
+        return False, f'Ungültige Port-Nummer: {port}'
+    if proto not in ('tcp', 'udp'):
+        return False, f'Ungültiges Protokoll: {proto}'
+    if action not in ('allow', 'deny'):
+        return False, f'Ungültige Aktion: {action}'
+
+    try:
+        r = subprocess.run(
+            ['ufw', action, f'{port}/{proto}'],
+            capture_output=True, text=True, timeout=10
+        )
+        if r.returncode == 0:
+            subprocess.run(['ufw', 'reload'], capture_output=True, timeout=10)
+            verb = 'geöffnet' if action == 'allow' else 'gesperrt'
+            return True, f'Port {port}/{proto} {verb}.'
+        return False, (r.stderr or r.stdout).strip()
+    except Exception as e:
+        return False, str(e)
+
+
 def get_nginx_stats(name, max_lines=20000):
     """
     Parse per-project nginx access log.

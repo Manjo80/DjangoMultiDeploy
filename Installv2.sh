@@ -902,10 +902,9 @@ if ! ufw status | grep -q "Status: active"; then
   ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
   echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt"
 
-  # Manager-Port 8888: komplett von außen sperren
-  # Der Manager ist nur über nginx (Port 80) mit Hostnamen erreichbar
-  ufw deny 8888/tcp comment 'Manager-Port (nur via nginx Hostname)'
-  echo "  ✅ Port 8888 (Manager) extern gesperrt — Zugriff nur über nginx Hostname"
+  # Manager-Port 8888: bleibt offen (Debugging / direkter Zugriff möglich)
+  # Nach erfolgreicher Einrichtung kann Port 8888 manuell gesperrt werden:
+  # ufw deny 8888/tcp
 
   # Firewall aktivieren
   ufw --force enable
@@ -2495,7 +2494,8 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   # DNS-Check: Hostname prüfen und ggf. warnen
   if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    _RESOLVED=$(getent hosts "$MANAGER_HOSTNAME" 2>/dev/null | awk '{print $1}' | head -1)
+    _RESOLVED=$(getent hosts "$MANAGER_HOSTNAME" 2>/dev/null || true)
+    _RESOLVED=$(echo "$_RESOLVED" | awk '{print $1}' | head -1)
     if [ -z "$_RESOLVED" ]; then
       echo "⚠️  Hostname '$MANAGER_HOSTNAME' ist aktuell nicht im DNS auflösbar."
       echo "   Die IP-Adresse ${_MGR_DEFAULT_IP} wird als zusätzlicher server_name eingetragen,"
@@ -2732,12 +2732,8 @@ MGNGINXEOF
     echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
   fi
 
-  # ufw: Port 8888 nach außen sperren (Manager läuft jetzt via nginx)
-  if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-    ufw deny 8888/tcp comment 'Manager-Port (nur via nginx)' 2>/dev/null || true
-    ufw reload 2>/dev/null || true
-    echo "✅ Port 8888 via ufw gesperrt"
-  fi
+  # Port 8888 bleibt offen — nach Debugging kann er manuell gesperrt werden:
+  # ufw deny 8888/tcp && ufw reload
 
   _MGR_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
   [ -z "${_MGR_IP:-}" ] && _MGR_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"

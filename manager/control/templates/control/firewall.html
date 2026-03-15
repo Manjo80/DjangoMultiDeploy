@@ -1,0 +1,188 @@
+{% extends "control/base.html" %}
+{% block title %}Firewall — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-lg-8">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-shield-fill me-2"></i>Firewall (ufw)</h4>
+  <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if success_msg %}<div class="alert alert-success">{{ success_msg }}</div>{% endif %}
+
+<!-- UFW Status -->
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-activity me-2"></i>Status</span>
+    {% if ufw_status.available %}
+      {% if ufw_status.enabled %}
+        <span class="badge" style="background:#238636">aktiv</span>
+      {% else %}
+        <span class="badge" style="background:#9e6a03">inaktiv</span>
+      {% endif %}
+    {% else %}
+      <span class="badge" style="background:#6e7681">ufw nicht gefunden</span>
+    {% endif %}
+  </div>
+  {% if not ufw_status.available %}
+  <div class="card-body text-muted small">
+    ufw ist auf diesem Server nicht installiert oder nicht im PATH.
+  </div>
+  {% endif %}
+</div>
+
+{% if ufw_status.available %}
+
+<!-- Aktuelle Port-Regeln -->
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-list-ul me-2"></i>Aktuelle Port-Regeln</div>
+  <div class="card-body p-0">
+    {% if port_rules %}
+    <table class="table table-sm mb-0" style="font-family:monospace;font-size:0.85rem">
+      <thead>
+        <tr style="border-color:#30363d">
+          <th class="ps-3">Port</th>
+          <th>Proto</th>
+          <th>Status</th>
+          <th>Kommentar</th>
+          <th class="pe-3 text-end">Aktion</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in port_rules %}
+        <tr style="border-color:#30363d">
+          <td class="ps-3"><strong>{{ rule.port }}</strong></td>
+          <td>{{ rule.proto }}</td>
+          <td>
+            {% if rule.action == 'ALLOW' %}
+              <span class="badge" style="background:#238636">offen</span>
+            {% else %}
+              <span class="badge" style="background:#da3633">gesperrt</span>
+            {% endif %}
+          </td>
+          <td class="text-muted">{{ rule.comment }}</td>
+          <td class="pe-3 text-end">
+            {% if rule.action == 'ALLOW' %}
+            <form method="post" class="d-inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="deny">
+              <input type="hidden" name="port" value="{{ rule.port }}">
+              <input type="hidden" name="proto" value="{{ rule.proto }}">
+              <button type="submit" class="btn btn-outline-danger btn-sm"
+                      onclick="return confirm('Port {{ rule.port }}/{{ rule.proto }} sperren?')">
+                <i class="bi bi-lock-fill"></i> Sperren
+              </button>
+            </form>
+            {% else %}
+            <form method="post" class="d-inline">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="allow">
+              <input type="hidden" name="port" value="{{ rule.port }}">
+              <input type="hidden" name="proto" value="{{ rule.proto }}">
+              <button type="submit" class="btn btn-outline-success btn-sm"
+                      onclick="return confirm('Port {{ rule.port }}/{{ rule.proto }} öffnen?')">
+                <i class="bi bi-unlock-fill"></i> Öffnen
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="card-body text-muted small">Keine Port-Regeln gefunden.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Port öffnen / sperren -->
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-plus-circle me-2"></i>Port öffnen oder sperren</div>
+  <div class="card-body">
+    <form method="post" class="row g-2 align-items-end">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add_custom">
+      <div class="col-auto">
+        <label class="form-label">Port</label>
+        <input type="number" name="port" class="form-control" style="width:110px"
+               min="1" max="65535" placeholder="8888" required>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Protokoll</label>
+        <select name="proto" class="form-select" style="width:100px">
+          <option value="tcp">TCP</option>
+          <option value="udp">UDP</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Aktion</label>
+        <select name="toggle" class="form-select" style="width:130px">
+          <option value="allow">Öffnen (allow)</option>
+          <option value="deny">Sperren (deny)</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check2 me-1"></i>Anwenden
+        </button>
+      </div>
+    </form>
+    <div class="form-text mt-2">
+      Änderungen werden sofort wirksam (<code>ufw reload</code>).<br>
+      <strong class="text-warning">Achtung:</strong> Port 22 (SSH) nicht sperren — sonst Zugriff verloren.
+    </div>
+  </div>
+</div>
+
+<!-- Schnellzugriff bekannte Ports -->
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-lightning me-2"></i>Schnellzugriff</div>
+  <div class="card-body">
+    <div class="d-flex flex-wrap gap-2">
+      {% for label, port, proto in known_ports %}
+      <div class="d-flex gap-1 align-items-center border rounded px-2 py-1" style="border-color:#30363d!important">
+        <span class="small text-muted me-1">{{ label }} ({{ port }})</span>
+        <form method="post" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="allow">
+          <input type="hidden" name="port" value="{{ port }}">
+          <input type="hidden" name="proto" value="{{ proto }}">
+          <button type="submit" class="btn btn-outline-success btn-sm py-0 px-1" title="Öffnen">
+            <i class="bi bi-unlock"></i>
+          </button>
+        </form>
+        <form method="post" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="deny">
+          <input type="hidden" name="port" value="{{ port }}">
+          <input type="hidden" name="proto" value="{{ proto }}">
+          <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1" title="Sperren">
+            <i class="bi bi-lock"></i>
+          </button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+{% endif %}{# ufw available #}
+
+<div class="card mt-3">
+  <div class="card-header text-muted small"><i class="bi bi-info-circle me-2"></i>Hinweise</div>
+  <div class="card-body small text-muted">
+    <ul class="mb-0">
+      <li>Alle Änderungen werden im <a href="{% url 'audit_log' %}">Audit Log</a> protokolliert.</li>
+      <li>Port 8888 (Manager) läuft intern auf <code>127.0.0.1</code> — externes Öffnen nur für Debugging nötig.</li>
+      <li>Gunicorn-Ports (8000–8999) sind intern und sollten gesperrt bleiben.</li>
+      <li>Zum manuellen Prüfen: <code>ufw status numbered</code></li>
+    </ul>
+  </div>
+</div>
+
+</div>
+</div>
+{% endblock %}
