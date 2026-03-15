@@ -897,14 +897,15 @@ if ! ufw status | grep -q "Status: active"; then
   # Loopback immer erlauben (Gunicorn kommuniziert über 127.0.0.1)
   ufw allow in on lo comment 'Loopback intern'
 
-  # Alle Gunicorn-Ports (8000-8999) von außen sperren
+  # Manager-Port 8888 explizit öffnen — MUSS vor der Gunicorn-Range stehen,
+  # da ufw die erste passende Regel verwendet (Reihenfolge entscheidet!)
+  ufw allow 8888/tcp comment 'DjangoMultiDeploy Manager'
+  echo "  ✅ Port 8888 (Manager) geöffnet"
+
+  # Alle übrigen Gunicorn-Ports (8000-8999) von außen sperren
   # (Gunicorn hört ohnehin auf 127.0.0.1 — das ist eine zweite Absicherung)
   ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
-  echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt"
-
-  # Manager-Port 8888: bleibt offen (Debugging / direkter Zugriff möglich)
-  # Nach erfolgreicher Einrichtung kann Port 8888 manuell gesperrt werden:
-  # ufw deny 8888/tcp
+  echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt (8888 ausgenommen)"
 
   # Firewall aktivieren
   ufw --force enable
@@ -2473,8 +2474,8 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MANAGER_USER="${MANAGER_USER:-djmanager}"
 
   # Hostname für Manager-nginx-Site abfragen
-  # Der Manager ist NUR über diesen Hostnamen via nginx (Port 80) erreichbar.
-  # Port 8888 ist komplett gesperrt — läuft nur intern auf 127.0.0.1:8888
+  # Der Manager ist über nginx (Port 80) erreichbar UND direkt über Port 8888.
+  # Port 8888 ist ab Installation via ufw geöffnet (vor der Gunicorn-Range).
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   # Default: IP-Adresse des Servers — funktioniert immer ohne DNS-Eintrag
@@ -2509,7 +2510,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   fi
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
-  echo "🔌 Manager intern:       127.0.0.1:$_MANAGER_PORT (nur lokal)"
+  echo "🔌 Manager-Port:         0.0.0.0:$_MANAGER_PORT (direkt erreichbar)"
   echo "🌐 nginx Hostname:       http://$MANAGER_HOSTNAME/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   echo
@@ -2666,7 +2667,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/python ${_MANAGER_DIR}/manage.py runserver 127.0.0.1:${_MANAGER_PORT}
+ExecStart=${_MANAGER_DIR}/venv/bin/python ${_MANAGER_DIR}/manage.py runserver 0.0.0.0:${_MANAGER_PORT}
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
@@ -2677,10 +2678,10 @@ MANSERVEOF
 
   systemctl daemon-reload
   systemctl enable --now djmanager
-  echo "✅ Manager-Service gestartet (intern auf 127.0.0.1:${_MANAGER_PORT})"
+  echo "✅ Manager-Service gestartet (0.0.0.0:${_MANAGER_PORT} + nginx Port 80)"
 
   # nginx Reverse Proxy für Manager
-  # Manager ist NUR über diesen nginx-Vhost erreichbar — Port 8888 ist gesperrt
+  # Manager ist über nginx (Port 80) und direkt über Port 8888 erreichbar
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
   # server_name: Hostname + IP — damit Zugriff per IP immer funktioniert
@@ -2732,8 +2733,8 @@ MGNGINXEOF
     echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
   fi
 
-  # Port 8888 bleibt offen — nach Debugging kann er manuell gesperrt werden:
-  # ufw deny 8888/tcp && ufw reload
+  # Port 8888 ist ab Installation offen (ufw allow 8888/tcp).
+  # Zum Sperren: Firewall-Seite im Manager oder: ufw deny 8888/tcp && ufw reload
 
   _MGR_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
   [ -z "${_MGR_IP:-}" ] && _MGR_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -2746,13 +2747,18 @@ MGNGINXEOF
   if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "               oder http://${MANAGER_HOSTNAME}/ (wenn DNS eingetragen)"
   fi
-  echo "   (nginx auf Port 80 → intern 127.0.0.1:${_MANAGER_PORT})"
+  echo "   (nginx Port 80 → 127.0.0.1:${_MANAGER_PORT} | direkt: http://${_MGR_IP}:${_MANAGER_PORT}/)"
   echo "📊 Status:         systemctl status djmanager"
   echo "📋 Logs:           journalctl -u djmanager -f"
   echo "🔄 Update:         djmanager_update.sh"
   echo
   echo "🔒 Sicherheit:"
-  echo "   Port ${_MANAGER_PORT} ist komplett gesperrt — Zugriff NUR via nginx"
+  echo "   Port ${_MANAGER_PORT} ist geöffnet (direkt + nginx Port 80)"
+  if command -v ufw >/dev/null 2>&1; then
+    echo "   ufw: Port ${_MANAGER_PORT} via Firewall-Seite im Manager steuerbar"
+  else
+    echo "   ufw nicht installiert — Port ${_MANAGER_PORT} ohne Firewall offen"
+  fi
   echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
   if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo
