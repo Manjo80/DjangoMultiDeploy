@@ -28,6 +28,7 @@ from .utils import (
     get_nginx_stats, get_service_restarts,
     extract_project_zip, update_project_from_zip,
     run_pip_audit, run_django_deploy_check,
+    get_ufw_port_rules, ufw_toggle_port,
 )
 
 
@@ -528,6 +529,57 @@ def security_settings_view(request):
 
     return render(request, 'control/security_settings.html', {
         'sec':         sec,
+        'error':       error,
+        'success_msg': success_msg,
+    })
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Firewall (ufw) Port-Verwaltung (admin only)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@admin_required
+def firewall_view(request):
+    error = None
+    success_msg = None
+
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+        port   = request.POST.get('port', '').strip()
+        proto  = request.POST.get('proto', 'tcp').strip()
+
+        if action == 'add_custom':
+            # Benutzer trägt Port manuell ein
+            toggle = request.POST.get('toggle', 'allow')
+            ok, msg = ufw_toggle_port(port, proto, toggle)
+            if ok:
+                AuditLog.log(request, f'Firewall: Port {port}/{proto} → {toggle}')
+                success_msg = msg
+            else:
+                error = msg
+
+        elif action in ('allow', 'deny'):
+            ok, msg = ufw_toggle_port(port, proto, action)
+            if ok:
+                AuditLog.log(request, f'Firewall: Port {port}/{proto} → {action}')
+                success_msg = msg
+            else:
+                error = msg
+
+    ufw_status   = get_ufw_status()
+    port_rules   = get_ufw_port_rules()
+    known_ports  = [
+        ('HTTP',       '80',   'tcp'),
+        ('HTTPS',      '443',  'tcp'),
+        ('SSH',        '22',   'tcp'),
+        ('Manager',    '8888', 'tcp'),
+        ('PostgreSQL', '5432', 'tcp'),
+        ('MySQL',      '3306', 'tcp'),
+    ]
+    return render(request, 'control/firewall.html', {
+        'ufw_status':  ufw_status,
+        'port_rules':  port_rules,
+        'known_ports': known_ports,
         'error':       error,
         'success_msg': success_msg,
     })
