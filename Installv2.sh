@@ -2498,19 +2498,32 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Port 8888 ist ab Installation via ufw geöffnet (vor der Gunicorn-Range).
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  # Default: IP-Adresse des Servers — funktioniert immer ohne DNS-Eintrag
-  _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP}}"
+
+  # Alle Hostname-Varianten erkennen (kurz, FQDN, .iot-Suffix für mDNS/lokales DNS)
+  _HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null | cut -d. -f1 || echo '')"
+  _HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo '')"
+  # .iot-Variante: manche lokalen Netzwerke verwenden dieses Suffix (mDNS/Avahi/lokaler DNS)
+  _HOSTNAME_IOT="${_HOSTNAME_SHORT}.iot"
+
+  # Default für Manager-Hostname: FQDN bevorzugen falls er aussagekräftig ist
+  if [ -n "$_HOSTNAME_FQDN" ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
+    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_FQDN}}"
+  else
+    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP}}"
+  fi
+
   echo
   echo "🌐 nginx-Hostname / IP für den Manager:"
   echo "   Der Manager wird über nginx (Port 80) erreichbar sein."
   echo ""
-  echo "   Optionen (was soll in der Adressleiste stehen?):"
-  echo "   • IP-Adresse:    ${_MGR_DEFAULT_IP}  ← empfohlen, kein DNS nötig"
-  echo "   • Lokaler Name:  z.B. 'django-manager' oder 'deploy.local'"
-  echo "     (muss im DNS-Server oder /etc/hosts eingetragen sein)"
+  echo "   Erkannte Hostnamen dieses Servers:"
+  echo "   • IP-Adresse: ${_MGR_DEFAULT_IP}"
+  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurzname:   ${_HOSTNAME_SHORT}"
+  [ -n "$_HOSTNAME_FQDN"  ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && echo "   • FQDN:       ${_HOSTNAME_FQDN}"
+  echo "   • .iot-Name:  ${_HOSTNAME_IOT}  (wird automatisch mit eingetragen)"
   echo ""
-  echo "   Tipp: Einfach Enter drücken um die IP-Adresse (${_MGR_DEFAULT_IP}) zu verwenden."
-  _read -p "Manager-Hostname oder IP [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
+  echo "   Tipp: Einfach Enter drücken für den vorgeschlagenen Wert."
+  _read -p "Primärer Manager-Hostname oder IP [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
   MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
 
   # DNS-Check: Hostname prüfen und ggf. warnen
@@ -2582,23 +2595,32 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # .env für Manager
   _MANAGER_SECRET="$(openssl rand -hex 32)"
 
-  # ALLOWED_HOSTS: Hostname + ALLE lokalen IPs + Loopback
+  # ALLOWED_HOSTS: alle Hostnamen + alle lokalen IPs + Loopback
   # Alle IPs aller Interfaces erfassen — verhindert "Bad Request (400)" bei
   # Zugriff über eine IP die beim Install nicht die primäre war
   _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
-  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
-  # Doppelte Einträge entfernen
+  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_HOSTNAME_IOT},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
+  # Doppelte + leere Einträge entfernen
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
-  # CSRF_TRUSTED_ORIGINS: HTTP-Varianten MIT und OHNE Port
+  # CSRF_TRUSTED_ORIGINS: HTTP-Varianten MIT und OHNE Port für alle Hostnamen
   # KRITISCH: Browser sendet bei Port-8888-Zugriff "Origin: http://IP:8888"
   # → diese URL MUSS in CSRF_TRUSTED_ORIGINS stehen, sonst 403 beim Login-POST
-  _MGR_CSRF_ORIGINS="http://${MANAGER_HOSTNAME},http://${MANAGER_HOSTNAME}:${_MANAGER_PORT},http://${_MGR_DEFAULT_IP},http://${_MGR_DEFAULT_IP}:${_MANAGER_PORT},http://127.0.0.1,http://127.0.0.1:${_MANAGER_PORT},http://localhost,http://localhost:${_MANAGER_PORT}"
-  # Alle weiteren IPs ebenfalls mit und ohne Port aufnehmen
+  # Hilfsfunktion: host → "http://host,http://host:PORT"
+  _csrf_pair() { echo "http://${1},http://${1}:${_MANAGER_PORT}"; }
+  _MGR_CSRF_ORIGINS="$(_csrf_pair "${MANAGER_HOSTNAME}")"
+  # Alle erkannten Hostnamen (kurz, FQDN, .iot) mit und ohne Port
+  for _h in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_HOSTNAME_IOT}" "${_MGR_DEFAULT_IP}" "127.0.0.1" "localhost"; do
+    [ -z "$_h" ] && continue
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_h")"
+  done
+  # Alle weiteren Interface-IPs ebenfalls mit und ohne Port aufnehmen
   for _ip in $(echo "${_ALL_MGR_IPS}" | tr ',' ' '); do
     [ -z "$_ip" ] && continue
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip},http://${_ip}:${_MANAGER_PORT}"
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_ip")"
   done
+  # Doppelte entfernen
+  _MGR_CSRF_ORIGINS="$(echo "$_MGR_CSRF_ORIGINS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
   cat > "$_MANAGER_DIR/.env" <<MANAGERENV
 SECRET_KEY=${_MANAGER_SECRET}
 DEBUG=False
@@ -2667,23 +2689,28 @@ if [ -f "\$MANAGER_DIR/requirements.txt" ]; then
   "\$MANAGER_DIR/venv/bin/pip" install --no-cache-dir --prefer-binary -r "\$MANAGER_DIR/requirements.txt" -q
 fi
 
-# .env: CSRF_TRUSTED_ORIGINS aktualisieren falls Port-Varianten fehlen
-# (Fix für Installationen vor dem CSRF-Port-Fix)
+# .env: CSRF_TRUSTED_ORIGINS + ALLOWED_HOSTS aktualisieren
+# (fügt Port-Varianten und .iot-Hostname hinzu falls noch fehlend)
 _ENV_FILE="\$MANAGER_DIR/.env"
 if [ -f "\$_ENV_FILE" ]; then
   _CUR_CSRF="\$(grep '^CSRF_TRUSTED_ORIGINS=' "\$_ENV_FILE" | cut -d= -f2-)"
   _MGR_PORT_UP="\$(grep '^MANAGER_PORT=' "\$_ENV_FILE" | cut -d= -f2- | tr -d '\"')"
   _MGR_PORT_UP="\${_MGR_PORT_UP:-8888}"
+  # Alle aktuellen Hostnamen des Servers ermitteln
+  _UPD_SHORT="\$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
+  _UPD_FQDN="\$(hostname -f 2>/dev/null || echo '')"
+  _UPD_IOT="\${_UPD_SHORT}.iot"
+  _ALL_IPS="\$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^\$|^::' | paste -sd, -)"
   _NEEDS_FIX=0
-  # Prüfen ob Port-Variante bereits vorhanden
+  # Prüfen ob Port-Variante und .iot bereits vorhanden
   echo "\$_CUR_CSRF" | grep -q ":\${_MGR_PORT_UP}" || _NEEDS_FIX=1
+  echo "\$_CUR_CSRF" | grep -qF "\${_UPD_IOT}"      || _NEEDS_FIX=1
   if [ "\$_NEEDS_FIX" = "1" ]; then
-    echo "  🔧 Ergänze CSRF_TRUSTED_ORIGINS um Port-Varianten (:\${_MGR_PORT_UP})..."
-    _ALL_IPS="\$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^\$|^::' | paste -sd, -)"
+    echo "  🔧 Ergänze CSRF_TRUSTED_ORIGINS (Port :\${_MGR_PORT_UP} + .iot-Hostname)..."
     _NEW_CSRF="\$_CUR_CSRF"
-    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') 127.0.0.1 localhost; do
+    # Alle Hostnamen: IPs, kurz, FQDN, .iot, loopback
+    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') "\$_UPD_SHORT" "\$_UPD_FQDN" "\$_UPD_IOT" 127.0.0.1 localhost; do
       [ -z "\$_h" ] && continue
-      # Füge Port-Variante hinzu falls noch nicht vorhanden
       echo "\$_NEW_CSRF" | grep -qF "http://\${_h}:\${_MGR_PORT_UP}" || \
         _NEW_CSRF="\${_NEW_CSRF},http://\${_h}:\${_MGR_PORT_UP}"
       echo "\$_NEW_CSRF" | grep -qF "http://\${_h}" || \
@@ -2692,7 +2719,8 @@ if [ -f "\$_ENV_FILE" ]; then
     # ALLOWED_HOSTS ebenfalls vervollständigen
     _CUR_AH="\$(grep '^ALLOWED_HOSTS=' "\$_ENV_FILE" | cut -d= -f2-)"
     _NEW_AH="\$_CUR_AH"
-    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' '); do
+    for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') "\$_UPD_SHORT" "\$_UPD_FQDN" "\$_UPD_IOT"; do
+      [ -z "\$_h" ] && continue
       echo "\$_NEW_AH" | grep -qF "\$_h" || _NEW_AH="\${_NEW_AH},\${_h}"
     done
     sed -i "s|^CSRF_TRUSTED_ORIGINS=.*|CSRF_TRUSTED_ORIGINS=\${_NEW_CSRF}|" "\$_ENV_FILE"
@@ -2759,11 +2787,15 @@ MANSERVEOF
   # Manager ist über nginx (Port 80) und direkt über Port 8888 erreichbar
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-  # server_name: Hostname + IP — damit Zugriff per IP immer funktioniert
+
+  # server_name: alle Hostnamen + IP + .iot-Variante + catch-all (_)
+  # Damit ist der Manager per IP, Kurzname, FQDN UND hostname.iot erreichbar
   _MGR_NGINX_NAMES="${MANAGER_HOSTNAME}"
-  if [[ ! "$MANAGER_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -n "${_MGR_DEFAULT_IP:-}" ]; then
-    _MGR_NGINX_NAMES="${MANAGER_HOSTNAME} ${_MGR_DEFAULT_IP}"
-  fi
+  for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_HOSTNAME_IOT}" "${_MGR_DEFAULT_IP}"; do
+    [ -z "$_n" ] && continue
+    # Nur hinzufügen wenn noch nicht enthalten
+    echo "$_MGR_NGINX_NAMES" | grep -qF "$_n" || _MGR_NGINX_NAMES="${_MGR_NGINX_NAMES} ${_n}"
+  done
 
   cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
 server {
