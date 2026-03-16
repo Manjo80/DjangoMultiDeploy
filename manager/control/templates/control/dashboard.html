@@ -80,6 +80,77 @@
 </div>
 {% endif %}
 
+<!-- Manager-Karte (nur für Admins/Operators) -->
+{% if manager_info %}
+<div class="row g-3 mb-3">
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100 border-primary">
+      <div class="card-header d-flex justify-content-between align-items-center" style="background:rgba(13,110,253,.12)">
+        <div class="d-flex align-items-center gap-2">
+          <strong>{{ manager_info.PROJECTNAME }}</strong>
+          <span class="badge bg-primary">Manager</span>
+        </div>
+        {% if manager_info.status == 'active' %}
+          <span class="badge badge-active">● aktiv</span>
+        {% elif manager_info.status == 'failed' %}
+          <span class="badge badge-failed">● Fehler</span>
+        {% elif manager_info.status == 'inactive' %}
+          <span class="badge badge-inactive">● gestoppt</span>
+        {% else %}
+          <span class="badge badge-unknown">{{ manager_info.status }}</span>
+        {% endif %}
+      </div>
+      <div class="card-body small">
+        <table class="table table-sm table-dark mb-0">
+          <tr><th class="text-muted">Modus</th><td>{{ manager_info.MODE }} (DEBUG={{ manager_info.DEBUG }})</td></tr>
+          {% if manager_info.git_hash %}
+          <tr><th class="text-muted">Version</th>
+              <td class="font-monospace">{{ manager_info.git_hash }}
+                {% if manager_info.git_branch %}
+                  <span class="text-muted ms-1">({{ manager_info.git_branch }})</span>
+                {% endif %}
+              </td>
+          </tr>
+          {% endif %}
+          {% if manager_info.GITHUB_REPO_URL %}
+          <tr><th class="text-muted">GitHub</th>
+              <td><a href="{{ manager_info.GITHUB_REPO_URL }}" target="_blank"
+                     class="text-info text-truncate d-inline-block" style="max-width:150px"
+                     title="{{ manager_info.GITHUB_REPO_URL }}">{{ manager_info.GITHUB_REPO_URL }}</a></td>
+          </tr>
+          {% endif %}
+          <tr><th class="text-muted">Letztes Backup</th>
+              <td class="{% if not manager_info.last_backup %}text-warning{% endif %}">
+                {{ manager_info.last_backup|default:"⚠️ noch keins" }}
+              </td>
+          </tr>
+        </table>
+      </div>
+      <div class="card-footer">
+        <div class="d-flex gap-1 flex-wrap">
+          <a href="{% url 'manager_settings' %}" class="btn btn-sm btn-outline-primary flex-fill">
+            <i class="bi bi-gear"></i> Einstellungen
+          </a>
+          <a href="{% url 'log_viewer' manager_info.PROJECTNAME %}" class="btn btn-sm btn-outline-secondary" title="Logs">
+            <i class="bi bi-file-text"></i>
+          </a>
+          {% if user.is_staff %}
+          <button class="btn btn-sm btn-outline-success" title="Service neu starten"
+                  onclick="managerAction('restart', this)">
+            <i class="bi bi-arrow-clockwise"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-info" title="Update (git pull + Neustart)"
+                  onclick="runManagerUpdate(this)">
+            <i class="bi bi-arrow-repeat"></i>
+          </button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if not projects %}
 <div class="card text-center p-5">
   <i class="bi bi-inbox display-3 text-muted"></i>
@@ -154,29 +225,6 @@
 </div>
 {% endif %}
 
-<!-- Manager: Allowed Hosts Übersicht (nur für Admins) -->
-{% if role == 'admin' or user.is_superuser %}
-<div class="card mt-4">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-hdd-network me-2"></i>Manager — Allowed Hosts</span>
-    <a href="{% url 'manager_settings' %}" class="btn btn-sm btn-outline-primary">
-      <i class="bi bi-pencil me-1"></i>Verwalten
-    </a>
-  </div>
-  <div class="card-body py-2">
-    {% if allowed_hosts %}
-    <div class="d-flex flex-wrap gap-2">
-      {% for h in allowed_hosts %}
-      <span class="badge bg-secondary font-monospace" style="font-size:.8rem">{{ h }}</span>
-      {% endfor %}
-    </div>
-    {% else %}
-    <span class="text-muted small">Keine Allowed Hosts konfiguriert</span>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-
 {% block extra_js %}
 <script>
 const csrf = '{{ csrf_token }}';
@@ -191,7 +239,6 @@ async function quickAction(project, action, btn) {
   fd.append('action', action);
   try {
     await fetch(`/project/${project}/action/`, {method: 'POST', body: fd});
-    // Reload page to show updated status
     location.reload();
   } catch {
     btn.disabled = false;
@@ -204,10 +251,7 @@ function runUpdate(project, btn) {
   if (!confirm(`Update für "${project}" starten?`)) return;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  fetch(`/project/${project}/update/`, {
-    method: 'POST',
-    headers: {'X-CSRFToken': csrf},
-  })
+  fetch(`/project/${project}/update/`, {method: 'POST', headers: {'X-CSRFToken': csrf}})
   .then(r => r.json())
   .then(d => {
     btn.disabled = false;
@@ -220,6 +264,78 @@ function runUpdate(project, btn) {
     btn.innerHTML = '<i class="bi bi-arrow-repeat"></i>';
     alert('Verbindungsfehler beim Update.');
   });
+}
+
+// ── Manager-spezifische Aktionen ────────────────────────────────────────────
+async function managerAction(action, btn) {
+  const labels = {restart: 'neu starten', stop: 'stoppen', start: 'starten'};
+  if (!confirm(`Manager-Service wirklich ${labels[action] || action}?`)) return;
+  btn.disabled = true;
+  const origHtml = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', csrf);
+  fd.append('action', action);
+  try {
+    const r = await fetch('{% url "manager_action" %}', {method: 'POST', body: fd});
+    const d = await r.json();
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    if (d.ok && action === 'restart') {
+      // Service restarting — reload after short delay
+      setTimeout(() => location.reload(), 4000);
+    } else if (d.ok) {
+      location.reload();
+    } else {
+      alert('❌ ' + d.message);
+    }
+  } catch {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    if (action === 'restart') {
+      setTimeout(() => location.reload(), 4000);
+    } else {
+      alert('Verbindungsfehler.');
+    }
+  }
+}
+
+async function runManagerUpdate(btn) {
+  if (!confirm('Manager-Update starten?\n\nDas zieht den neuesten Code von GitHub und startet den Service neu (~30s).')) return;
+  btn.disabled = true;
+  const origHtml = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', csrf);
+  try {
+    const r = await fetch('{% url "manager_update" %}', {method: 'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) {
+      btn.innerHTML = '<i class="bi bi-check-lg text-success"></i>';
+      // Start countdown for page reload
+      let secs = 30;
+      const card = btn.closest('.card');
+      const note = document.createElement('div');
+      note.className = 'alert alert-info py-1 small mt-2 mb-0';
+      note.innerHTML = `Update läuft… Seite wird in <strong id="mgr-countdown">${secs}</strong>s neu geladen.`;
+      card.querySelector('.card-footer').after(note);
+      const iv = setInterval(() => {
+        secs--;
+        const el = document.getElementById('mgr-countdown');
+        if (el) el.textContent = secs;
+        if (secs <= 0) { clearInterval(iv); location.reload(); }
+      }, 1000);
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+      alert('❌ Update fehlgeschlagen:\n' + d.output);
+    }
+  } catch {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    // Connection lost likely means the service restarted — reload
+    setTimeout(() => location.reload(), 5000);
+  }
 }
 </script>
 {% endblock %}

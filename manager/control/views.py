@@ -85,6 +85,60 @@ def _check_project_access(user, name):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Manager self-info helper
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _get_manager_info():
+    """Build a pseudo-project dict for the djmanager service itself."""
+    service  = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
+    mgr_dir  = str(settings.BASE_DIR)
+    env_path = Path(settings.BASE_DIR) / '.env'
+
+    env = {}
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, _, v = line.partition('=')
+                    v = v.strip()
+                    if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+                        v = v[1:-1]
+                    env[k.strip()] = v
+    except OSError:
+        pass
+
+    git_branch = git_hash = github_url = ''
+    try:
+        git_hash   = subprocess.check_output(
+            ['git', '-C', mgr_dir, 'rev-parse', '--short', 'HEAD'],
+            text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+        git_branch = subprocess.check_output(
+            ['git', '-C', mgr_dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+            text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+        github_url = subprocess.check_output(
+            ['git', '-C', mgr_dir, 'remote', 'get-url', 'origin'],
+            text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+    except Exception:
+        pass
+
+    return {
+        'PROJECTNAME':     service,
+        'APPDIR':          mgr_dir,
+        'MODE':            'prod',
+        'DEBUG':           env.get('DEBUG', 'False'),
+        'DBTYPE':          'sqlite',
+        'GUNICORN_PORT':   env.get('MANAGER_PORT', '8888'),
+        'GITHUB_REPO_URL': github_url,
+        'git_branch':      git_branch,
+        'git_hash':        git_hash,
+        'last_backup':     get_last_backup(service),
+        'status':          get_service_status(service),
+        '_is_manager':     True,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Auth: Login / Logout
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -556,7 +610,11 @@ def manager_settings_view(request):
                     line = line.strip()
                     if line and not line.startswith('#') and '=' in line:
                         k, _, v = line.partition('=')
-                        result[k.strip()] = v.strip()
+                        v = v.strip()
+                        # Strip matching outer quotes (same as python-dotenv)
+                        if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+                            v = v[1:-1]
+                        result[k.strip()] = v
         except OSError:
             pass
         return result
@@ -583,6 +641,13 @@ def manager_settings_view(request):
             cur_hosts = [h.strip() for h in env.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
             cur_csrf  = [c.strip() for c in env.get('CSRF_TRUSTED_ORIGINS', '').split(',') if c.strip()]
 
+            def _schedule_restart():
+                _svc = getattr(djsettings, 'MANAGER_SERVICE_NAME', 'djmanager')
+                subprocess.Popen(
+                    ['bash', '-c', f'sleep 2 && systemctl restart {_svc}'],
+                    close_fds=True, start_new_session=True,
+                )
+
             if action == 'add':
                 if host in cur_hosts:
                     error = f'"{host}" ist bereits eingetragen.'
@@ -595,15 +660,9 @@ def manager_settings_view(request):
                     env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
-                    # Apply in-memory immediately (no gunicorn restart needed)
-                    if host not in djsettings.ALLOWED_HOSTS:
-                        djsettings.ALLOWED_HOSTS.append(host)
-                    for scheme in ('http', 'https'):
-                        entry = f'{scheme}://{host}'
-                        if entry not in djsettings.CSRF_TRUSTED_ORIGINS:
-                            djsettings.CSRF_TRUSTED_ORIGINS.append(entry)
+                    _schedule_restart()
                     AuditLog.log(request, 'Manager: Host hinzugefügt', details=host)
-                    success_msg = f'Host "{host}" hinzugefügt und sofort aktiv.'
+                    success_msg = f'Host "{host}" hinzugefügt. Service wird neu gestartet…'
 
             elif action == 'remove':
                 if host not in cur_hosts:
@@ -615,13 +674,9 @@ def manager_settings_view(request):
                     env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
-                    djsettings.ALLOWED_HOSTS[:] = [h for h in djsettings.ALLOWED_HOSTS if h != host]
-                    djsettings.CSRF_TRUSTED_ORIGINS[:] = [
-                        c for c in djsettings.CSRF_TRUSTED_ORIGINS
-                        if c not in (f'http://{host}', f'https://{host}')
-                    ]
+                    _schedule_restart()
                     AuditLog.log(request, 'Manager: Host entfernt', details=host)
-                    success_msg = f'Host "{host}" entfernt.'
+                    success_msg = f'Host "{host}" entfernt. Service wird neu gestartet…'
 
     env = _read_env()
     allowed_hosts = [h.strip() for h in env.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
@@ -703,14 +758,17 @@ def dashboard(request):
             p['last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
         ufw          = get_ufw_status()
         server_stats = get_server_stats()
-        role          = _get_role(request.user)
+        role         = _get_role(request.user)
         allowed_hosts = [h for h in settings.ALLOWED_HOSTS if h != '*']
+        manager_info  = _get_manager_info() if role in (
+            UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR) else None
         return render(request, 'control/dashboard.html', {
             'projects':      all_projects,
             'ufw':           ufw,
             'server_stats':  server_stats,
             'role':          role,
             'allowed_hosts': allowed_hosts,
+            'manager_info':  manager_info,
         })
     except Exception:
         _log.error('dashboard() crashed:\n%s', traceback.format_exc())
@@ -1111,7 +1169,12 @@ def log_viewer(request, name):
         return render(request, 'control/403.html', status=403)
     conf = get_project(name)
     if not conf:
-        raise Http404(f'Projekt "{name}" nicht gefunden.')
+        # Allow viewing logs for the manager service itself
+        _svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
+        if name == _svc:
+            conf = {'PROJECTNAME': name, '_is_manager': True}
+        else:
+            raise Http404(f'Projekt "{name}" nicht gefunden.')
 
     log_type = request.GET.get('type', 'journal')
     lines    = int(request.GET.get('lines', 200))
@@ -1176,3 +1239,53 @@ def project_update(request, name):
     ok, output = run_update(name)
     AuditLog.log(request, f'Git-Update: {name}', project=name, success=ok)
     return JsonResponse({'ok': ok, 'output': output})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Manager self-management (action + update)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@operator_required
+@require_POST
+def manager_action(request):
+    """Start / stop / restart the djmanager service itself."""
+    action  = request.POST.get('action', '')
+    if action not in ('start', 'stop', 'restart'):
+        return JsonResponse({'ok': False, 'message': 'Ungültige Aktion'})
+    service = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
+    # Use a delayed restart so the response is sent before the service dies
+    if action in ('restart', 'stop'):
+        subprocess.Popen(
+            ['bash', '-c', f'sleep 1 && systemctl {action} {service}'],
+            close_fds=True, start_new_session=True,
+        )
+        AuditLog.log(request, f'Manager-Service {action}', success=True)
+        return JsonResponse({'ok': True, 'message': f'Service wird {action}ed…'})
+    ok, output = service_action(service, action)
+    AuditLog.log(request, f'Manager-Service {action}', success=ok)
+    return JsonResponse({'ok': ok, 'message': output or ('OK' if ok else 'Fehler')})
+
+
+@admin_required
+@require_POST
+def manager_update(request):
+    """Run djmanager_update.sh asynchronously (git pull + service restart)."""
+    service = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
+    script  = f'/usr/local/bin/{service}_update.sh'
+    if not os.path.exists(script):
+        return JsonResponse({'ok': False, 'output': f'Update-Skript nicht gefunden: {script}'})
+    log_path = f'/tmp/{service}_update_{int(time.time())}.log'
+    try:
+        with open(log_path, 'w') as logf:
+            subprocess.Popen(
+                ['bash', script], stdout=logf, stderr=logf,
+                close_fds=True, start_new_session=True,
+            )
+        AuditLog.log(request, 'Manager-Update gestartet', success=True)
+        return JsonResponse({
+            'ok':     True,
+            'output': 'Update gestartet. Seite wird in ~30 Sekunden neu geladen.',
+            'log':    log_path,
+        })
+    except Exception as e:
+        return JsonResponse({'ok': False, 'output': str(e)})
