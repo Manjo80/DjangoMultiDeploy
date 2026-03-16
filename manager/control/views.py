@@ -535,6 +535,107 @@ def security_settings_view(request):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Manager-Einstellungen: ALLOWED_HOSTS / CSRF_TRUSTED_ORIGINS (admin only)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@admin_required
+def manager_settings_view(request):
+    """Read/write ALLOWED_HOSTS and CSRF_TRUSTED_ORIGINS in manager .env.
+    Changes take effect immediately in-memory (no restart required)."""
+    import re
+    from pathlib import Path
+    from django.conf import settings as djsettings
+
+    env_path = Path(djsettings.BASE_DIR) / '.env'
+
+    def _read_env():
+        result = {}
+        try:
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, _, v = line.partition('=')
+                        result[k.strip()] = v.strip()
+        except OSError:
+            pass
+        return result
+
+    def _write_env(d):
+        with open(env_path, 'w') as f:
+            for k, v in d.items():
+                f.write(f'{k}={v}\n')
+        os.chmod(env_path, 0o600)
+
+    error = None
+    success_msg = None
+
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+        host = request.POST.get('host', '').strip().strip('/')
+
+        if host and not re.match(r'^[\w.\-:\[\]*]+$', host):
+            error = 'Ungültiger Hostname — erlaubt: Buchstaben, Ziffern, .-:[]'
+            host = ''
+
+        if not error and host:
+            env = _read_env()
+            cur_hosts = [h.strip() for h in env.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
+            cur_csrf  = [c.strip() for c in env.get('CSRF_TRUSTED_ORIGINS', '').split(',') if c.strip()]
+
+            if action == 'add':
+                if host in cur_hosts:
+                    error = f'"{host}" ist bereits eingetragen.'
+                else:
+                    cur_hosts.append(host)
+                    for scheme in ('http', 'https'):
+                        entry = f'{scheme}://{host}'
+                        if entry not in cur_csrf:
+                            cur_csrf.append(entry)
+                    env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
+                    env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
+                    _write_env(env)
+                    # Apply in-memory immediately (no gunicorn restart needed)
+                    if host not in djsettings.ALLOWED_HOSTS:
+                        djsettings.ALLOWED_HOSTS.append(host)
+                    for scheme in ('http', 'https'):
+                        entry = f'{scheme}://{host}'
+                        if entry not in djsettings.CSRF_TRUSTED_ORIGINS:
+                            djsettings.CSRF_TRUSTED_ORIGINS.append(entry)
+                    AuditLog.log(request, 'Manager: Host hinzugefügt', details=host)
+                    success_msg = f'Host "{host}" hinzugefügt und sofort aktiv.'
+
+            elif action == 'remove':
+                if host not in cur_hosts:
+                    error = f'"{host}" nicht gefunden.'
+                else:
+                    cur_hosts = [h for h in cur_hosts if h != host]
+                    cur_csrf  = [c for c in cur_csrf
+                                 if c not in (f'http://{host}', f'https://{host}')]
+                    env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
+                    env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
+                    _write_env(env)
+                    djsettings.ALLOWED_HOSTS[:] = [h for h in djsettings.ALLOWED_HOSTS if h != host]
+                    djsettings.CSRF_TRUSTED_ORIGINS[:] = [
+                        c for c in djsettings.CSRF_TRUSTED_ORIGINS
+                        if c not in (f'http://{host}', f'https://{host}')
+                    ]
+                    AuditLog.log(request, 'Manager: Host entfernt', details=host)
+                    success_msg = f'Host "{host}" entfernt.'
+
+    env = _read_env()
+    allowed_hosts = [h.strip() for h in env.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
+    csrf_origins  = [c.strip() for c in env.get('CSRF_TRUSTED_ORIGINS', '').split(',') if c.strip()]
+
+    return render(request, 'control/manager_settings.html', {
+        'allowed_hosts': allowed_hosts,
+        'csrf_origins':  csrf_origins,
+        'error':         error,
+        'success_msg':   success_msg,
+    })
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Firewall (ufw) Port-Verwaltung (admin only)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -602,12 +703,14 @@ def dashboard(request):
             p['last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
         ufw          = get_ufw_status()
         server_stats = get_server_stats()
-        role         = _get_role(request.user)
+        role          = _get_role(request.user)
+        allowed_hosts = [h for h in settings.ALLOWED_HOSTS if h != '*']
         return render(request, 'control/dashboard.html', {
-            'projects':     all_projects,
-            'ufw':          ufw,
-            'server_stats': server_stats,
-            'role':         role,
+            'projects':      all_projects,
+            'ufw':           ufw,
+            'server_stats':  server_stats,
+            'role':          role,
+            'allowed_hosts': allowed_hosts,
         })
     except Exception:
         _log.error('dashboard() crashed:\n%s', traceback.format_exc())
