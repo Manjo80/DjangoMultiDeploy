@@ -1466,61 +1466,63 @@ def manager_update(request):
 def _patch_update_script_rsync_fallback(script_path):
     """
     Patcht das bestehende djmanager_update.sh einmalig (idempotent):
-    1. git stash vor git pull, damit lokale Änderungen kein Abort auslösen
-    2. cp-Fallback wenn rsync nicht installiert ist
+    1. pull.rebase false + --ff-only Fallback (kein divergent-branches-Fehler)
+    2. git stash vor git pull (lokale Änderungen blockieren nicht)
+    3. rsync → cp (kein rsync nötig)
     """
-    import shutil
     try:
         with open(script_path) as f:
             content = f.read()
 
         changed = False
 
-        # Patch 1: git stash vor git pull
-        if 'git stash' not in content:
-            old_pull = (
+        # Patch 1: pull.rebase false konfigurieren
+        if 'pull.rebase false' not in content:
+            old = '  git config --global --add safe.directory "$SCRIPT_DIR" 2>/dev/null || true\n'
+            new = (
                 '  git config --global --add safe.directory "$SCRIPT_DIR" 2>/dev/null || true\n'
+                '  git config --global pull.rebase false 2>/dev/null || true\n'
+            )
+            if old in content:
+                content = content.replace(old, new, 1)
+                changed = True
+
+        # Patch 2: git stash vor git pull
+        if 'git stash' not in content:
+            old = (
+                '  git config --global pull.rebase false 2>/dev/null || true\n'
                 '  if [ -f "$GITHUB_DEPLOY_KEY" ]; then'
             )
-            new_pull = (
-                '  git config --global --add safe.directory "$SCRIPT_DIR" 2>/dev/null || true\n'
+            new = (
+                '  git config --global pull.rebase false 2>/dev/null || true\n'
                 '  git -C "$SCRIPT_DIR" stash --quiet 2>/dev/null || true\n'
                 '  if [ -f "$GITHUB_DEPLOY_KEY" ]; then'
             )
-            if old_pull in content:
-                content = content.replace(old_pull, new_pull, 1)
+            if old in content:
+                content = content.replace(old, new, 1)
                 changed = True
 
-        # Patch 2: rsync-Fallback (nur nötig wenn rsync fehlt)
-        if 'command -v rsync' not in content and not shutil.which('rsync'):
-            old_rsync = (
-                'rsync -a \\\n'
+        # Patch 3: rsync → cp (rsync nicht überall verfügbar)
+        if 'rsync' in content:
+            old = (
+                '  rsync -a \\\n'
                 '    --exclude=\'.env\' \\\n'
                 '    --exclude=\'db.sqlite3\' \\\n'
                 '    --exclude=\'venv/\' \\\n'
                 '    --exclude=\'staticfiles/\' \\\n'
                 '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"'
             )
-            new_rsync = (
-                'if command -v rsync &>/dev/null; then\n'
-                '  rsync -a \\\n'
-                '    --exclude=\'.env\' \\\n'
-                '    --exclude=\'db.sqlite3\' \\\n'
-                '    --exclude=\'venv/\' \\\n'
-                '    --exclude=\'staticfiles/\' \\\n'
-                '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"\n'
-                'else\n'
+            new = (
                 '  find "$SCRIPT_DIR/manager" -mindepth 1 -maxdepth 1 | while read -r _item; do\n'
                 '    _base="$(basename "$_item")"\n'
                 '    case "$_base" in\n'
                 '      .env|db.sqlite3|venv|staticfiles) continue ;;\n'
                 '    esac\n'
                 '    cp -a "$_item" "$MANAGER_DIR/"\n'
-                '  done\n'
-                'fi'
+                '  done'
             )
-            if old_rsync in content:
-                content = content.replace(old_rsync, new_rsync, 1)
+            if old in content:
+                content = content.replace(old, new, 1)
                 changed = True
 
         if changed:
