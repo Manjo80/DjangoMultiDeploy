@@ -1465,45 +1465,66 @@ def manager_update(request):
 
 def _patch_update_script_rsync_fallback(script_path):
     """
-    Falls rsync nicht installiert ist, ersetzt den rsync-Aufruf im
-    Update-Script durch einen cp-Fallback (einmalig, idempotent).
+    Patcht das bestehende djmanager_update.sh einmalig (idempotent):
+    1. git stash vor git pull, damit lokale Änderungen kein Abort auslösen
+    2. cp-Fallback wenn rsync nicht installiert ist
     """
     import shutil
-    if shutil.which('rsync'):
-        return  # rsync vorhanden, nichts zu tun
     try:
         with open(script_path) as f:
             content = f.read()
-        if 'command -v rsync' in content:
-            return  # bereits gepatcht
-        old = (
-            'rsync -a \\\n'
-            '    --exclude=\'.env\' \\\n'
-            '    --exclude=\'db.sqlite3\' \\\n'
-            '    --exclude=\'venv/\' \\\n'
-            '    --exclude=\'staticfiles/\' \\\n'
-            '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"'
-        )
-        new = (
-            'if command -v rsync &>/dev/null; then\n'
-            '  rsync -a \\\n'
-            '    --exclude=\'.env\' \\\n'
-            '    --exclude=\'db.sqlite3\' \\\n'
-            '    --exclude=\'venv/\' \\\n'
-            '    --exclude=\'staticfiles/\' \\\n'
-            '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"\n'
-            'else\n'
-            '  find "$SCRIPT_DIR/manager" -mindepth 1 -maxdepth 1 | while read -r _item; do\n'
-            '    _base="$(basename "$_item")"\n'
-            '    case "$_base" in\n'
-            '      .env|db.sqlite3|venv|staticfiles) continue ;;\n'
-            '    esac\n'
-            '    cp -a "$_item" "$MANAGER_DIR/"\n'
-            '  done\n'
-            'fi'
-        )
-        if old in content:
+
+        changed = False
+
+        # Patch 1: git stash vor git pull
+        if 'git stash' not in content:
+            old_pull = (
+                '  git config --global --add safe.directory "$SCRIPT_DIR" 2>/dev/null || true\n'
+                '  if [ -f "$GITHUB_DEPLOY_KEY" ]; then'
+            )
+            new_pull = (
+                '  git config --global --add safe.directory "$SCRIPT_DIR" 2>/dev/null || true\n'
+                '  git -C "$SCRIPT_DIR" stash --quiet 2>/dev/null || true\n'
+                '  if [ -f "$GITHUB_DEPLOY_KEY" ]; then'
+            )
+            if old_pull in content:
+                content = content.replace(old_pull, new_pull, 1)
+                changed = True
+
+        # Patch 2: rsync-Fallback (nur nötig wenn rsync fehlt)
+        if 'command -v rsync' not in content and not shutil.which('rsync'):
+            old_rsync = (
+                'rsync -a \\\n'
+                '    --exclude=\'.env\' \\\n'
+                '    --exclude=\'db.sqlite3\' \\\n'
+                '    --exclude=\'venv/\' \\\n'
+                '    --exclude=\'staticfiles/\' \\\n'
+                '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"'
+            )
+            new_rsync = (
+                'if command -v rsync &>/dev/null; then\n'
+                '  rsync -a \\\n'
+                '    --exclude=\'.env\' \\\n'
+                '    --exclude=\'db.sqlite3\' \\\n'
+                '    --exclude=\'venv/\' \\\n'
+                '    --exclude=\'staticfiles/\' \\\n'
+                '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"\n'
+                'else\n'
+                '  find "$SCRIPT_DIR/manager" -mindepth 1 -maxdepth 1 | while read -r _item; do\n'
+                '    _base="$(basename "$_item")"\n'
+                '    case "$_base" in\n'
+                '      .env|db.sqlite3|venv|staticfiles) continue ;;\n'
+                '    esac\n'
+                '    cp -a "$_item" "$MANAGER_DIR/"\n'
+                '  done\n'
+                'fi'
+            )
+            if old_rsync in content:
+                content = content.replace(old_rsync, new_rsync, 1)
+                changed = True
+
+        if changed:
             with open(script_path, 'w') as f:
-                f.write(content.replace(old, new, 1))
+                f.write(content)
     except Exception:
         pass

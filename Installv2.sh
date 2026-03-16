@@ -2645,6 +2645,8 @@ if [ -d "\$SCRIPT_DIR/.git" ]; then
   echo "📥 Git Pull..."
   GITHUB_DEPLOY_KEY="/root/.ssh/djmanager_github_ed25519"
   git config --global --add safe.directory "\$SCRIPT_DIR" 2>/dev/null || true
+  # Lokale Änderungen stashen damit git pull nicht abbricht
+  git -C "\$SCRIPT_DIR" stash --quiet 2>/dev/null || true
   if [ -f "\$GITHUB_DEPLOY_KEY" ]; then
     GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
       git -C "\$SCRIPT_DIR" pull
