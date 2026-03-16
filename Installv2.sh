@@ -2645,37 +2645,33 @@ if [ -d "\$SCRIPT_DIR/.git" ]; then
   echo "📥 Git Pull..."
   GITHUB_DEPLOY_KEY="/root/.ssh/djmanager_github_ed25519"
   git config --global --add safe.directory "\$SCRIPT_DIR" 2>/dev/null || true
+  git config --global pull.rebase false 2>/dev/null || true
+  # Lokale Änderungen stashen damit git pull nicht abbricht
+  git -C "\$SCRIPT_DIR" stash --quiet 2>/dev/null || true
   if [ -f "\$GITHUB_DEPLOY_KEY" ]; then
     GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
-      git -C "\$SCRIPT_DIR" pull
+      git -C "\$SCRIPT_DIR" pull --ff-only 2>/dev/null \
+      || GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
+         git -C "\$SCRIPT_DIR" pull --no-rebase
   else
-    git -C "\$SCRIPT_DIR" pull
+    git -C "\$SCRIPT_DIR" pull --ff-only 2>/dev/null \
+      || git -C "\$SCRIPT_DIR" pull --no-rebase
   fi
 else
   echo "⏭️  Kein Git-Repository gefunden — überspringe git pull"
 fi
 
 # Neuen Manager-Code nach MANAGER_DIR synchronisieren
-# .env, db.sqlite3 und venv werden NICHT überschrieben
+# .env, db.sqlite3 und venv werden NICHT überschrieben (cp, kein rsync nötig)
 if [ -d "\$SCRIPT_DIR/manager" ]; then
   echo "📋 Synchronisiere Manager-Code nach \$MANAGER_DIR..."
-  if command -v rsync &>/dev/null; then
-    rsync -a \
-      --exclude='.env' \
-      --exclude='db.sqlite3' \
-      --exclude='venv/' \
-      --exclude='staticfiles/' \
-      "\$SCRIPT_DIR/manager/" "\$MANAGER_DIR/"
-  else
-    # rsync nicht verfügbar – manuelles Kopieren mit Schutz der Datendateien
-    find "\$SCRIPT_DIR/manager" -mindepth 1 -maxdepth 1 | while read -r _item; do
-      _base="\$(basename "\$_item")"
-      case "\$_base" in
-        .env|db.sqlite3|venv|staticfiles) continue ;;
-      esac
-      cp -a "\$_item" "\$MANAGER_DIR/"
-    done
-  fi
+  find "\$SCRIPT_DIR/manager" -mindepth 1 -maxdepth 1 | while read -r _item; do
+    _base="\$(basename "\$_item")"
+    case "\$_base" in
+      .env|db.sqlite3|venv|staticfiles) continue ;;
+    esac
+    cp -a "\$_item" "\$MANAGER_DIR/"
+  done
   echo "✅ Code synchronisiert"
 else
   echo "⏭️  \$SCRIPT_DIR/manager nicht gefunden — überspringe Sync"
