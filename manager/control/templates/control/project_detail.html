@@ -41,7 +41,17 @@
           <tr><th class="text-muted">Modus</th><td>{{ conf.MODE|default:"-" }} (DEBUG={{ conf.DEBUG|default:"-" }})</td></tr>
           <tr><th class="text-muted">Gunicorn intern</th>
               <td>127.0.0.1:{{ conf.GUNICORN_PORT|default:"-" }}
-                <small class="text-muted ms-1">→ über nginx Port 80 erreichbar</small></td></tr>
+                {% if conf.NGINX_PORT %}
+                  <small class="ms-1">→
+                    <a href="https://{{ request.get_host|cut:":443"|cut:":80" }}:{{ conf.NGINX_PORT }}/"
+                       target="_blank" class="text-info">
+                      Port {{ conf.NGINX_PORT }} öffnen ↗
+                    </a>
+                  </small>
+                {% else %}
+                  <small class="text-muted ms-1">→ über nginx Port 80 erreichbar</small>
+                {% endif %}
+              </td></tr>
           <tr><th class="text-muted">Worker</th><td>{{ conf.GUNICORN_WORKERS|default:"-" }}</td></tr>
           <tr><th class="text-muted">Datenbank</th><td>{{ conf.DBTYPE|default:"-" }}{% if conf.DBNAME %} / {{ conf.DBNAME }}{% endif %}</td></tr>
           <tr><th class="text-muted">DB-Host</th><td>{{ conf.DBHOST|default:"-" }}:{{ conf.DBPORT|default:"-" }}</td></tr>
