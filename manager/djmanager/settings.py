@@ -83,6 +83,10 @@ SESSION_SAVE_EVERY_REQUEST = True   # reset timer on each request
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 
+# CSRF-Cookie langlebig machen (1 Jahr) — verhindert 403-Fehler wenn
+# iOS/Android den Browser-Tab einfriert und Session-Cookies löscht
+CSRF_COOKIE_AGE = 31449600  # 1 Jahr
+
 # ── Security headers (relevant even behind reverse proxy) ─────────────────────
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
