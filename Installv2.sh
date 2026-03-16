@@ -2659,12 +2659,23 @@ fi
 # .env, db.sqlite3 und venv werden NICHT überschrieben
 if [ -d "\$SCRIPT_DIR/manager" ]; then
   echo "📋 Synchronisiere Manager-Code nach \$MANAGER_DIR..."
-  rsync -a \
-    --exclude='.env' \
-    --exclude='db.sqlite3' \
-    --exclude='venv/' \
-    --exclude='staticfiles/' \
-    "\$SCRIPT_DIR/manager/" "\$MANAGER_DIR/"
+  if command -v rsync &>/dev/null; then
+    rsync -a \
+      --exclude='.env' \
+      --exclude='db.sqlite3' \
+      --exclude='venv/' \
+      --exclude='staticfiles/' \
+      "\$SCRIPT_DIR/manager/" "\$MANAGER_DIR/"
+  else
+    # rsync nicht verfügbar – manuelles Kopieren mit Schutz der Datendateien
+    find "\$SCRIPT_DIR/manager" -mindepth 1 -maxdepth 1 | while read -r _item; do
+      _base="\$(basename "\$_item")"
+      case "\$_base" in
+        .env|db.sqlite3|venv|staticfiles) continue ;;
+      esac
+      cp -a "\$_item" "\$MANAGER_DIR/"
+    done
+  fi
   echo "✅ Code synchronisiert"
 else
   echo "⏭️  \$SCRIPT_DIR/manager nicht gefunden — überspringe Sync"
