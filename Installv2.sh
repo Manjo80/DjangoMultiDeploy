@@ -498,13 +498,16 @@ ALLOWED_HOSTS="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | 
 # CSRF_TRUSTED_ORIGINS automatisch bauen
 # -------------------------------------------------------------------
 # HTTP + HTTPS für alle IPs, jeweils mit und ohne Port
+# IPv6-Adressen (enthalten ':') in eckige Klammern einschließen
 CSRF_TRUSTED_ORIGINS_VALUE="$(echo "$ALL_LOCAL_IPS" | tr ',' '\n' | grep -v '^$' | awk \
   -v port="$NGINX_PORT" '
   NF {
-    print "http://" $0
-    print "https://" $0
-    print "http://" $0 ":" port
-    print "https://" $0 ":" port
+    ip = $0
+    if (index(ip, ":") > 0) ip = "[" ip "]"
+    print "http://" ip
+    print "https://" ip
+    print "http://" ip ":" port
+    print "https://" ip ":" port
   }' | awk '!seen[$0]++' | paste -sd, -)"
 # Loopback ergänzen
 CSRF_TRUSTED_ORIGINS_VALUE="${CSRF_TRUSTED_ORIGINS_VALUE},http://127.0.0.1:${NGINX_PORT},https://127.0.0.1:${NGINX_PORT}"
@@ -2583,11 +2586,13 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
   # CSRF_TRUSTED_ORIGINS: http + https für alle IPs, Standard-Ports (80/443)
+  # IPv6-Adressen (enthalten ':') müssen in eckigen Klammern stehen
   _MGR_CSRF_ORIGINS=""
   for _ip in $(echo "${_ALL_MGR_IPS},${_MGR_DEFAULT_IP},127.0.0.1" | tr ',' '\n' | grep -v '^$' | sort -u); do
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip},https://${_ip}"
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip}:${_MANAGER_PORT},https://${_ip}:${_MANAGER_PORT}"
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip}:80,https://${_ip}:443"
+    if echo "$_ip" | grep -q ':'; then _ip_h="[${_ip}]"; else _ip_h="$_ip"; fi
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h},https://${_ip_h}"
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h}:${_MANAGER_PORT},https://${_ip_h}:${_MANAGER_PORT}"
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h}:80,https://${_ip_h}:443"
   done
   _MGR_CSRF_ORIGINS="$(echo "$_MGR_CSRF_ORIGINS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 

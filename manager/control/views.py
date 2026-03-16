@@ -625,6 +625,23 @@ def manager_settings_view(request):
                 f.write(f'{k}={v}\n')
         os.chmod(env_path, 0o600)
 
+    def _update_nginx_server_names(hosts):
+        """Sync server_name in /etc/nginx/sites-available/djmanager with current hosts."""
+        nginx_path = '/etc/nginx/sites-available/djmanager'
+        if not os.path.exists(nginx_path):
+            return
+        try:
+            with open(nginx_path) as f:
+                content = f.read()
+            new_names = ' '.join(hosts) + ' _' if hosts else '_'
+            content = re.sub(r'server_name\s+[^;]+;', f'server_name {new_names};', content)
+            with open(nginx_path, 'w') as f:
+                f.write(content)
+            subprocess.run(['nginx', '-t'], check=True, capture_output=True)
+            subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, timeout=10)
+        except Exception:
+            pass  # non-fatal
+
     error = None
     success_msg = None
 
@@ -660,6 +677,7 @@ def manager_settings_view(request):
                     env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
+                    _update_nginx_server_names(cur_hosts)
                     # Sofort im Speicher aktualisieren (wirkt ohne Neustart)
                     if host not in djsettings.ALLOWED_HOSTS:
                         djsettings.ALLOWED_HOSTS.append(host)
@@ -676,11 +694,14 @@ def manager_settings_view(request):
                     error = f'"{host}" nicht gefunden.'
                 else:
                     cur_hosts = [h for h in cur_hosts if h != host]
+                    # Remove ALL CSRF entries for this host (http/https, with/without port)
+                    host_esc = re.escape(host)
                     cur_csrf  = [c for c in cur_csrf
-                                 if c not in (f'http://{host}', f'https://{host}')]
+                                 if not re.match(rf'^https?://{host_esc}(?:[:/]|$)', c)]
                     env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
+                    _update_nginx_server_names(cur_hosts)
                     # Sofort im Speicher aktualisieren
                     if host in djsettings.ALLOWED_HOSTS:
                         djsettings.ALLOWED_HOSTS.remove(host)
