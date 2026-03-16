@@ -220,7 +220,7 @@
         <a href="{% url 'ssh_key_display' name %}" class="btn btn-outline-secondary">
           <i class="bi bi-key me-1"></i> SSH-Key
         </a>
-        <a href="http://{{ conf.LOCAL_IP }}/djadmin/" target="_blank"
+        <a href="https://{{ conf.LOCAL_IP }}{% if conf.NGINX_PORT %}:{{ conf.NGINX_PORT }}{% endif %}/djadmin/" target="_blank"
            class="btn btn-outline-secondary">
           <i class="bi bi-box-arrow-up-right me-1"></i> Django Admin
         </a>
