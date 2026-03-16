@@ -541,6 +541,40 @@ def get_ufw_status(gunicorn_port=None):
                     break
             if result['port_blocked'] is None and result['enabled']:
                 result['port_blocked'] = False
+
+        # Prüfe wichtige Ports für den Dashboard-Banner
+        if result['enabled'] and result['rules']:
+            import re as _re
+
+            def _check_port(port_num):
+                """'allow' | 'deny' | None (kein Regel)"""
+                p = str(port_num)
+                for rule in result['rules']:
+                    to = rule['to']
+                    # Matches: "22", "22/tcp", "22/udp", "22 (v6)"
+                    if _re.match(r'^' + p + r'(/\w+)?(\s|$)', to):
+                        return rule['action'].lower()
+                return None
+
+            def _check_range(lo, hi):
+                """'deny' wenn ein DENY-Regel den Bereich abdeckt, sonst 'allow'/'none'"""
+                pat = _re.compile(r'^(\d+):(\d+)')
+                for rule in result['rules']:
+                    m = pat.match(rule['to'])
+                    if m and int(m.group(1)) <= lo and int(m.group(2)) >= hi:
+                        return rule['action'].lower()
+                return None
+
+            result['ports'] = {
+                'ssh':      _check_port(22),
+                'http':     _check_port(80),
+                'https':    _check_port(443),
+                'manager':  _check_port(8888),
+                'gunicorn': _check_range(8000, 8999),
+            }
+        else:
+            result['ports'] = {}
+
     except FileNotFoundError:
         pass
     except Exception:
