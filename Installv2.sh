@@ -1908,6 +1908,12 @@ fi
 
 systemctl restart nginx
 
+# UFW: NGINX_PORT für diese App freigeben (ist nicht 80/443 — jede App hat eigenen Port)
+if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+  ufw allow "${NGINX_PORT}/tcp" comment "nginx ${PROJECTNAME}"
+  echo "  ✅ UFW: Port ${NGINX_PORT} für ${PROJECTNAME} geöffnet"
+fi
+
 mark_done "nginx_done"
 
 echo
@@ -2133,6 +2139,7 @@ APPUSER="${APPUSER}"
 DBTYPE="${DBTYPE}"
 DBNAME="${DBNAME:-}"
 DBUSER_DB="${DBUSER:-}"
+NGINX_PORT="${NGINX_PORT}"
 BACKUP_DIR="/var/backups/\${PROJECT}"
 
 echo "╔═══════════════════════════════════════════════════════════════╗"
@@ -2153,6 +2160,12 @@ systemctl daemon-reload
 rm -f "/etc/nginx/sites-enabled/\${PROJECT}"
 rm -f "/etc/nginx/sites-available/\${PROJECT}"
 nginx -t 2>/dev/null && systemctl reload nginx || true
+
+# UFW-Regel für NGINX_PORT entfernen
+if [ -n "\${NGINX_PORT:-}" ] && command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+  ufw delete allow "\${NGINX_PORT}/tcp" 2>/dev/null || true
+  echo "  ✅ UFW: Port \${NGINX_PORT} für \${PROJECT} geschlossen"
+fi
 
 # Konfigurationen entfernen
 rm -f "/etc/sudoers.d/\${PROJECT}-service"
