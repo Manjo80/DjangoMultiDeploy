@@ -1115,9 +1115,34 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   echo
 
   # Retry-Schleife: Key testen, bei Fehler nochmal warten
+  # Im NONINTERACTIVE-Modus: auf Confirm-File warten statt Terminal-Eingabe
+  _CONFIRM_FILE="/tmp/djmanager_installs/${PROJECTNAME}_github_confirm"
+  mkdir -p /tmp/djmanager_installs
+
+  _wait_for_github_confirm() {
+    if [ "$NONINTERACTIVE" = "true" ]; then
+      echo "##WAIT_GITHUB_CONFIRM##"
+      echo "⏳ Warte auf Bestätigung im Web-Interface..."
+      echo "   → Seite oben: Deploy-Key kopieren → GitHub hinterlegen → Button klicken"
+      # Altes Confirm-File löschen falls vorhanden
+      rm -f "$_CONFIRM_FILE"
+      local _waited=0
+      while [ ! -f "$_CONFIRM_FILE" ]; do
+        sleep 3
+        _waited=$((_waited + 3))
+        if [ $((_waited % 60)) -eq 0 ]; then
+          echo "   ⏳ Warte seit ${_waited}s auf Bestätigung..."
+        fi
+      done
+      rm -f "$_CONFIRM_FILE"
+    else
+      _read -p "Key zu GitHub hinzugefügt? Verbindung testen [J] / abbrechen [n]: " CONFIRM
+      [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
+    fi
+  }
+
   while true; do
-    _read -p "Key bereits zu GitHub hinzugefügt? Verbindung testen [J] oder Installation abbrechen [n]: " CONFIRM
-    [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
+    _wait_for_github_confirm
 
     # known_hosts für github.com (als root)
     ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
@@ -1156,10 +1181,8 @@ SSHCONFIGEOF
     fi
 
     echo "❌ SSH zu GitHub fehlgeschlagen (Port 22 + 443)"
-    echo "   → Bitte den Deploy-Key in GitHub hinterlegen und nochmal versuchen"
-    echo "   → GitHub → Settings → SSH and GPG keys → New SSH key"
-    echo "   → Oder 'n' eingeben um die Installation abzubrechen"
-    echo
+    echo "   → Deploy-Key in GitHub hinterlegen und nochmal bestätigen"
+    echo "##WAIT_GITHUB_CONFIRM##"
   done
 else
   GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_github_ed25519}"
