@@ -959,7 +959,9 @@ def run_django_deploy_check(project):
             ):
                 issues.append(line)
         ok = result.returncode == 0
-        return {'ok': ok, 'issues': issues, 'raw': output[:3000], 'error': ''}
+        # Keep last 5000 chars so the actual error at the end of the traceback is visible
+        raw = output[-5000:] if len(output) > 5000 else output
+        return {'ok': ok, 'issues': issues, 'raw': raw, 'error': ''}
     except subprocess.TimeoutExpired:
         return {'ok': False, 'issues': [], 'raw': '', 'error': 'Timeout (deploy check)'}
     except Exception as e:
