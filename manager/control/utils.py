@@ -435,15 +435,23 @@ def update_allowed_hosts(name, hosts):
         with open(env_path) as f:
             lines = f.readlines()
         new_lines = []
-        found = False
+        found_allowed = False
+        found_csrf = False
+        csrf_value = ','.join(f'https://{h}' for h in hosts)
         for line in lines:
-            if line.strip().startswith('ALLOWED_HOSTS='):
+            stripped = line.strip()
+            if stripped.startswith('ALLOWED_HOSTS='):
                 new_lines.append(f'ALLOWED_HOSTS={",".join(hosts)}\n')
-                found = True
+                found_allowed = True
+            elif stripped.startswith('CSRF_TRUSTED_ORIGINS='):
+                new_lines.append(f'CSRF_TRUSTED_ORIGINS={csrf_value}\n')
+                found_csrf = True
             else:
                 new_lines.append(line)
-        if not found:
+        if not found_allowed:
             new_lines.append(f'ALLOWED_HOSTS={",".join(hosts)}\n')
+        if not found_csrf:
+            new_lines.append(f'CSRF_TRUSTED_ORIGINS={csrf_value}\n')
         with open(env_path, 'w') as f:
             f.writelines(new_lines)
     except OSError as e:
