@@ -68,10 +68,60 @@
 <div class="alert py-2 mb-3 d-flex align-items-center gap-3
   {% if ufw.enabled %}alert-success{% else %}alert-warning{% endif %}">
   <i class="bi bi-shield-{% if ufw.enabled %}lock-fill{% else %}exclamation{% endif %} fs-5"></i>
-  <div>
+  <div class="d-flex flex-wrap align-items-center gap-2">
     {% if ufw.enabled %}
-    <strong>Firewall aktiv</strong> —
-    Port 22 SSH ✅ | Port 80/443 HTTP ✅ | Ports 8000–8999 Gunicorn 🔒 | Port 8888 Manager 🔒 (via nginx Hostname)
+    <strong>Firewall aktiv</strong>
+    <span class="text-muted">—</span>
+
+    {# Port 22 SSH #}
+    {% with s=ufw.ports.ssh %}
+    <span class="badge {% if s == 'allow' %}bg-success{% elif s == 'deny' %}bg-danger{% else %}bg-secondary{% endif %}"
+          title="ufw-Regel für Port 22">
+      22 SSH
+      {% if s == 'allow' %}✅{% elif s == 'deny' %}🚫{% else %}⚠️{% endif %}
+    </span>
+    {% endwith %}
+
+    {# Port 80 HTTP #}
+    {% with s=ufw.ports.http %}
+    <span class="badge {% if s == 'allow' %}bg-success{% elif s == 'deny' %}bg-danger{% else %}bg-secondary{% endif %}"
+          title="ufw-Regel für Port 80">
+      80 HTTP
+      {% if s == 'allow' %}✅{% elif s == 'deny' %}🚫{% else %}⚠️{% endif %}
+    </span>
+    {% endwith %}
+
+    {# Port 443 HTTPS #}
+    {% with s=ufw.ports.https %}
+    <span class="badge {% if s == 'allow' %}bg-success{% elif s == 'deny' %}bg-danger{% else %}bg-secondary{% endif %}"
+          title="ufw-Regel für Port 443">
+      443 HTTPS
+      {% if s == 'allow' %}✅{% elif s == 'deny' %}🚫{% else %}⚠️{% endif %}
+    </span>
+    {% endwith %}
+
+    {# Ports 8000-8999 Gunicorn — soll DENY sein #}
+    {% with s=ufw.ports.gunicorn %}
+    <span class="badge {% if s == 'deny' %}bg-success{% elif s == 'allow' %}bg-danger{% else %}bg-warning text-dark{% endif %}"
+          title="ufw-Regel für Ports 8000–8999 (Gunicorn, soll gesperrt sein)">
+      8000–8999 Gunicorn
+      {% if s == 'deny' %}🔒{% elif s == 'allow' %}⚠️ offen!{% else %}?{% endif %}
+    </span>
+    {% endwith %}
+
+    {# Port 8888 Manager — soll DENY sein #}
+    {% with s=ufw.ports.manager %}
+    <span class="badge {% if s == 'deny' %}bg-success{% elif s == 'allow' %}bg-danger{% else %}bg-warning text-dark{% endif %}"
+          title="ufw-Regel für Port 8888 (Manager, soll gesperrt sein)">
+      8888 Manager
+      {% if s == 'deny' %}🔒{% elif s == 'allow' %}⚠️ offen!{% else %}?{% endif %}
+    </span>
+    {% endwith %}
+
+    <a href="{% url 'firewall' %}" class="badge bg-secondary text-decoration-none ms-1" title="Firewall verwalten">
+      <i class="bi bi-gear-fill"></i> Details
+    </a>
+
     {% else %}
     <strong>Firewall inaktiv!</strong> — ufw ist installiert aber nicht aktiviert.
     {% if user.is_staff %}Führe <code>ufw --force enable</code> auf dem Server aus.{% endif %}

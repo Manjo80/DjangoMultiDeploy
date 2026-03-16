@@ -145,5 +145,45 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 {% block extra_js %}{% endblock %}
+<script>
+/* ── CSRF-Guard: abgelaufenen Token automatisch erkennen und neu laden ── */
+(function () {
+  /* fetch-Wrapper: fängt 403-Antworten ab */
+  const _orig = window.fetch;
+  window.fetch = async function (...args) {
+    const resp = await _orig(...args);
+    if (resp.status === 403) {
+      const txt = await resp.clone().text().catch(() => '');
+      if (txt.includes('CSRF') || txt.includes('csrf') || txt.includes('403')) {
+        _csrfToast();
+        setTimeout(() => location.reload(), 2000);
+      }
+    }
+    return resp;
+  };
+
+  function _csrfToast() {
+    const el = document.createElement('div');
+    el.style.cssText = [
+      'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
+      'background:#9e6a03', 'color:#fff', 'padding:12px 24px',
+      'border-radius:8px', 'z-index:9999', 'font-size:0.9rem',
+      'box-shadow:0 4px 12px rgba(0,0,0,.4)'
+    ].join(';');
+    el.textContent = 'Session abgelaufen \u2013 Seite wird neu geladen\u2026';
+    document.body.appendChild(el);
+  }
+
+  /* visibilitychange: Reload wenn Tab >5 Min. inaktiv war (Handy gesperrt) */
+  let _hiddenAt = null;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      _hiddenAt = Date.now();
+    } else if (_hiddenAt && (Date.now() - _hiddenAt) > 5 * 60 * 1000) {
+      location.reload();
+    }
+  });
+})();
+</script>
 </body>
 </html>
