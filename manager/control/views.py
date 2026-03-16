@@ -412,6 +412,8 @@ def user_list(request):
 
 @admin_required
 def user_create(request):
+    import logging as _log, traceback as _tb
+    _logger = _log.getLogger(__name__)
     error = None
     if request.method == 'POST':
         username  = request.POST.get('username', '').strip()
@@ -446,20 +448,30 @@ def user_create(request):
             messages.success(request, f'Benutzer "{username}" erfolgreich erstellt.')
             return redirect('user_list')
 
-    all_projects = get_all_projects()
-    return render(request, 'control/user_form.html', {
-        'action':          'create',
-        'error':           error,
-        'role_choices':    UserProfile.ROLE_CHOICES,
-        'all_projects':    all_projects,
-        'assigned_names':  set(request.POST.getlist('projects')),
-    })
+    try:
+        all_projects = get_all_projects()
+        return render(request, 'control/user_form.html', {
+            'action':          'create',
+            'error':           error,
+            'role_choices':    UserProfile.ROLE_CHOICES,
+            'all_projects':    all_projects,
+            'assigned_names':  set(request.POST.getlist('projects')),
+        })
+    except Exception:
+        _logger.error('user_create render crashed:\n%s', _tb.format_exc())
+        raise
 
 
 @admin_required
 def user_edit(request, uid):
+    import logging as _log, traceback as _tb
+    _logger = _log.getLogger(__name__)
     edit_user = get_object_or_404(User, pk=uid)
-    profile, _ = UserProfile.objects.get_or_create(user=edit_user)
+    try:
+        profile, _ = UserProfile.objects.get_or_create(user=edit_user)
+    except Exception:
+        _logger.error('user_edit get_or_create crashed:\n%s', _tb.format_exc())
+        raise
     error = None
 
     if request.method == 'POST':
@@ -515,19 +527,23 @@ def user_edit(request, uid):
             messages.success(request, 'Konto entsperrt.')
             return redirect('user_edit', uid=uid)
 
-    all_projects     = get_all_projects()
-    assigned_names   = set(
-        ProjectPermission.objects.filter(user=edit_user).values_list('project_name', flat=True)
-    )
-    return render(request, 'control/user_form.html', {
-        'action':          'edit',
-        'edit_user':       edit_user,
-        'profile':         profile,
-        'role_choices':    UserProfile.ROLE_CHOICES,
-        'error':           error,
-        'all_projects':    all_projects,
-        'assigned_names':  assigned_names,
-    })
+    try:
+        all_projects     = get_all_projects()
+        assigned_names   = set(
+            ProjectPermission.objects.filter(user=edit_user).values_list('project_name', flat=True)
+        )
+        return render(request, 'control/user_form.html', {
+            'action':          'edit',
+            'edit_user':       edit_user,
+            'profile':         profile,
+            'role_choices':    UserProfile.ROLE_CHOICES,
+            'error':           error,
+            'all_projects':    all_projects,
+            'assigned_names':  assigned_names,
+        })
+    except Exception:
+        _logger.error('user_edit render crashed:\n%s', _tb.format_exc())
+        raise
 
 
 @admin_required
@@ -678,16 +694,12 @@ def manager_settings_view(request):
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
                     _update_nginx_server_names(cur_hosts)
-                    # Sofort im Speicher aktualisieren (wirkt ohne Neustart)
-                    if host not in djsettings.ALLOWED_HOSTS:
-                        djsettings.ALLOWED_HOSTS.append(host)
-                    for scheme in ('http', 'https'):
-                        entry = f'{scheme}://{host}'
-                        if entry not in djsettings.CSRF_TRUSTED_ORIGINS:
-                            djsettings.CSRF_TRUSTED_ORIGINS.append(entry)
+                    # Kein in-memory Update — bei mehreren Gunicorn-Workern würde
+                    # nur der aktuelle Worker aktualisiert. Service-Neustart sorgt
+                    # dafür, dass alle Worker die neue .env einlesen.
                     _schedule_restart()
                     AuditLog.log(request, 'Manager: Host hinzugefügt', details=host)
-                    success_msg = f'Host "{host}" hinzugefügt.'
+                    success_msg = f'Host "{host}" hinzugefügt. Service wird neu gestartet…'
 
             elif action == 'remove':
                 if host not in cur_hosts:
@@ -702,16 +714,9 @@ def manager_settings_view(request):
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
                     _update_nginx_server_names(cur_hosts)
-                    # Sofort im Speicher aktualisieren
-                    if host in djsettings.ALLOWED_HOSTS:
-                        djsettings.ALLOWED_HOSTS.remove(host)
-                    for scheme in ('http', 'https'):
-                        entry = f'{scheme}://{host}'
-                        if entry in djsettings.CSRF_TRUSTED_ORIGINS:
-                            djsettings.CSRF_TRUSTED_ORIGINS.remove(entry)
                     _schedule_restart()
                     AuditLog.log(request, 'Manager: Host entfernt', details=host)
-                    success_msg = f'Host "{host}" entfernt.'
+                    success_msg = f'Host "{host}" entfernt. Service wird neu gestartet…'
 
     env = _read_env()
     allowed_hosts = [h.strip() for h in env.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
