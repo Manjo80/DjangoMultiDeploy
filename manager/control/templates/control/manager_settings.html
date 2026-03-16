@@ -1,0 +1,111 @@
+{% extends "control/base.html" %}
+{% block title %}Allowed Hosts — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-lg-8">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Manager — Allowed Hosts</h4>
+  <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if success_msg %}<div class="alert alert-success">{{ success_msg }}</div>{% endif %}
+
+<div class="alert alert-info py-2 small">
+  <i class="bi bi-info-circle me-1"></i>
+  Änderungen werden <strong>sofort aktiv</strong> (kein Service-Neustart nötig) und in der
+  <code>.env</code>-Datei gespeichert, sodass sie auch nach einem Neustart gelten.
+  Wird ein Hostname hinzugefügt, werden automatisch
+  <code>http://hostname</code> und <code>https://hostname</code> in die CSRF_TRUSTED_ORIGINS aufgenommen.
+</div>
+
+<!-- Aktuell konfigurierte Hosts -->
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-list-check me-2"></i>Aktuelle ALLOWED_HOSTS</div>
+  <div class="card-body p-0">
+    {% if allowed_hosts %}
+    <table class="table table-sm table-dark mb-0">
+      <thead>
+        <tr>
+          <th>Hostname / IP</th>
+          <th class="text-end" style="width:100px">Aktion</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in allowed_hosts %}
+        <tr>
+          <td class="font-monospace align-middle">{{ h }}</td>
+          <td class="text-end">
+            <form method="post" style="display:inline"
+                  onsubmit="return confirm('Host \'{{ h }}\' wirklich entfernen?')">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="host"   value="{{ h }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="p-3 text-muted small">Keine Hosts konfiguriert.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Host hinzufügen -->
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-plus-circle me-2"></i>Host hinzufügen</div>
+  <div class="card-body">
+    <form method="post" class="row g-2 align-items-end">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add">
+      <div class="col">
+        <label class="form-label small">Hostname oder IP-Adresse</label>
+        <input type="text" name="host" class="form-control font-monospace"
+               placeholder="z.B.  meinserver.example.com  oder  10.0.0.5"
+               autocomplete="off" required>
+        <div class="form-text">
+          Nur den Hostnamen ohne <code>http://</code> oder Pfad eingeben.<br>
+          Für den externen Reverse Proxy: den öffentlichen Domainnamen eintragen.
+        </div>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-plus-lg me-1"></i>Hinzufügen
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- CSRF_TRUSTED_ORIGINS (read-only Übersicht) -->
+<div class="card">
+  <div class="card-header d-flex align-items-center gap-2">
+    <i class="bi bi-shield-check"></i>
+    CSRF_TRUSTED_ORIGINS
+    <span class="badge bg-secondary ms-auto">{{ csrf_origins|length }}</span>
+  </div>
+  <div class="card-body py-2">
+    {% if csrf_origins %}
+    <div class="d-flex flex-wrap gap-1">
+      {% for c in csrf_origins %}
+      <span class="badge bg-dark font-monospace border" style="font-size:.75rem">{{ c }}</span>
+      {% endfor %}
+    </div>
+    <div class="form-text mt-2">
+      Wird automatisch gepflegt wenn Hosts oben hinzugefügt / entfernt werden.
+    </div>
+    {% else %}
+    <span class="text-muted small">Keine Einträge.</span>
+    {% endif %}
+  </div>
+</div>
+
+</div>
+</div>
+{% endblock %}

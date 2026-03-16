@@ -50,6 +50,9 @@ urlpatterns = [
     # Security settings (admin only)
     path('security/', views.security_settings_view, name='security_settings'),
 
+    # Manager-Einstellungen: ALLOWED_HOSTS (admin only)
+    path('manager-settings/', views.manager_settings_view, name='manager_settings'),
+
     # Firewall / ufw Port-Verwaltung (admin only)
     path('firewall/', views.firewall_view, name='firewall'),
 ]

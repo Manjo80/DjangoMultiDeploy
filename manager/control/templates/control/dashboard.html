@@ -154,6 +154,29 @@
 </div>
 {% endif %}
 
+<!-- Manager: Allowed Hosts Übersicht (nur für Admins) -->
+{% if role == 'admin' or user.is_superuser %}
+<div class="card mt-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-hdd-network me-2"></i>Manager — Allowed Hosts</span>
+    <a href="{% url 'manager_settings' %}" class="btn btn-sm btn-outline-primary">
+      <i class="bi bi-pencil me-1"></i>Verwalten
+    </a>
+  </div>
+  <div class="card-body py-2">
+    {% if allowed_hosts %}
+    <div class="d-flex flex-wrap gap-2">
+      {% for h in allowed_hosts %}
+      <span class="badge bg-secondary font-monospace" style="font-size:.8rem">{{ h }}</span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <span class="text-muted small">Keine Allowed Hosts konfiguriert</span>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 {% block extra_js %}
 <script>
 const csrf = '{{ csrf_token }}';
