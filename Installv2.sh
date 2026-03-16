@@ -2655,6 +2655,21 @@ else
   echo "⏭️  Kein Git-Repository gefunden — überspringe git pull"
 fi
 
+# Neuen Manager-Code nach MANAGER_DIR synchronisieren
+# .env, db.sqlite3 und venv werden NICHT überschrieben
+if [ -d "\$SCRIPT_DIR/manager" ]; then
+  echo "📋 Synchronisiere Manager-Code nach \$MANAGER_DIR..."
+  rsync -a \
+    --exclude='.env' \
+    --exclude='db.sqlite3' \
+    --exclude='venv/' \
+    --exclude='staticfiles/' \
+    "\$SCRIPT_DIR/manager/" "\$MANAGER_DIR/"
+  echo "✅ Code synchronisiert"
+else
+  echo "⏭️  \$SCRIPT_DIR/manager nicht gefunden — überspringe Sync"
+fi
+
 # Python-Abhängigkeiten aktualisieren
 if [ -f "\$MANAGER_DIR/requirements.txt" ]; then
   echo "📦 Installiere Requirements..."
