@@ -1114,24 +1114,52 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   echo "   Dann: GitHub → Settings → SSH and GPG keys → New SSH key"
   echo
 
-  _read -p "Fortfahren nachdem der Key zu GitHub hinzugefügt wurde? (J/n): " CONFIRM
-  [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
+  # Retry-Schleife: Key testen, bei Fehler nochmal warten
+  # Im NONINTERACTIVE-Modus: auf Confirm-File warten statt Terminal-Eingabe
+  _CONFIRM_FILE="/tmp/djmanager_installs/${PROJECTNAME}_github_confirm"
+  mkdir -p /tmp/djmanager_installs
 
-  # known_hosts für github.com (als root)
-  ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
-  chmod 644 /root/.ssh/known_hosts
+  _wait_for_github_confirm() {
+    if [ "$NONINTERACTIVE" = "true" ]; then
+      echo "##WAIT_GITHUB_CONFIRM##"
+      echo "⏳ Warte auf Bestätigung im Web-Interface..."
+      echo "   → Seite oben: Deploy-Key kopieren → GitHub hinterlegen → Button klicken"
+      # Altes Confirm-File löschen falls vorhanden
+      rm -f "$_CONFIRM_FILE"
+      local _waited=0
+      while [ ! -f "$_CONFIRM_FILE" ]; do
+        sleep 3
+        _waited=$((_waited + 3))
+        if [ $((_waited % 60)) -eq 0 ]; then
+          echo "   ⏳ Warte seit ${_waited}s auf Bestätigung..."
+        fi
+      done
+      rm -f "$_CONFIRM_FILE"
+    else
+      _read -p "Key zu GitHub hinzugefügt? Verbindung testen [J] / abbrechen [n]: " CONFIRM
+      [[ ! "${CONFIRM:-J}" =~ ^[Jj]$ ]] && echo "❌ Abbruch." && exit 1
+    fi
+  }
 
-  # SSH-Verbindung zu GitHub testen
-  echo "🔍 Teste SSH-Verbindung zu GitHub (Port 22)..."
-  SSH_TEST_RESULT=$(timeout 15 ssh -i "$GITHUB_DEPLOY_KEY" -o IdentitiesOnly=yes \
-    -o StrictHostKeyChecking=no -o ConnectTimeout=10 -T git@github.com 2>&1 || true)
+  while true; do
+    _wait_for_github_confirm
 
-  if echo "$SSH_TEST_RESULT" | grep -q "successfully authenticated"; then
-    echo "✅ GitHub SSH Port 22 erfolgreich verbunden"
-  else
+    # known_hosts für github.com (als root)
+    ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+    chmod 644 /root/.ssh/known_hosts
+
+    # SSH-Verbindung zu GitHub testen
+    echo "🔍 Teste SSH-Verbindung zu GitHub (Port 22)..."
+    SSH_TEST_RESULT=$(timeout 15 ssh -i "$GITHUB_DEPLOY_KEY" -o IdentitiesOnly=yes \
+      -o StrictHostKeyChecking=no -o ConnectTimeout=10 -T git@github.com 2>&1 || true)
+
+    if echo "$SSH_TEST_RESULT" | grep -q "successfully authenticated"; then
+      echo "✅ GitHub SSH Port 22 erfolgreich verbunden"
+      break
+    fi
+
     echo "⚠️  SSH Port 22 nicht erreichbar — teste Port 443 (ssh.github.com)..."
     ssh-keyscan -H -p 443 ssh.github.com >> /root/.ssh/known_hosts 2>/dev/null || true
-
     SSH_TEST_443=$(timeout 15 ssh -i "$GITHUB_DEPLOY_KEY" -o IdentitiesOnly=yes \
       -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 443 -T git@ssh.github.com 2>&1 || true)
 
@@ -1149,11 +1177,13 @@ SSHCONFIGEOF
       chmod 600 /root/.ssh/config
       echo "✅ SSH-Config für GitHub Port 443 erstellt"
       GITHUB_SSH_OPTS="-o ConnectTimeout=30 -p 443"
-    else
-      echo "⚠️  SSH zu GitHub nicht erreichbar (Port 22 + 443 fehlgeschlagen)"
-      echo "   Klonen wird trotzdem versucht (mit 30s Timeout)..."
+      break
     fi
-  fi
+
+    echo "❌ SSH zu GitHub fehlgeschlagen (Port 22 + 443)"
+    echo "   → Deploy-Key in GitHub hinterlegen und nochmal bestätigen"
+    echo "##WAIT_GITHUB_CONFIRM##"
+  done
 else
   GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_github_ed25519}"
   echo "⏭️  GitHub nicht genutzt — überspringe GitHub-Setup"

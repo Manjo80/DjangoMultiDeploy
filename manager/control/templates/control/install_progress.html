@@ -16,8 +16,25 @@
   <div class="card-body p-0">
     <div class="terminal-box" id="terminal"></div>
   </div>
-  <div class="card-footer d-flex justify-content-between align-items-center">
+  <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span class="text-muted small" id="status-text">Warte auf Ausgabe…</span>
+
+    <!-- Button: Deploy-Key bestätigen (erscheint wenn Script wartet) -->
+    <div id="github-confirm-box" class="d-none">
+      <div class="alert alert-warning mb-0 py-2 px-3 d-flex align-items-center gap-3">
+        <div>
+          <strong>Deploy-Key hinterlegen</strong><br>
+          <small>
+            <a href="{% url 'global_deploy_key' %}" target="_blank">Key anzeigen / kopieren</a>
+            &nbsp;→ GitHub → Settings → SSH keys → New SSH key → einfügen → Speichern
+          </small>
+        </div>
+        <button id="github-confirm-btn" class="btn btn-success btn-sm text-nowrap">
+          <i class="bi bi-check-lg me-1"></i> Key hinterlegt → Weiter
+        </button>
+      </div>
+    </div>
+
     <div id="action-buttons" class="d-none">
       <a href="{% url 'project_detail' project %}" class="btn btn-primary">
         <i class="bi bi-gear me-1"></i> Projekt verwalten
@@ -37,13 +54,36 @@ const terminal   = document.getElementById('terminal');
 const statusBadge = document.getElementById('status-badge');
 const statusText  = document.getElementById('status-text');
 const actionBtns  = document.getElementById('action-buttons');
+const ghConfirmBox = document.getElementById('github-confirm-box');
+const ghConfirmBtn = document.getElementById('github-confirm-btn');
 const pollUrl     = '{% url "install_stream" log_name %}';
+const confirmUrl  = '{% url "ssh_key_confirm" project %}';
 
 let offset    = 0;
 let lineCount = 0;
 let idleTicks = 0;       // Polls ohne neue Daten
 let errTicks  = 0;       // aufeinanderfolgende Fehler
 let timer     = null;
+let waitingForConfirm = false;
+
+ghConfirmBtn.addEventListener('click', async () => {
+  ghConfirmBtn.disabled = true;
+  ghConfirmBtn.textContent = 'Wird bestätigt…';
+  try {
+    const r = await fetch(confirmUrl, {
+      method: 'POST',
+      headers: {'X-CSRFToken': '{{ csrf_token }}'},
+    });
+    if (r.ok) {
+      ghConfirmBox.classList.add('d-none');
+      waitingForConfirm = false;
+      statusText.textContent = 'Verbindung zu GitHub wird getestet…';
+    }
+  } catch(e) {
+    ghConfirmBtn.disabled = false;
+    ghConfirmBtn.textContent = 'Key hinterlegt → Weiter';
+  }
+});
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -60,6 +100,15 @@ function colorLine(text) {
 function appendLines(lines) {
   for (const text of lines) {
     if (!text.trim()) continue;
+    // Internen Marker nicht anzeigen, aber Button einblenden
+    if (text.includes('##WAIT_GITHUB_CONFIRM##')) {
+      waitingForConfirm = true;
+      ghConfirmBox.classList.remove('d-none');
+      ghConfirmBtn.disabled = false;
+      ghConfirmBtn.textContent = 'Key hinterlegt → Weiter';
+      statusText.textContent = 'Warte auf GitHub Deploy-Key…';
+      continue;
+    }
     const div = document.createElement('div');
     div.textContent = text;
     const c = colorLine(text);
@@ -104,7 +153,8 @@ async function poll() {
       appendLines(data.lines);
       statusText.textContent = `${lineCount} Zeilen empfangen…`;
     } else {
-      idleTicks++;
+      // Timeout pausieren solange Script auf Bestätigung wartet
+      if (!waitingForConfirm) idleTicks++;
       offset = data.offset;
       // Timeout nach ~5 Minuten ohne neue Ausgabe
       if (idleTicks > 300) { setError('Keine Ausgabe seit 5 Minuten — prüfe systemctl status.'); return; }
