@@ -220,7 +220,7 @@
         <a href="{% url 'ssh_key_display' name %}" class="btn btn-outline-secondary">
           <i class="bi bi-key me-1"></i> SSH-Key
         </a>
-        <a href="http://{{ conf.LOCAL_IP }}/djadmin/" target="_blank"
+        <a href="https://{{ conf.LOCAL_IP }}{% if conf.NGINX_PORT %}:{{ conf.NGINX_PORT }}{% endif %}/djadmin/" target="_blank"
            class="btn btn-outline-secondary">
           <i class="bi bi-box-arrow-up-right me-1"></i> Django Admin
         </a>
@@ -660,7 +660,7 @@ async function runSecurityScan() {
         html += `<div class="alert alert-secondary small">${d.deploy_check.error}</div>`;
       }
       if (d.deploy_check.raw) {
-        html += `<pre class="log-output" style="max-height:200px;font-size:0.75rem">${d.deploy_check.raw}</pre>`;
+        html += `<pre class="log-output">${d.deploy_check.raw}</pre>`;
       }
     } else {
       html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Sicherheitswarnungen.</div>';
