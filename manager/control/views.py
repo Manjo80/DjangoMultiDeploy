@@ -1442,6 +1442,10 @@ def manager_update(request):
     script  = f'/usr/local/bin/{service}_update.sh'
     if not os.path.exists(script):
         return JsonResponse({'ok': False, 'output': f'Update-Skript nicht gefunden: {script}'})
+
+    # Sicherstellen dass rsync verfügbar ist; falls nicht, cp-Fallback einpatchen
+    _patch_update_script_rsync_fallback(script)
+
     log_path = f'/tmp/{service}_update_{int(time.time())}.log'
     try:
         with open(log_path, 'w') as logf:
@@ -1457,3 +1461,49 @@ def manager_update(request):
         })
     except Exception as e:
         return JsonResponse({'ok': False, 'output': str(e)})
+
+
+def _patch_update_script_rsync_fallback(script_path):
+    """
+    Falls rsync nicht installiert ist, ersetzt den rsync-Aufruf im
+    Update-Script durch einen cp-Fallback (einmalig, idempotent).
+    """
+    import shutil
+    if shutil.which('rsync'):
+        return  # rsync vorhanden, nichts zu tun
+    try:
+        with open(script_path) as f:
+            content = f.read()
+        if 'command -v rsync' in content:
+            return  # bereits gepatcht
+        old = (
+            'rsync -a \\\n'
+            '    --exclude=\'.env\' \\\n'
+            '    --exclude=\'db.sqlite3\' \\\n'
+            '    --exclude=\'venv/\' \\\n'
+            '    --exclude=\'staticfiles/\' \\\n'
+            '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"'
+        )
+        new = (
+            'if command -v rsync &>/dev/null; then\n'
+            '  rsync -a \\\n'
+            '    --exclude=\'.env\' \\\n'
+            '    --exclude=\'db.sqlite3\' \\\n'
+            '    --exclude=\'venv/\' \\\n'
+            '    --exclude=\'staticfiles/\' \\\n'
+            '    "$SCRIPT_DIR/manager/" "$MANAGER_DIR/"\n'
+            'else\n'
+            '  find "$SCRIPT_DIR/manager" -mindepth 1 -maxdepth 1 | while read -r _item; do\n'
+            '    _base="$(basename "$_item")"\n'
+            '    case "$_base" in\n'
+            '      .env|db.sqlite3|venv|staticfiles) continue ;;\n'
+            '    esac\n'
+            '    cp -a "$_item" "$MANAGER_DIR/"\n'
+            '  done\n'
+            'fi'
+        )
+        if old in content:
+            with open(script_path, 'w') as f:
+                f.write(content.replace(old, new, 1))
+    except Exception:
+        pass
