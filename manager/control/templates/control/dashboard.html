@@ -131,6 +131,11 @@
           <a href="{% url 'manager_settings' %}" class="btn btn-sm btn-outline-primary flex-fill">
             <i class="bi bi-gear"></i> Einstellungen
           </a>
+          {% if user.is_staff %}
+          <a href="{% url 'manager_env' %}" class="btn btn-sm btn-outline-warning" title=".env bearbeiten">
+            <i class="bi bi-file-earmark-code"></i>
+          </a>
+          {% endif %}
           <a href="{% url 'log_viewer' manager_info.PROJECTNAME %}" class="btn btn-sm btn-outline-secondary" title="Logs">
             <i class="bi bi-file-text"></i>
           </a>

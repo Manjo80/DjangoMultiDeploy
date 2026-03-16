@@ -1,0 +1,68 @@
+{% extends "control/base.html" %}
+{% block title %}{{ page_title }} — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-lg-9">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-file-earmark-code me-2"></i>{{ page_title }}</h4>
+  {% if back_url_kwarg %}
+    <a href="{% url back_url back_url_kwarg %}" class="btn btn-outline-secondary btn-sm">{{ back_label }}</a>
+  {% else %}
+    <a href="{% url back_url %}" class="btn btn-outline-secondary btn-sm">{{ back_label }}</a>
+  {% endif %}
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+{% if success_msg %}
+<div class="alert alert-success">{{ success_msg }}</div>
+{% endif %}
+
+<div class="alert alert-warning py-2 small">
+  <i class="bi bi-exclamation-triangle-fill me-1"></i>
+  <strong>Achtung:</strong> Du bearbeitest direkt die <code>.env</code>-Datei.
+  Falsche Einträge können den Dienst zum Absturz bringen.
+  Nach dem Speichern wird der Service automatisch neu gestartet.
+  <br>Format: <code>KEY=Wert</code> pro Zeile. Kommentare mit <code>#</code> sind erlaubt.
+</div>
+
+<div class="card">
+  <div class="card-header d-flex align-items-center gap-2">
+    <i class="bi bi-pencil-square me-1"></i>.env — Editor
+  </div>
+  <div class="card-body p-0">
+    {% if save_url_kwarg %}
+    <form method="post" action="{% url save_url save_url_kwarg %}">
+    {% else %}
+    <form method="post" action="{% url save_url %}">
+    {% endif %}
+      {% csrf_token %}
+      <textarea
+        name="env_content"
+        class="form-control font-monospace border-0 rounded-0"
+        style="min-height:420px; background:#010409; color:#3fb950; font-size:.82rem; resize:vertical;"
+        spellcheck="false"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+      >{{ env_content }}</textarea>
+      <div class="card-footer d-flex justify-content-between align-items-center">
+        <small class="text-muted">
+          <i class="bi bi-info-circle me-1"></i>
+          Änderungen werden in <code>.env</code> gespeichert — Service startet danach neu.
+        </small>
+        <button type="submit"
+                class="btn btn-primary"
+                onclick="return confirm('Die .env-Datei speichern und den Service neu starten?')">
+          <i class="bi bi-floppy me-1"></i> Speichern &amp; Neu starten
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+</div>
+</div>
+{% endblock %}

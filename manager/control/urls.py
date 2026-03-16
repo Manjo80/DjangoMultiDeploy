@@ -52,6 +52,10 @@ urlpatterns = [
 
     # Manager-Einstellungen: ALLOWED_HOSTS (admin only)
     path('manager-settings/', views.manager_settings_view, name='manager_settings'),
+    path('manager-settings/env/', views.manager_env_view, name='manager_env'),
+
+    # Projekt .env-Editor (admin only)
+    path('project/<str:name>/env/', views.project_env_view, name='project_env'),
 
     # Firewall / ufw Port-Verwaltung (admin only)
     path('firewall/', views.firewall_view, name='firewall'),

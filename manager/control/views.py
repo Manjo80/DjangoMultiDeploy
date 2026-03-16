@@ -122,11 +122,14 @@ def _get_manager_info():
     except Exception:
         pass
 
+    debug_val = env.get('DEBUG', 'False')
+    mode = 'dev' if debug_val.lower() in ('true', '1', 'yes') else 'prod'
+
     return {
         'PROJECTNAME':     service,
         'APPDIR':          mgr_dir,
-        'MODE':            'prod',
-        'DEBUG':           env.get('DEBUG', 'False'),
+        'MODE':            mode,
+        'DEBUG':           debug_val,
         'DBTYPE':          'sqlite',
         'GUNICORN_PORT':   env.get('MANAGER_PORT', '8888'),
         'GITHUB_REPO_URL': github_url,
@@ -725,6 +728,102 @@ def manager_settings_view(request):
     return render(request, 'control/manager_settings.html', {
         'allowed_hosts': allowed_hosts,
         'csrf_origins':  csrf_origins,
+        'error':         error,
+        'success_msg':   success_msg,
+    })
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# .env Editor (admin only)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@admin_required
+def manager_env_view(request):
+    """Read/write the manager's .env file directly via the web UI."""
+    from django.conf import settings as djsettings
+
+    env_path = Path(djsettings.BASE_DIR) / '.env'
+    error = None
+    success_msg = None
+
+    if request.method == 'POST':
+        new_content = request.POST.get('env_content', '')
+        try:
+            with open(env_path, 'w') as f:
+                f.write(new_content)
+            os.chmod(env_path, 0o600)
+            svc = getattr(djsettings, 'MANAGER_SERVICE_NAME', 'djmanager')
+            subprocess.Popen(
+                ['bash', '-c', f'sleep 2 && systemctl restart {svc}'],
+                close_fds=True, start_new_session=True,
+            )
+            AuditLog.log(request, 'Manager: .env bearbeitet')
+            success_msg = 'Die .env-Datei wurde gespeichert. Service wird neu gestartet…'
+        except OSError as e:
+            error = f'Fehler beim Schreiben: {e}'
+
+    try:
+        with open(env_path) as f:
+            env_content = f.read()
+    except OSError:
+        env_content = ''
+
+    return render(request, 'control/env_editor.html', {
+        'page_title':  'Manager — .env bearbeiten',
+        'env_content': env_content,
+        'back_url':    'manager_settings',
+        'back_label':  '← Manager-Einstellungen',
+        'save_url':    'manager_env',
+        'error':       error,
+        'success_msg': success_msg,
+    })
+
+
+@admin_required
+def project_env_view(request, name):
+    """Read/write a project's .env file directly via the web UI."""
+    if not _check_project_access(request.user, name):
+        return render(request, 'control/403.html', status=403)
+
+    conf = get_project(name)
+    if not conf:
+        raise Http404(f'Projekt "{name}" nicht gefunden.')
+
+    appdir   = conf.get('APPDIR', f'/srv/{name}')
+    env_path = Path(appdir) / '.env'
+    error    = None
+    success_msg = None
+
+    if request.method == 'POST':
+        new_content = request.POST.get('env_content', '')
+        try:
+            with open(env_path, 'w') as f:
+                f.write(new_content)
+            os.chmod(env_path, 0o600)
+            ok, out = service_action(name, 'restart')
+            if ok:
+                success_msg = f'Gespeichert und {name} neu gestartet.'
+            else:
+                success_msg = f'Gespeichert. Service-Neustart: {out[:200]}'
+            AuditLog.log(request, '.env bearbeitet', project=name)
+        except OSError as e:
+            error = f'Fehler beim Schreiben: {e}'
+
+    try:
+        with open(env_path) as f:
+            env_content = f.read()
+    except OSError:
+        env_content = ''
+
+    return render(request, 'control/env_editor.html', {
+        'page_title':    f'{name} — .env bearbeiten',
+        'env_content':   env_content,
+        'back_url':      'project_detail',
+        'back_url_kwarg': name,
+        'back_label':    f'← {name}',
+        'save_url':      'project_env',
+        'save_url_kwarg': name,
         'error':         error,
         'success_msg':   success_msg,
     })
