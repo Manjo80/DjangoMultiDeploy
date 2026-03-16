@@ -1783,10 +1783,11 @@ fi
 _generate_selfsigned_cert
 
 # NGINX_PORT: HTTPS-Port für diese App (Gunicorn intern auf 127.0.0.1:GUNICORN_PORT)
+_NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ')"
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
 server {
     listen ${NGINX_PORT} ssl;
-    server_name _;
+    server_name ${_NGINX_SERVER_NAMES};
     client_max_body_size 50M;
 
     ssl_certificate     ${_SSL_CERT};
@@ -2821,6 +2822,43 @@ MGNGINXEOF
   _MGR_IP="${_MGR_DEFAULT_IP}"
 
   echo
+  # -------------------------------------------------------------------
+  # Firewall Grundkonfiguration (ufw) — auch beim Manager-Only-Install
+  # (identisch mit der Firewall-Sektion im INSTALL_PROJECT-Block)
+  # -------------------------------------------------------------------
+  echo "🔒 Prüfe Firewall (ufw)..."
+  if ! command -v ufw >/dev/null 2>&1; then
+    echo "  📦 Installiere ufw..."
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
+  fi
+  if command -v ufw >/dev/null 2>&1; then
+    _UFW_STATUS_OUT=$(ufw status 2>&1)
+    _UFW_STATUS_RC=$?
+    if [ $_UFW_STATUS_RC -ne 0 ] && echo "$_UFW_STATUS_OUT" | grep -qi "error\|iptables\|failed"; then
+      echo "  ⚠️  ufw nicht verfügbar in diesem Container (LXC ohne iptables-Unterstützung) — überspringe"
+    elif ! ufw status | grep -q "Status: active"; then
+      echo "  🔧 Setze Basis-Firewall-Regeln..."
+      modprobe iptable_filter 2>/dev/null || true
+      modprobe ip6table_filter 2>/dev/null || true
+      ufw --force reset 2>/dev/null || true
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw allow 22/tcp    comment 'SSH'
+      ufw allow 80/tcp    comment 'HTTP nginx'
+      ufw allow 443/tcp   comment 'HTTPS nginx'
+      ufw allow in on lo  comment 'Loopback intern'
+      ufw allow 8888/tcp  comment 'DjangoMultiDeploy Manager'
+      ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
+      ufw --force enable
+      echo "  ✅ Firewall aktiviert (SSH 22, HTTP 80, HTTPS 443, Manager 8888)"
+    else
+      echo "  ✅ Firewall bereits aktiv"
+    fi
+  else
+    echo "  ❌ ufw konnte nicht installiert werden — Firewall muss manuell konfiguriert werden"
+  fi
+
   echo "╔════════════════════════════════════════════════════════════════════╗"
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
