@@ -660,9 +660,16 @@ def manager_settings_view(request):
                     env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
+                    # Sofort im Speicher aktualisieren (wirkt ohne Neustart)
+                    if host not in djsettings.ALLOWED_HOSTS:
+                        djsettings.ALLOWED_HOSTS.append(host)
+                    for scheme in ('http', 'https'):
+                        entry = f'{scheme}://{host}'
+                        if entry not in djsettings.CSRF_TRUSTED_ORIGINS:
+                            djsettings.CSRF_TRUSTED_ORIGINS.append(entry)
                     _schedule_restart()
                     AuditLog.log(request, 'Manager: Host hinzugefügt', details=host)
-                    success_msg = f'Host "{host}" hinzugefügt. Service wird neu gestartet…'
+                    success_msg = f'Host "{host}" hinzugefügt.'
 
             elif action == 'remove':
                 if host not in cur_hosts:
@@ -674,9 +681,16 @@ def manager_settings_view(request):
                     env['ALLOWED_HOSTS'] = ','.join(cur_hosts)
                     env['CSRF_TRUSTED_ORIGINS'] = ','.join(cur_csrf)
                     _write_env(env)
+                    # Sofort im Speicher aktualisieren
+                    if host in djsettings.ALLOWED_HOSTS:
+                        djsettings.ALLOWED_HOSTS.remove(host)
+                    for scheme in ('http', 'https'):
+                        entry = f'{scheme}://{host}'
+                        if entry in djsettings.CSRF_TRUSTED_ORIGINS:
+                            djsettings.CSRF_TRUSTED_ORIGINS.remove(entry)
                     _schedule_restart()
                     AuditLog.log(request, 'Manager: Host entfernt', details=host)
-                    success_msg = f'Host "{host}" entfernt. Service wird neu gestartet…'
+                    success_msg = f'Host "{host}" entfernt.'
 
     env = _read_env()
     allowed_hosts = [h.strip() for h in env.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
