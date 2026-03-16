@@ -940,15 +940,11 @@ if ! ufw status | grep -q "Status: active"; then
   # Loopback immer erlauben (Gunicorn kommuniziert über 127.0.0.1)
   ufw allow in on lo comment 'Loopback intern'
 
-  # Manager-Port 8888 explizit öffnen — MUSS vor der Gunicorn-Range stehen,
-  # da ufw die erste passende Regel verwendet (Reihenfolge entscheidet!)
-  ufw allow 8888/tcp comment 'DjangoMultiDeploy Manager'
-  echo "  ✅ Port 8888 (Manager) geöffnet"
-
-  # Alle übrigen Gunicorn-Ports (8000-8999) von außen sperren
-  # (Gunicorn hört ohnehin auf 127.0.0.1 — das ist eine zweite Absicherung)
+  # Alle Gunicorn/Internalports 8000-8999 extern sperren.
+  # Der Manager (Gunicorn auf 8888) ist nur über nginx Port 443 erreichbar —
+  # direkter Zugriff auf 8888 ist nicht notwendig und sicherheitsrelevant.
   ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
-  echo "  ✅ Ports 8000-8999 (Gunicorn) extern gesperrt (8888 ausgenommen)"
+  echo "  ✅ Ports 8000-8999 (inkl. 8888 Gunicorn/Manager) extern gesperrt"
 
   # Firewall aktivieren
   ufw --force enable
@@ -2853,10 +2849,9 @@ MGNGINXEOF
       ufw allow 80/tcp    comment 'HTTP nginx'
       ufw allow 443/tcp   comment 'HTTPS nginx'
       ufw allow in on lo  comment 'Loopback intern'
-      ufw allow 8888/tcp  comment 'DjangoMultiDeploy Manager'
       ufw deny 8000:8999/tcp comment 'Gunicorn-Ports (intern only)'
       ufw --force enable
-      echo "  ✅ Firewall aktiviert (SSH 22, HTTP 80, HTTPS 443, Manager 8888)"
+      echo "  ✅ Firewall aktiviert (SSH 22, HTTP 80, HTTPS 443; Ports 8000-8999 gesperrt)"
     else
       echo "  ✅ Firewall bereits aktiv"
     fi
