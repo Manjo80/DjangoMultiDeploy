@@ -734,6 +734,29 @@ def manager_settings_view(request):
 # Firewall (ufw) Port-Verwaltung (admin only)
 # ──────────────────────────────────────────────────────────────────────────────
 
+_SERVICE_FILE = '/etc/systemd/system/djmanager.service'
+
+def _set_manager_bind(host):
+    """Switch Gunicorn bind address in djmanager.service and restart the service."""
+    import re as _re
+    try:
+        with open(_SERVICE_FILE, 'r') as fh:
+            content = fh.read()
+        new_content = _re.sub(
+            r'--bind\s+[\d\.]+:(\d+)',
+            lambda m: f'--bind {host}:{m.group(1)}',
+            content,
+        )
+        if new_content == content:
+            return
+        with open(_SERVICE_FILE, 'w') as fh:
+            fh.write(new_content)
+        subprocess.run(['systemctl', 'daemon-reload'], check=False, timeout=10)
+        subprocess.run(['systemctl', 'restart', 'djmanager'], check=False, timeout=15)
+    except Exception:
+        pass
+
+
 @admin_required
 def firewall_view(request):
     error = None
@@ -751,6 +774,8 @@ def firewall_view(request):
             if ok:
                 AuditLog.log(request, f'Firewall: Port {port}/{proto} → {toggle}')
                 success_msg = msg
+                if port == '8888' and proto == 'tcp':
+                    _set_manager_bind('0.0.0.0' if toggle == 'allow' else '127.0.0.1')
             else:
                 error = msg
 
@@ -759,6 +784,10 @@ def firewall_view(request):
             if ok:
                 AuditLog.log(request, f'Firewall: Port {port}/{proto} → {action}')
                 success_msg = msg
+                # Port 8888 (Manager-Gunicorn): Bind-Adresse anpassen damit direkter
+                # Zugriff über IP:8888 möglich ist wenn der Port geöffnet wird.
+                if port == '8888' and proto == 'tcp':
+                    _set_manager_bind('0.0.0.0' if action == 'allow' else '127.0.0.1')
             else:
                 error = msg
 
