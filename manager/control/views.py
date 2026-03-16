@@ -599,7 +599,7 @@ def dashboard(request):
         if allowed is not None:
             all_projects = [p for p in all_projects if p.get('PROJECTNAME') in allowed]
         for p in all_projects:
-            p['_last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
+            p['last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
         ufw          = get_ufw_status()
         server_stats = get_server_stats()
         role         = _get_role(request.user)

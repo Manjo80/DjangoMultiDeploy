@@ -39,6 +39,26 @@ _apt_install() {
   sleep 1
 }
 
+# _generate_selfsigned_cert: Erstellt ein Self-Signed SSL-Zertifikat (einmalig, geteilt).
+# Das Cert liegt in /etc/ssl/private/djmanager-selfsigned.{key,crt} und wird von allen
+# nginx-Sites auf diesem Server verwendet. Echter Cert kommt vom externen Reverse Proxy.
+_SSL_KEY="/etc/ssl/private/djmanager-selfsigned.key"
+_SSL_CERT="/etc/ssl/certs/djmanager-selfsigned.crt"
+_generate_selfsigned_cert() {
+  if [ ! -f "$_SSL_CERT" ] || [ ! -f "$_SSL_KEY" ]; then
+    echo "🔒 Generiere Self-Signed SSL-Zertifikat (3650 Tage)..."
+    openssl req -x509 -newkey rsa:2048 \
+      -keyout "$_SSL_KEY" \
+      -out "$_SSL_CERT" \
+      -days 3650 -nodes \
+      -subj "/C=DE/O=DjangoMultiDeploy/CN=$(hostname -f 2>/dev/null || hostname)"
+    chmod 600 "$_SSL_KEY"
+    echo "✅ SSL-Zertifikat: $_SSL_CERT"
+  else
+    echo "✅ SSL-Zertifikat bereits vorhanden: $_SSL_CERT"
+  fi
+}
+
 # ===================================================================
 # Checkpoint / Resume System
 # ===================================================================
@@ -463,63 +483,31 @@ fi
 echo "✅ Gunicorn-Port: $GUNICORN_PORT"
 
 # -------------------------------------------------------------------
-# Hosts / nginx-Name
+# Hosts / nginx-Port
 # -------------------------------------------------------------------
-# Netz-Domain ermitteln (z.B. "iot", "lan")
-_WEBAPP_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
-if [ -z "$_WEBAPP_DOMAIN" ] && echo "$HOSTNAME_FQDN" | grep -q '\.'; then
-  _WEBAPP_DOMAIN="${HOSTNAME_FQDN#*.}"
-fi
-_WEBAPP_SHORT="$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
+# Alle lokalen IPs für ALLOWED_HOSTS (kein Hostname-Prompt nötig)
+# Zugriff läuft ausschließlich über nginx (port-basiert) — kein server_name
+NGINX_PORT="${NGINX_PORT:-$((GUNICORN_PORT + 1000))}"
+echo "🔌 nginx-HTTPS-Port: ${NGINX_PORT}  (Gunicorn intern: 127.0.0.1:${GUNICORN_PORT})"
 
-# Prompt 1: nginx-Hostname
-_DEFAULT_NGINX_HOST="${_WEBAPP_SHORT}"
-echo
-echo "nginx-Hostname für diese App:"
-echo "   Automatisch erkannt: IP=${LOCAL_IP}  Kurz=${_WEBAPP_SHORT}  FQDN=${HOSTNAME_FQDN}"
-if [ -n "$_WEBAPP_DOMAIN" ]; then
-  echo "   Netz-Domain: .${_WEBAPP_DOMAIN}  → Name ohne Punkt wird zu: ${_WEBAPP_SHORT}.${_WEBAPP_DOMAIN}"
-fi
-_read -p "nginx-Hostname [${_DEFAULT_NGINX_HOST}]: " NGINX_PRIMARY_HOST
-NGINX_PRIMARY_HOST="${NGINX_PRIMARY_HOST:-$_DEFAULT_NGINX_HOST}"
-# Domain-Suffix anhängen wenn kein Punkt und Domain bekannt
-if [ -n "$_WEBAPP_DOMAIN" ] && ! echo "$NGINX_PRIMARY_HOST" | grep -q '\.'; then
-  NGINX_PRIMARY_HOST="${NGINX_PRIMARY_HOST}.${_WEBAPP_DOMAIN}"
-  echo "   → Ergänzt zu: ${NGINX_PRIMARY_HOST}"
-fi
-NGINX_SERVER_NAMES="$NGINX_PRIMARY_HOST"
-# Auto: Kurzname, FQDN, IP ebenfalls in server_name
-for _n in "${_WEBAPP_SHORT}" "${HOSTNAME_FQDN}" "${LOCAL_IP}"; do
-  [ -z "$_n" ] && continue
-  echo "$NGINX_SERVER_NAMES" | grep -qF "$_n" || NGINX_SERVER_NAMES="${NGINX_SERVER_NAMES} ${_n}"
-done
-[ -z "${NGINX_SERVER_NAMES:-}" ] && NGINX_SERVER_NAMES="_"
-
-# Prompt 2: Extra-Namen nur für ALLOWED_HOSTS (nicht nginx)
-echo ""
-echo "   Weitere Namen für ALLOWED_HOSTS (nicht in nginx):"
-echo "   z.B. Reverse-Proxy, Internet-Domain — komma-getrennt, leer = keiner."
-_read -p "Extra ALLOWED_HOSTS []: " EXTRA_ALLOWED_HOSTS
-EXTRA_ALLOWED_HOSTS="${EXTRA_ALLOWED_HOSTS:-}"
-
-# ALLOWED_HOSTS: nginx-Name + Extra + alle IPs + Loopback (auto, kein weiterer Prompt)
-ALLOWED_HOSTS="${NGINX_PRIMARY_HOST},${EXTRA_ALLOWED_HOSTS},${_WEBAPP_SHORT},${HOSTNAME_FQDN},${ALL_LOCAL_IPS},127.0.0.1,localhost"
+# ALLOWED_HOSTS: alle lokalen IPs + Loopback — kein Hostname (Reverse Proxy sendet ggf. Domain)
+ALLOWED_HOSTS="${ALL_LOCAL_IPS},127.0.0.1,localhost"
 ALLOWED_HOSTS="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
 # -------------------------------------------------------------------
-# CSRF_TRUSTED_ORIGINS automatisch bauen (für alle Modi)
+# CSRF_TRUSTED_ORIGINS automatisch bauen
 # -------------------------------------------------------------------
-CSRF_TRUSTED_ORIGINS_VALUE="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | awk '
+# HTTP + HTTPS für alle IPs, jeweils mit und ohne Port
+CSRF_TRUSTED_ORIGINS_VALUE="$(echo "$ALL_LOCAL_IPS" | tr ',' '\n' | grep -v '^$' | awk \
+  -v port="$NGINX_PORT" '
   NF {
-    gsub(/^[ \t]+|[ \t]+$/, "", $0)
-    if ($0 == "") next
-    if ($0 == "localhost" || $0 == "127.0.0.1") {
-      print "http://" $0
-      print "https://" $0
-    } else {
-      print "https://" $0
-    }
+    print "http://" $0
+    print "https://" $0
+    print "http://" $0 ":" port
+    print "https://" $0 ":" port
   }' | awk '!seen[$0]++' | paste -sd, -)"
+# Loopback ergänzen
+CSRF_TRUSTED_ORIGINS_VALUE="${CSRF_TRUSTED_ORIGINS_VALUE},http://127.0.0.1:${NGINX_PORT},https://127.0.0.1:${NGINX_PORT}"
 
 # -------------------------------------------------------------------
 # Datenbank-Typ auswählen
@@ -720,7 +708,7 @@ MODE="${MODE}"
 MODESEL="${MODESEL}"
 DEBUG_VALUE="${DEBUG_VALUE}"
 ALLOWED_HOSTS="${ALLOWED_HOSTS}"
-NGINX_SERVER_NAMES="${NGINX_SERVER_NAMES}"
+NGINX_PORT="${NGINX_PORT}"
 CSRF_TRUSTED_ORIGINS_VALUE="${CSRF_TRUSTED_ORIGINS_VALUE}"
 GUNICORN_PORT="${GUNICORN_PORT}"
 DBTYPE="${DBTYPE}"
@@ -1791,11 +1779,21 @@ RATELIMIT
   echo "✅ Nginx Rate-Limit-Zonen angelegt"
 fi
 
+# Self-Signed SSL-Zertifikat bereitstellen (einmalig, geteilt für alle Sites)
+_generate_selfsigned_cert
+
+# NGINX_PORT: HTTPS-Port für diese App (Gunicorn intern auf 127.0.0.1:GUNICORN_PORT)
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
 server {
-    listen 80;
-    server_name $NGINX_SERVER_NAMES;
+    listen ${NGINX_PORT} ssl;
+    server_name _;
     client_max_body_size 50M;
+
+    ssl_certificate     ${_SSL_CERT};
+    ssl_certificate_key ${_SSL_KEY};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
 
     # Per-Projekt Access-Log mit Antwortzeit
     access_log /var/log/nginx/${PROJECTNAME}.access.log reqtime;
@@ -1816,24 +1814,22 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none';" always;
-    # HSTS: wird vom Reverse-Proxy weitergeleitet an den Browser
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
-    # Bekannte Angriffspfade direkt blockieren (404 statt proxying)
+    # Bekannte Angriffspfade blockieren
     location ~* ^/(wp-admin|wp-login\.php|xmlrpc\.php|phpmyadmin|\.env|\.git|shell\.php|eval\.php) {
         return 404;
     }
 
-    # Rate Limiting für Login/Admin-Bereich (strenger)
+    # Rate Limiting für Login/Admin-Bereich
     location ~* ^/(login|djadmin|accounts/login|api/auth) {
         limit_req zone=django_login burst=5 nodelay;
         add_header Retry-After 60 always;
-
         proxy_pass http://127.0.0.1:${GUNICORN_PORT};
-        proxy_set_header Host \$host;
+        proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
@@ -1854,16 +1850,14 @@ server {
         access_log off;
     }
 
-    # Django App (allgemeines Rate Limiting)
+    # Django App
     location / {
         limit_req zone=django_general burst=30 nodelay;
-
         proxy_pass http://127.0.0.1:${GUNICORN_PORT};
-        proxy_set_header Host \$host;
+        proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-
+        proxy_set_header X-Forwarded-Proto https;
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
@@ -1886,20 +1880,14 @@ systemctl restart nginx
 
 mark_done "nginx_done"
 
-_RP_HOST=$(echo "${ALLOWED_HOSTS:-$LOCAL_IP}" | cut -d, -f1 | tr -d ' ')
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔀 Reverse Proxy Konfiguration (optional):"
+echo "🔒 Direkter Zugriff (Self-Signed SSL):"
+echo "   https://${LOCAL_IP}:${NGINX_PORT}/"
 echo
-echo "   Reverse Proxy → Neuer Proxy-Eintrag:"
-echo "   ┌──────────────────────────────────────────────────────────────┐"
-echo "   │  Matching Domain:  ${_RP_HOST}"
-echo "   │  Target:           http://${LOCAL_IP}:80"
-echo "   │  ✅ Pass / Preserve Host Header aktivieren"
-echo "   └──────────────────────────────────────────────────────────────┘"
-echo
-echo "   nginx server_name (dieser Server): ${NGINX_SERVER_NAMES}"
-echo "   Gunicorn intern:                   127.0.0.1:${GUNICORN_PORT}"
+echo "🔀 Externer Reverse Proxy → Ziel:"
+echo "   https://${LOCAL_IP}:${NGINX_PORT}  (SSL verify off / insecure)"
+echo "   Gunicorn intern: 127.0.0.1:${GUNICORN_PORT}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 else
   echo "⏭️  Nginx bereits konfiguriert - überspringe"
@@ -1920,13 +1908,14 @@ APPUSER="${APPUSER}"
 MODE="${MODE}"
 DEBUG="${DEBUG_VALUE}"
 GUNICORN_PORT="${GUNICORN_PORT}"
+NGINX_PORT="${NGINX_PORT}"
 DBTYPE="${DBTYPE}"
 DBNAME="${DBNAME:-}"
 DBHOST="${DBHOST:-}"
 DBPORT="${DBPORT:-}"
 LOCAL_IP="${LOCAL_IP}"
 HOSTNAME_FQDN="${HOSTNAME_FQDN}"
-PRIMARY_HOST="${_PRIMARY_HOST}"
+PRIMARY_HOST="${LOCAL_IP}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS}"
 LANGUAGE_CODE="${LANGUAGE_CODE}"
@@ -2483,22 +2472,16 @@ echo "💾 Backup:      ${PROJECTNAME}_backup.sh"
 echo "📊 Status:      systemctl status ${PROJECTNAME}"
 echo "📋 Logs:        journalctl -u ${PROJECTNAME} -f"
 echo
-echo "🌐 Django Admin: http://${LOCAL_IP}/djadmin/"
+echo "🔒 Django Admin: https://${LOCAL_IP}:${NGINX_PORT}/djadmin/"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔀 Reverse Proxy Konfiguration (optional):"
-echo "   Datenfluss:  Internet → Reverse Proxy (SSL) → nginx:80 → gunicorn:${GUNICORN_PORT}"
+echo "🔒 Direkter Zugriff (Self-Signed SSL):"
+echo "   https://${LOCAL_IP}:${NGINX_PORT}/"
 echo
-echo "   Im Reverse Proxy einen neuen Proxy-Eintrag anlegen:"
-echo "   ┌─────────────────────────────────────────────────────────────┐"
-echo "   │  Incoming:  <your-domain.example.com>                      │"
-echo "   │  Target:    http://${LOCAL_IP}:80                          │"
-echo "   │  Option:    'Pass Host Header' / 'Preserve Host' ✅        │"
-echo "   └─────────────────────────────────────────────────────────────┘"
-echo
-echo "   Nginx server_name auf diesem Server:"
-echo "   /etc/nginx/sites-available/${PROJECTNAME}"
-echo "   → server_name: ${NGINX_SERVER_NAMES}"
+echo "🔀 Externer Reverse Proxy → Ziel:"
+echo "   https://${LOCAL_IP}:${NGINX_PORT}  (SSL verify off / insecure erlaubt)"
+echo "   nginx-Config: /etc/nginx/sites-available/${PROJECTNAME}"
+echo "   Gunicorn intern: 127.0.0.1:${GUNICORN_PORT}"
 echo
 echo "   Beim nächsten Login wird die vollständige Serverübersicht"
 echo "   mit allen Django-Projekten angezeigt (/etc/profile.d/00_django_motd.sh)"
@@ -2535,75 +2518,15 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   systemctl enable nginx 2>/dev/null || true
   systemctl start  nginx 2>/dev/null || true
 
-  # Hostname für Manager-nginx-Site abfragen
-  # Der Manager ist über nginx (Port 80) erreichbar UND direkt über Port 8888.
-  # Port 8888 ist ab Installation via ufw geöffnet (vor der Gunicorn-Range).
+  # Server-IP automatisch ermitteln (kein Hostname-Prompt)
   _MGR_DEFAULT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7;exit}')"
   [ -z "${_MGR_DEFAULT_IP:-}" ] && _MGR_DEFAULT_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-
-  # Hostnamen automatisch erkennen (kurz + FQDN + Netz-Domain)
-  _HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null | cut -d. -f1 || echo '')"
-  _HOSTNAME_FQDN="$(hostname -f 2>/dev/null || echo '')"
-  _HOSTNAME_DOMAIN="$(hostname -d 2>/dev/null || echo '')"
-  # Domain-Fallback aus FQDN
-  if [ -z "$_HOSTNAME_DOMAIN" ] && echo "$_HOSTNAME_FQDN" | grep -q '\.'; then
-    _HOSTNAME_DOMAIN="${_HOSTNAME_FQDN#*.}"
-  fi
-
-  # ── Prompt 1: nginx-Hostname ────────────────────────────────────────────────
-  # Default-Vorschlag: Kurzname (wird gleich mit Domain ergänzt) oder IP
-  if [ -n "$_HOSTNAME_SHORT" ]; then
-    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_HOSTNAME_SHORT}}"
-  else
-    _DEFAULT_MGR_HOST="${MANAGER_HOSTNAME:-${_MGR_DEFAULT_IP}}"
-  fi
-
-  echo
-  echo "🌐 nginx-Hostname für den Manager:"
-  echo "   Automatisch erkannt:"
-  echo "   • IP:   ${_MGR_DEFAULT_IP}"
-  [ -n "$_HOSTNAME_SHORT" ] && echo "   • Kurz: ${_HOSTNAME_SHORT}"
-  [ -n "$_HOSTNAME_FQDN"  ] && [ "$_HOSTNAME_FQDN" != "$_MGR_DEFAULT_IP" ] && \
-    echo "   • FQDN: ${_HOSTNAME_FQDN}"
-  if [ -n "$_HOSTNAME_DOMAIN" ]; then
-    echo ""
-    echo "   Netz-Domain erkannt: .${_HOSTNAME_DOMAIN}  (hostname -d)"
-    echo "   → Name ohne Punkt wird automatisch zu: ${_DEFAULT_MGR_HOST}.${_HOSTNAME_DOMAIN}"
-  fi
-  echo ""
-  _read -p "nginx-Hostname [${_DEFAULT_MGR_HOST}]: " MANAGER_HOSTNAME
-  MANAGER_HOSTNAME="${MANAGER_HOSTNAME:-$_DEFAULT_MGR_HOST}"
-
-  # Domain-Suffix anhängen wenn kein Punkt im Namen und Domain bekannt
-  if [ -n "$_HOSTNAME_DOMAIN" ] && ! echo "$MANAGER_HOSTNAME" | grep -q '\.'; then
-    MANAGER_HOSTNAME="${MANAGER_HOSTNAME}.${_HOSTNAME_DOMAIN}"
-    echo "   → Ergänzt zu: ${MANAGER_HOSTNAME}"
-  fi
-  _MGR_PRIMARY_HOST="$MANAGER_HOSTNAME"
-
-  # DNS-Check
-  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    _RESOLVED=$(getent hosts "$_MGR_PRIMARY_HOST" 2>/dev/null | awk '{print $1}' | head -1 || true)
-    if [ -z "$_RESOLVED" ]; then
-      echo "   ⚠️  '$_MGR_PRIMARY_HOST' nicht im DNS — Eintrag später ergänzen:"
-      echo "   ${_MGR_DEFAULT_IP}  ${_MGR_PRIMARY_HOST}"
-    elif [ "$_RESOLVED" != "$_MGR_DEFAULT_IP" ]; then
-      echo "   ℹ️  '$_MGR_PRIMARY_HOST' → $_RESOLVED (Server-IP: ${_MGR_DEFAULT_IP})"
-    else
-      echo "   ✅ '$_MGR_PRIMARY_HOST' löst korrekt auf."
-    fi
-  fi
-
-  # ── Prompt 2: Extra-Namen nur für ALLOWED_HOSTS (nicht nginx) ───────────────
-  echo ""
-  echo "   Weitere Namen für ALLOWED_HOSTS (nicht in nginx):"
-  echo "   z.B. Reverse-Proxy-Hostname, Internet-Domain — komma-getrennt, leer = keiner."
-  _read -p "Extra ALLOWED_HOSTS []: " MANAGER_EXTRA_HOSTS
-  MANAGER_EXTRA_HOSTS="${MANAGER_EXTRA_HOSTS:-}"
+  # Alle Interface-IPs (ohne IPv6-only)
+  _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
-  echo "🔌 Manager-Port:         0.0.0.0:$_MANAGER_PORT (direkt erreichbar)"
-  echo "🌐 nginx Hostname:       http://${_MGR_PRIMARY_HOST}/"
+  echo "🔌 Manager-Gunicorn:     127.0.0.1:$_MANAGER_PORT (intern)"
+  echo "🔒 nginx HTTPS:          https://${_MGR_DEFAULT_IP}:443/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   echo
   # Manager-Dateien werden vom Installer aus dem Repo geladen
@@ -2654,52 +2577,27 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # .env für Manager
   _MANAGER_SECRET="$(openssl rand -hex 32)"
 
-  # ALLOWED_HOSTS: alle Hostnamen + alle lokalen IPs + Loopback
-  # Alle IPs aller Interfaces erfassen — verhindert "Bad Request (400)" bei
-  # Zugriff über eine IP die beim Install nicht die primäre war
-  _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
-  if [ -n "$_HOSTNAME_DOMAIN" ] && [ -n "$_HOSTNAME_SHORT" ]; then
-    _HOSTNAME_WITH_DOMAIN="${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}"
-  else
-    _HOSTNAME_WITH_DOMAIN=""
-  fi
-  _MGR_ALLOWED_HOSTS="${MANAGER_HOSTNAME},${MANAGER_EXTRA_HOSTS},${_HOSTNAME_SHORT},${_HOSTNAME_FQDN},${_HOSTNAME_WITH_DOMAIN},${_MGR_DEFAULT_IP},${_ALL_MGR_IPS},127.0.0.1,localhost"
-  # Doppelte + leere Einträge entfernen
+  # ALLOWED_HOSTS: alle lokalen IPs + Loopback (kein Hostname — port-basierter Zugriff via nginx)
+  _MGR_ALLOWED_HOSTS="${_ALL_MGR_IPS},${_MGR_DEFAULT_IP},127.0.0.1,localhost"
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
-  # CSRF_TRUSTED_ORIGINS: HTTP-Varianten MIT und OHNE Port für alle Hostnamen
-  # KRITISCH: Browser sendet bei Port-8888-Zugriff "Origin: http://IP:8888"
-  # → diese URL MUSS in CSRF_TRUSTED_ORIGINS stehen, sonst 403 beim Login-POST
-  # Hilfsfunktion: host → "http://host,http://host:PORT"
-  _csrf_pair() { echo "http://${1},http://${1}:${_MANAGER_PORT}"; }
-  # MANAGER_HOSTNAME + MANAGER_EXTRA_HOSTS in CSRF aufnehmen
-  _MGR_CSRF_ORIGINS="$(_csrf_pair "$MANAGER_HOSTNAME")"
-  for _mh in $(echo "$MANAGER_EXTRA_HOSTS" | tr ',' ' '); do
-    [ -z "$_mh" ] && continue
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_mh")"
+  # CSRF_TRUSTED_ORIGINS: http + https für alle IPs, Standard-Ports (80/443)
+  _MGR_CSRF_ORIGINS=""
+  for _ip in $(echo "${_ALL_MGR_IPS},${_MGR_DEFAULT_IP},127.0.0.1" | tr ',' '\n' | grep -v '^$' | sort -u); do
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip},https://${_ip}"
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip}:${_MANAGER_PORT},https://${_ip}:${_MANAGER_PORT}"
+    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip}:80,https://${_ip}:443"
   done
-  # Alle erkannten Hostnamen (kurz, FQDN) mit und ohne Port
-  for _h in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_MGR_DEFAULT_IP}" "127.0.0.1" "localhost"; do
-    [ -z "$_h" ] && continue
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_h")"
-  done
-  # Alle weiteren Interface-IPs ebenfalls mit und ohne Port aufnehmen
-  for _ip in $(echo "${_ALL_MGR_IPS}" | tr ',' ' '); do
-    [ -z "$_ip" ] && continue
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},$(_csrf_pair "$_ip")"
-  done
-  # Doppelte entfernen
   _MGR_CSRF_ORIGINS="$(echo "$_MGR_CSRF_ORIGINS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
-  # .env zeilenweise mit printf schreiben — verhindert Zusammenlaufen bei langen Werten
+
+  # .env zeilenweise mit printf schreiben
   {
     printf 'SECRET_KEY=%s\n'            "${_MANAGER_SECRET}"
     printf 'DEBUG=False\n'
     printf 'ALLOWED_HOSTS=%s\n'         "${_MGR_ALLOWED_HOSTS}"
     printf 'CSRF_TRUSTED_ORIGINS=%s\n'  "${_MGR_CSRF_ORIGINS}"
-    printf 'USE_X_FORWARDED_HOST=True\n'
+    printf 'USE_X_FORWARDED_HOST=False\n'
     printf 'MANAGER_PORT=%s\n'          "${_MANAGER_PORT}"
-    printf 'MANAGER_HOSTNAME=%s\n'      "${MANAGER_HOSTNAME}"
-    printf 'MANAGER_EXTRA_HOSTS=%s\n'   "${MANAGER_EXTRA_HOSTS:-}"
     printf 'INSTALL_SCRIPT=%s\n'        "${_SCRIPT_DIR}/Installv2.sh"
     printf 'REGISTRY_DIR=/etc/django-servers.d\n'
   } > "$_MANAGER_DIR/.env"
@@ -2840,7 +2738,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind 0.0.0.0:${_MANAGER_PORT} --workers 1 --timeout 120
+ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind 127.0.0.1:${_MANAGER_PORT} --workers 1 --timeout 120
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
@@ -2858,31 +2756,34 @@ MANSERVEOF
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 
-  # nginx server_name: auto-erkannte lokale Namen — MANAGER_EXTRA_HOSTS bleibt draussen
-  _MGR_NGINX_NAMES="$MANAGER_HOSTNAME"
-  # Domain-Variante (SHORT.DOMAIN) auch aufnehmen wenn von FQDN abweichend
-  if [ -n "$_HOSTNAME_DOMAIN" ]; then
-    _HOSTNAME_WITH_DOMAIN="${_HOSTNAME_SHORT}.${_HOSTNAME_DOMAIN}"
-  else
-    _HOSTNAME_WITH_DOMAIN=""
-  fi
-  for _n in "${_HOSTNAME_SHORT}" "${_HOSTNAME_FQDN}" "${_HOSTNAME_WITH_DOMAIN}" "${_MGR_DEFAULT_IP}"; do
-    [ -z "$_n" ] && continue
-    # Nur hinzufügen wenn noch nicht enthalten
-    echo "$_MGR_NGINX_NAMES" | grep -qF "$_n" || _MGR_NGINX_NAMES="${_MGR_NGINX_NAMES} ${_n}"
-  done
+  # Self-Signed SSL-Zertifikat bereitstellen (geteilt mit Webapps)
+  _generate_selfsigned_cert
 
   cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
+# HTTP → HTTPS Redirect (Port 80)
 server {
     listen 80 default_server;
-    server_name ${_MGR_NGINX_NAMES} _;
-    # default_server: fängt alle Anfragen die kein anderer Block matcht (z.B. direkt per IP)
+    server_name _;
+    return 301 https://\$host\$request_uri;
+}
+
+# Manager HTTPS (Port 443, Self-Signed SSL)
+server {
+    listen 443 ssl default_server;
+    server_name _;
     client_max_body_size 10M;
+
+    ssl_certificate     ${_SSL_CERT};
+    ssl_certificate_key ${_SSL_KEY};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
 
     # Security Headers
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
 
     # Statische Dateien des Managers
     location /static/ {
@@ -2891,14 +2792,13 @@ server {
         access_log off;
     }
 
-    # Manager-App (Django runserver auf 127.0.0.1)
+    # Manager-App (Gunicorn auf 127.0.0.1:PORT)
     location / {
         proxy_pass http://127.0.0.1:${_MANAGER_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$http_host;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_connect_timeout 30s;
         proxy_read_timeout 300s;
     }
@@ -2906,57 +2806,35 @@ server {
 MGNGINXEOF
 
   ln -sf /etc/nginx/sites-available/djmanager /etc/nginx/sites-enabled/djmanager
-  # Default-Site nur entfernen wenn noch keine anderen Sites aktiv sind
-  _ACTIVE_MGR_SITES=$(ls /etc/nginx/sites-enabled/ 2>/dev/null | grep -v "^default$" | wc -l)
-  [ "$_ACTIVE_MGR_SITES" -le 1 ] && rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+  # Default-Site entfernen (djmanager übernimmt als default_server)
+  rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
   if nginx -t 2>/dev/null; then
     systemctl enable nginx 2>/dev/null || true
     systemctl restart nginx
-    echo "✅ nginx gestartet — Manager über http://${_MGR_PRIMARY_HOST}/ erreichbar"
+    echo "✅ nginx gestartet — Manager über https://${_MGR_DEFAULT_IP}/ erreichbar"
   else
     echo "⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
     nginx -t
   fi
 
-  # Port 8888 ist ab Installation offen (ufw allow 8888/tcp).
-  # Zum Sperren: Firewall-Seite im Manager oder: ufw deny 8888/tcp && ufw reload
-
-  _MGR_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
-  [ -z "${_MGR_IP:-}" ] && _MGR_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  _MGR_IP="${_MGR_DEFAULT_IP}"
 
   echo
   echo "╔════════════════════════════════════════════════════════════════════╗"
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
-  echo "🌐 Manager-URL:    http://${_MGR_IP}/"
-  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "               oder http://${_MGR_PRIMARY_HOST}/ (wenn DNS eingetragen)"
-  fi
-  echo "   (nginx Port 80 → 127.0.0.1:${_MANAGER_PORT} | direkt: http://${_MGR_IP}:${_MANAGER_PORT}/)"
+  echo "🔒 Manager-URL:    https://${_MGR_IP}/"
+  echo "   (nginx Port 443/SSL → 127.0.0.1:${_MANAGER_PORT})"
+  echo "   HTTP Port 80 leitet automatisch auf HTTPS weiter."
+  echo
+  echo "🔀 Externer Reverse Proxy → Ziel:"
+  echo "   https://${_MGR_IP}:443  (SSL verify off / insecure erlaubt)"
+  echo
   echo "📊 Status:         systemctl status djmanager"
   echo "📋 Logs:           journalctl -u djmanager -f"
   echo "🔄 Update:         djmanager_update.sh"
-  echo
-  echo "🔒 Sicherheit:"
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    echo "   Port ${_MANAGER_PORT} offen (ufw-Regel aktiv + nginx Port 80)"
-    echo "   ufw: Port ${_MANAGER_PORT} via Firewall-Seite im Manager steuerbar"
-  elif command -v ufw >/dev/null 2>&1; then
-    echo "   Port ${_MANAGER_PORT} offen (ufw installiert aber inaktiv — bitte prüfen)"
-  else
-    echo "   ⚠️  ufw nicht verfügbar (LXC?) — Port ${_MANAGER_PORT} ohne Firewall offen"
-    echo "   Empfehlung: apt install ufw && ufw allow ${_MANAGER_PORT}/tcp && ufw enable"
-  fi
-  echo "   nginx-Config: /etc/nginx/sites-available/djmanager"
-  if [[ ! "$_MGR_PRIMARY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo
-    echo "📌 Optionaler DNS/Hosts-Eintrag für Hostnamen-Zugriff:"
-    echo "   ${_MGR_IP}  $(echo "$MANAGER_HOSTNAME" | tr ',' ' ')"
-    echo "   → Windows: C:\\Windows\\System32\\drivers\\etc\\hosts"
-    echo "   → Linux/Mac: /etc/hosts   oder DNS-Server konfigurieren"
-    echo "   (Zugriff per IP funktioniert ohne DNS-Eintrag)"
-  fi
+  echo "🔑 SSL-Cert:       ${_SSL_CERT}"
   echo "════════════════════════════════════════════════════════════════════"
 fi  # end INSTALL_MANAGER
 
