@@ -55,4 +55,8 @@ urlpatterns = [
 
     # Firewall / ufw Port-Verwaltung (admin only)
     path('firewall/', views.firewall_view, name='firewall'),
+
+    # Manager self-management
+    path('manager/action/', views.manager_action, name='manager_action'),
+    path('manager/update/', views.manager_update, name='manager_update'),
 ]

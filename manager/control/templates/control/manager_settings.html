@@ -14,9 +14,9 @@
 
 <div class="alert alert-info py-2 small">
   <i class="bi bi-info-circle me-1"></i>
-  Änderungen werden <strong>sofort aktiv</strong> (kein Service-Neustart nötig) und in der
-  <code>.env</code>-Datei gespeichert, sodass sie auch nach einem Neustart gelten.
-  Wird ein Hostname hinzugefügt, werden automatisch
+  Änderungen werden in der <code>.env</code>-Datei gespeichert und der Manager-Service wird
+  automatisch neu gestartet (~2 Sekunden), damit alle Worker die neuen Hosts übernehmen.
+  Beim Hinzufügen eines Hosts werden automatisch
   <code>http://hostname</code> und <code>https://hostname</code> in die CSRF_TRUSTED_ORIGINS aufgenommen.
 </div>
 
