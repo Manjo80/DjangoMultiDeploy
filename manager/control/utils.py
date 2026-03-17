@@ -981,11 +981,15 @@ def run_django_deploy_check(project):
                         env[k.strip()] = v.strip().strip('"\'')  # overwrite, not setdefault
 
         result = subprocess.run(
-            [venv_python, manage_py, 'check', '--deploy'],
+            [venv_python, manage_py, 'check', '--deploy',
+             '--silenced-checks', 'security.W008'],  # W008=SECURE_SSL_REDIRECT: always handled by nginx
             capture_output=True, text=True, timeout=30,
             cwd=f'/srv/{project}', env=env,
         )
+        mode_used = env.get('MODE', '?')
         output = (result.stdout + result.stderr).strip()
+        # Prepend detected MODE so it's visible in the output
+        output = f'[deploy check] MODE={mode_used}\n\n' + output
         issues = []
         for line in output.splitlines():
             line = line.strip()
