@@ -507,6 +507,40 @@ def update_allowed_hosts(name, hosts):
     return True, ' | '.join(msgs)
 
 
+def sync_env_to_conf(name, env_content):
+    """
+    Parse MODE and DEBUG from .env content and write them back into
+    /etc/django-servers.d/<name>.conf so the manager display stays in sync.
+    """
+    conf_path = os.path.join(settings.REGISTRY_DIR, f'{name}.conf')
+    if not os.path.exists(conf_path):
+        return
+    # Extract MODE and DEBUG from .env content
+    env_vals = {}
+    for line in env_content.splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, _, v = line.partition('=')
+            env_vals[k.strip()] = v.strip().strip('"\'')
+    update_keys = {k: env_vals[k] for k in ('MODE', 'DEBUG') if k in env_vals}
+    if not update_keys:
+        return
+    try:
+        with open(conf_path) as f:
+            lines = f.readlines()
+        new_lines = []
+        for line in lines:
+            key = line.split('=', 1)[0].strip()
+            if key in update_keys:
+                new_lines.append(f'{key}="{update_keys.pop(key)}"\n')
+            else:
+                new_lines.append(line)
+        with open(conf_path, 'w') as f:
+            f.writelines(new_lines)
+    except OSError:
+        pass
+
+
 def get_ufw_status(gunicorn_port=None):
     """
     Returns dict with ufw status and relevant rules.
@@ -936,14 +970,15 @@ def run_django_deploy_check(project):
         # Remove manager's DJANGO_SETTINGS_MODULE so manage.py sets its own
         env.pop('DJANGO_SETTINGS_MODULE', None)
         env['PYTHONPATH'] = f'/srv/{project}'
-        # Load env from .env file so settings can read secrets
+        # Load env from .env file — direct assignment so project values always win
+        # over anything the manager process may have inherited (e.g. DEBUG, MODE)
         if os.path.exists(env_file):
             with open(env_file) as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith('#') and '=' in line:
                         k, _, v = line.partition('=')
-                        env.setdefault(k.strip(), v.strip().strip('"\''))
+                        env[k.strip()] = v.strip().strip('"\'')  # overwrite, not setdefault
 
         result = subprocess.run(
             [venv_python, manage_py, 'check', '--deploy'],
