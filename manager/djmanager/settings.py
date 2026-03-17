@@ -102,11 +102,21 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
+# ── Security (hinter nginx/SSL-Proxy) ─────────────────────────────────────────
+
+SESSION_COOKIE_SECURE  = os.getenv('SESSION_COOKIE_SECURE',  'False') == 'True'
+CSRF_COOKIE_SECURE     = os.getenv('CSRF_COOKIE_SECURE',     'False') == 'True'
+SECURE_HSTS_SECONDS    = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv('SECURE_HSTS_INCLUDE_SUBDOMAINS', 'False') == 'True'
+SECURE_CONTENT_TYPE_NOSNIFF = os.getenv('SECURE_CONTENT_TYPE_NOSNIFF', 'False') == 'True'
+X_FRAME_OPTIONS        = os.getenv('X_FRAME_OPTIONS', 'SAMEORIGIN')
+
 # ── Manager-specific ──────────────────────────────────────────────────────────
 
-INSTALL_SCRIPT = os.getenv('INSTALL_SCRIPT', '/opt/DjangoMultiDeploy/Installv2.sh')
-REGISTRY_DIR   = os.getenv('REGISTRY_DIR',   '/etc/django-servers.d')
+INSTALL_SCRIPT  = os.getenv('INSTALL_SCRIPT',  '/opt/DjangoMultiDeploy/Installv2.sh')
+REGISTRY_DIR    = os.getenv('REGISTRY_DIR',    '/etc/django-servers.d')
 INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', '/tmp/djmanager_logs')
+MANAGER_VENV    = os.getenv('MANAGER_VENV',    '/srv/djmanager/venv')
 
 os.makedirs(INSTALL_LOG_DIR, exist_ok=True)
 

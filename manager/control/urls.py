@@ -63,4 +63,5 @@ urlpatterns = [
     # Manager self-management
     path('manager/action/', views.manager_action, name='manager_action'),
     path('manager/update/', views.manager_update, name='manager_update'),
+    path('manager/security-scan/', views.manager_security_scan, name='manager_security_scan'),
 ]

@@ -198,9 +198,14 @@
                   onclick="runManagerUpdate(this)">
             <i class="bi bi-arrow-repeat"></i>
           </button>
+          <button class="btn btn-sm btn-outline-warning" title="Sicherheitsscan"
+                  onclick="runManagerScan(this)">
+            <i class="bi bi-shield-check"></i>
+          </button>
           {% endif %}
         </div>
       </div>
+      <div id="manager-scan-out" class="px-3 pb-2" style="display:none"></div>
     </div>
   </div>
 </div>
@@ -352,6 +357,53 @@ async function managerAction(action, btn) {
     } else {
       alert('Verbindungsfehler.');
     }
+  }
+}
+
+async function runManagerScan(btn) {
+  const out = document.getElementById('manager-scan-out');
+  out.style.display = 'block';
+  out.innerHTML = '<div class="text-muted small py-1"><span class="spinner-border spinner-border-sm me-1"></span>Scan läuft…</div>';
+  btn.disabled = true;
+  try {
+    const r = await fetch('{% url "manager_security_scan" %}');
+    const d = await r.json();
+    let html = '';
+
+    // pip-audit
+    html += '<h6 class="mt-2 mb-1 small"><i class="bi bi-box me-1"></i>pip-audit</h6>';
+    if (d.pip_audit.error) {
+      html += `<div class="alert alert-secondary py-1 small">${d.pip_audit.error}</div>`;
+    } else if (d.pip_audit.vulnerabilities && d.pip_audit.vulnerabilities.length > 0) {
+      html += `<div class="alert alert-danger py-1 small">${d.pip_audit.vulnerabilities.length} Sicherheitslücke(n) gefunden!</div>`;
+    } else {
+      html += '<div class="alert py-1 small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine bekannten Lücken.</div>';
+    }
+
+    // deploy check
+    html += '<h6 class="mt-2 mb-1 small"><i class="bi bi-shield-check me-1"></i>Django Deploy Check</h6>';
+    if (d.deploy_check.error) {
+      html += `<div class="alert alert-secondary py-1 small">${d.deploy_check.error}</div>`;
+    } else if (!d.deploy_check.ok || (d.deploy_check.issues && d.deploy_check.issues.length > 0)) {
+      if (d.deploy_check.raw) {
+        const rawId = 'mgr-deploy-raw';
+        html += `<div class="d-flex justify-content-end mb-1">
+          <button class="btn btn-sm btn-outline-secondary py-0" onclick="(function(){
+            navigator.clipboard.writeText(document.getElementById('${rawId}').innerText)
+              .then(()=>{this.textContent='✓ Kopiert';setTimeout(()=>{this.textContent='Kopieren'},1500)})
+              .catch(()=>{});}).call(this)" style="font-size:.75rem">Kopieren</button>
+        </div>`;
+        html += `<pre class="log-output" id="${rawId}">${d.deploy_check.raw}</pre>`;
+      }
+    } else {
+      html += '<div class="alert py-1 small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Warnungen.</div>';
+    }
+
+    out.innerHTML = html;
+  } catch(e) {
+    out.innerHTML = `<div class="alert alert-danger py-1 small">Fehler: ${e}</div>`;
+  } finally {
+    btn.disabled = false;
   }
 }
 

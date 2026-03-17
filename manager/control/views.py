@@ -28,6 +28,7 @@ from .utils import (
     get_nginx_stats, get_service_restarts,
     extract_project_zip, update_project_from_zip,
     run_pip_audit, run_django_deploy_check,
+    run_manager_pip_audit, run_manager_deploy_check,
     get_ufw_port_rules, ufw_toggle_port,
 )
 
@@ -1321,6 +1322,19 @@ def project_security_scan(request, name):
     """Run pip-audit + manage.py check --deploy (lazy-loaded from frontend)."""
     pip_results   = run_pip_audit(name)
     deploy_issues = run_django_deploy_check(name)
+    return JsonResponse({
+        'pip_audit':    pip_results,
+        'deploy_check': deploy_issues,
+    })
+
+
+@login_required
+def manager_security_scan(request):
+    """Run pip-audit + manage.py check --deploy on the manager itself."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    pip_results   = run_manager_pip_audit()
+    deploy_issues = run_manager_deploy_check()
     return JsonResponse({
         'pip_audit':    pip_results,
         'deploy_check': deploy_issues,

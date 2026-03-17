@@ -968,3 +968,69 @@ def run_django_deploy_check(project):
         return {'ok': False, 'issues': [], 'raw': '', 'error': 'Timeout (deploy check)'}
     except Exception as e:
         return {'ok': False, 'issues': [], 'raw': '', 'error': str(e)}
+
+
+def run_manager_pip_audit():
+    """Run pip-audit against the manager's own venv."""
+    venv_python = os.path.join(settings.MANAGER_VENV, 'bin', 'python')
+    if not os.path.exists(venv_python):
+        return {'ok': False, 'vulnerabilities': [], 'error': f'Manager-venv nicht gefunden: {venv_python}'}
+    try:
+        result = subprocess.run(
+            [venv_python, '-m', 'pip_audit', '--format=json', '--progress-spinner=off'],
+            capture_output=True, text=True, timeout=120,
+        )
+        output = result.stdout.strip()
+        if not output:
+            return {'ok': True, 'vulnerabilities': [], 'error': ''}
+        data = json.loads(output)
+        vulns = []
+        for dep in data.get('dependencies', []):
+            for vuln in dep.get('vulns', []):
+                vulns.append({
+                    'package': dep.get('name', ''),
+                    'version': dep.get('version', ''),
+                    'id':      vuln.get('id', ''),
+                    'fix':     vuln.get('fix_versions', []),
+                    'desc':    vuln.get('description', '')[:200],
+                })
+        return {'ok': True, 'vulnerabilities': vulns, 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'vulnerabilities': [], 'error': 'Timeout (pip-audit)'}
+    except json.JSONDecodeError:
+        return {'ok': False, 'vulnerabilities': [], 'error': 'Ungültige pip-audit Ausgabe'}
+    except Exception as e:
+        return {'ok': False, 'vulnerabilities': [], 'error': str(e)}
+
+
+def run_manager_deploy_check():
+    """Run manage.py check --deploy on the manager itself."""
+    venv_python = os.path.join(settings.MANAGER_VENV, 'bin', 'python')
+    manage_py   = str(Path(settings.BASE_DIR) / 'manage.py')
+    if not os.path.exists(venv_python) or not os.path.exists(manage_py):
+        return {'ok': False, 'issues': [], 'raw': '', 'error': 'Manager-Dateien nicht gefunden'}
+    try:
+        env = os.environ.copy()
+        env.pop('DJANGO_SETTINGS_MODULE', None)
+        result = subprocess.run(
+            [venv_python, manage_py, 'check', '--deploy'],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(Path(manage_py).parent), env=env,
+        )
+        output = (result.stdout + result.stderr).strip()
+        issues = []
+        for line in output.splitlines():
+            line = line.strip()
+            if line and (
+                line.startswith('WARNINGS:') or
+                line.startswith('System check') or
+                ': (' in line
+            ):
+                issues.append(line)
+        ok = result.returncode == 0
+        raw = output[-5000:] if len(output) > 5000 else output
+        return {'ok': ok, 'issues': issues, 'raw': raw, 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'issues': [], 'raw': '', 'error': 'Timeout (deploy check)'}
+    except Exception as e:
+        return {'ok': False, 'issues': [], 'raw': '', 'error': str(e)}
