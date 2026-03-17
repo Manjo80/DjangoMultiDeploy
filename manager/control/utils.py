@@ -313,38 +313,136 @@ def run_backup(name):
 
 def remove_project(name, opts):
     """
-    Run the project removal script with the given options dict.
-    opts keys: remove_appdir, remove_db, remove_user, remove_backups, remove_logs
-    Returns (ok, output).
+    Remove a project directly (no shell script) so NONINTERACTIVE handling
+    is reliable. opts keys: remove_appdir, remove_db, remove_user,
+    remove_backups, remove_logs.  Returns (ok, output).
     """
-    script = f'/usr/local/bin/{name}_remove.sh'
-    if not os.path.exists(script):
-        return False, f'Remove script not found: {script}'
-    # Ensure _read() helper is defined in the script (older scripts lack it)
-    _read_def = '_read() { [ "${NONINTERACTIVE:-false}" = "true" ] && return 0; read "$@"; }\n'
+    import shutil
+    conf    = get_project(name) or {}
+    appdir  = conf.get('APPDIR', f'/srv/{name}')
+    appuser = conf.get('APPUSER', '')
+    dbtype  = conf.get('DBTYPE', '')
+    dbname  = conf.get('DBNAME', '')
+    nginx_port = conf.get('NGINX_PORT', '')
+    log = []
+    ok  = True
+
+    def _run(*cmd):
+        try:
+            subprocess.run(list(cmd), capture_output=True, timeout=30)
+        except Exception:
+            pass
+
+    def _rm(path):
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            elif os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            log.append(f'⚠️  {path}: {e}')
+
+    # ── Service ───────────────────────────────────────────────────────────────
+    _run('systemctl', 'stop', name)
+    _run('systemctl', 'disable', name)
+    _rm(f'/etc/systemd/system/{name}.service')
+    _run('systemctl', 'daemon-reload')
+    log.append(f'✅ Service {name} gestoppt')
+
+    # ── nginx ─────────────────────────────────────────────────────────────────
+    _rm(f'/etc/nginx/sites-enabled/{name}')
+    _rm(f'/etc/nginx/sites-available/{name}')
+    _run('nginx', '-t')
+    _run('systemctl', 'reload', 'nginx')
+    log.append('✅ nginx-Config entfernt')
+
+    # ── UFW ───────────────────────────────────────────────────────────────────
+    if nginx_port:
+        _run('ufw', 'delete', 'allow', f'{nginx_port}/tcp')
+
+    # ── Config files ──────────────────────────────────────────────────────────
+    for p in [
+        f'/etc/sudoers.d/{name}-service',
+        f'/etc/logrotate.d/{name}',
+        f'/etc/django-servers.d/{name}.conf',
+    ]:
+        _rm(p)
+    log.append('✅ Konfigurationsdateien entfernt')
+
+    # ── Cron ──────────────────────────────────────────────────────────────────
     try:
-        with open(script) as f:
-            content = f.read()
-        if '_read()' not in content:
-            # Insert after the shebang line
-            lines = content.split('\n', 2)
-            patched = '\n'.join(lines[:2]) + '\n' + _read_def + '\n'.join(lines[2:])
-            with open(script, 'w') as f:
-                f.write(patched)
-    except OSError:
-        pass  # non-fatal, script will still run and may fail
-    env = os.environ.copy()
-    env['NONINTERACTIVE'] = 'true'
-    for key, val in opts.items():
-        env[key.upper()] = 'true' if val else 'false'
-    try:
-        result = subprocess.run(
-            [script],
-            capture_output=True, text=True, timeout=120, env=env
-        )
-        return result.returncode == 0, (result.stdout + result.stderr)
-    except Exception as e:
-        return False, str(e)
+        res = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
+        if res.returncode == 0:
+            new_cron = '\n'.join(
+                l for l in res.stdout.splitlines() if f'{name}_backup.sh' not in l
+            )
+            subprocess.run(['crontab', '-'], input=new_cron, text=True,
+                           capture_output=True)
+    except Exception:
+        pass
+
+    # ── Optional: app directory ───────────────────────────────────────────────
+    if opts.get('remove_appdir') and appdir:
+        _rm(appdir)
+        log.append(f'✅ Projektverzeichnis {appdir} entfernt')
+
+    # ── Optional: logs ────────────────────────────────────────────────────────
+    if opts.get('remove_logs'):
+        _rm(f'/var/log/{name}')
+        log.append('✅ Logs entfernt')
+
+    # ── Optional: backups ─────────────────────────────────────────────────────
+    if opts.get('remove_backups'):
+        _rm(f'/var/backups/{name}')
+        log.append('✅ Backups entfernt')
+
+    # ── Optional: database ────────────────────────────────────────────────────
+    if opts.get('remove_db') and dbname:
+        # Try to read DBUSER from the project .env
+        dbuser = ''
+        env_path = os.path.join(appdir, '.env')
+        if os.path.exists(env_path):
+            for line in open(env_path, errors='ignore'):
+                if line.startswith('DB_USER=') or line.startswith('DATABASE_USER='):
+                    dbuser = line.split('=', 1)[1].strip().strip('"\'')
+                    break
+        if dbtype == 'postgresql':
+            _run('su', '-s', '/bin/bash', 'postgres', '-c',
+                 f'psql -c "DROP DATABASE IF EXISTS \\"{dbname}\\";"')
+            if dbuser:
+                _run('su', '-s', '/bin/bash', 'postgres', '-c',
+                     f'psql -c "DROP USER IF EXISTS \\"{dbuser}\\";"')
+            log.append(f'✅ PostgreSQL DB {dbname} entfernt')
+        elif dbtype == 'mysql':
+            cmd = f'DROP DATABASE IF EXISTS `{dbname}`;'
+            if dbuser:
+                cmd += f" DROP USER IF EXISTS '{dbuser}'@'localhost';"
+            _run('mysql', '-u', 'root', '-e', cmd)
+            log.append(f'✅ MySQL DB {dbname} entfernt')
+
+    # ── Optional: Linux user ──────────────────────────────────────────────────
+    if opts.get('remove_user') and appuser:
+        try:
+            result = subprocess.run(
+                ['deluser', '--remove-home', appuser],
+                capture_output=True, timeout=30
+            )
+            if result.returncode != 0:
+                subprocess.run(['userdel', '-r', appuser], capture_output=True)
+            log.append(f'✅ Linux-User {appuser} entfernt')
+        except Exception as e:
+            log.append(f'⚠️  User entfernen: {e}')
+
+    # ── Remove scripts ────────────────────────────────────────────────────────
+    for script in [
+        f'/usr/local/bin/{name}_update.sh',
+        f'/usr/local/bin/{name}_backup.sh',
+        f'/usr/local/bin/{name}_remove.sh',
+    ]:
+        _rm(script)
+
+    log.append('✅ Fertig')
+    return ok, '\n'.join(log)
 
 
 GLOBAL_DEPLOY_KEY = '/root/.ssh/djmanager_github_ed25519'

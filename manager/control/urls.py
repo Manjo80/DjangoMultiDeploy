@@ -41,6 +41,7 @@ urlpatterns = [
     path('project/<str:name>/logs/', views.log_viewer, name='log_viewer'),
     path('project/<str:name>/remove/', views.remove_confirm, name='remove_confirm'),
     path('project/<str:name>/remove/run/', views.remove_run, name='remove_run'),
+    path('remove/done/', views.remove_done, name='remove_done'),
 
     # 2FA
     path('2fa/setup/', views.two_factor_setup, name='two_factor_setup'),

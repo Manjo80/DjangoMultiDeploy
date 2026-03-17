@@ -180,7 +180,8 @@
     if (document.hidden) {
       _hiddenAt = Date.now();
     } else if (_hiddenAt && (Date.now() - _hiddenAt) > 5 * 60 * 1000) {
-      location.reload();
+      // Small delay so any pending click/tap can fire first before reload
+      setTimeout(() => location.reload(), 300);
     }
   });
 })();
