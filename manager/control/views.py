@@ -1547,14 +1547,24 @@ def remove_run(request, name):
         'remove_backups': bool(request.POST.get('remove_backups')),
         'remove_logs':    bool(request.POST.get('remove_logs')),
     }
-    service_action(name, 'stop')
     from .utils import remove_project
     ok, output = remove_project(name, opts)
     AuditLog.log(request, f'Projekt entfernt: {name}', project=name,
                  details=str(opts), success=ok)
-    return render(request, 'control/remove_done.html', {
+    # PRG pattern: store result in session, redirect to GET → avoids
+    # "resubmit form?" on mobile and makes "Zurück" safe.
+    request.session['remove_result'] = {
         'name': name, 'ok': ok, 'output': output, 'opts': opts,
-    })
+    }
+    return redirect('remove_done')
+
+
+@login_required
+def remove_done(request):
+    result = request.session.pop('remove_result', None)
+    if not result:
+        return redirect('dashboard')
+    return render(request, 'control/remove_done.html', result)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
