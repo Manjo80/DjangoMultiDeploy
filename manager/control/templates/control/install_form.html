@@ -210,11 +210,20 @@
         </div>
       </div>
 
-      <div class="alert alert-secondary d-flex align-items-center gap-2 py-2 mb-4" style="font-size:0.85rem;">
-        <i class="bi bi-key"></i>
-        <span>GitHub Deploy-Key wird server-weit verwaltet —
-          <a href="{% url 'global_deploy_key' %}">Key anzeigen / zu GitHub hinzufügen</a>
-        </span>
+      <!-- Deploy Key (nur relevant bei GitHub-Projekten) -->
+      <div id="deploy_key_row" style="display:none" class="mb-4">
+        <label class="form-label"><i class="bi bi-key me-1"></i>GitHub Deploy Key</label>
+        <select name="EXISTING_DEPLOY_KEY_ID" class="form-select">
+          <option value="">— Automatisch neuen Key erstellen —</option>
+          {% for key in unused_keys %}
+          <option value="{{ key.id }}">{{ key.label }} ({{ key.id }})</option>
+          {% endfor %}
+        </select>
+        <div class="form-text">
+          Ein neuer Key wird vor der Installation erstellt und dem Projekt zugewiesen.
+          Oder wähle einen vorhandenen, ungenutzten Key aus der Liste.
+          <a href="{% url 'deploy_keys_list' %}">Alle Keys verwalten ↗</a>
+        </div>
       </div>
 
       <details class="mb-4">
@@ -283,8 +292,9 @@ function addHost(ip) {
 }
 function updateSourceUI() {
   const src = document.querySelector('input[name="source_type"]:checked')?.value || 'new';
-  document.getElementById('src_github_row').style.display = src === 'github' ? '' : 'none';
-  document.getElementById('src_zip_row').style.display    = src === 'zip'    ? '' : 'none';
+  document.getElementById('src_github_row').style.display  = src === 'github' ? '' : 'none';
+  document.getElementById('src_zip_row').style.display     = src === 'zip'    ? '' : 'none';
+  document.getElementById('deploy_key_row').style.display  = src === 'github' ? '' : 'none';
   document.getElementById('zip_file_field').required      = src === 'zip';
   document.getElementById('github_repo_url_field').required = src === 'github';
 }
