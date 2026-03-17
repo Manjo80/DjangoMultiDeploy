@@ -226,8 +226,8 @@
         <a href="{% url 'log_viewer' name %}" class="btn btn-outline-secondary">
           <i class="bi bi-file-text me-1"></i> Logs
         </a>
-        <a href="{% url 'ssh_key_display' name %}" class="btn btn-outline-secondary">
-          <i class="bi bi-key me-1"></i> SSH-Key
+        <a href="{% url 'project_deploy_key' name %}" class="btn btn-outline-secondary">
+          <i class="bi bi-key-fill me-1"></i> GitHub Deploy-Key
         </a>
         {% if conf.PRIMARY_HOST or conf.NGINX_PORT %}
         <a href="{% if conf.PRIMARY_HOST %}https://{{ conf.PRIMARY_HOST }}{% else %}https://{{ request.get_host|cut:":443"|cut:":80" }}:{{ conf.NGINX_PORT }}{% endif %}/djadmin/" target="_blank"

@@ -1,0 +1,84 @@
+{% extends "control/base.html" %}
+{% block title %}GitHub Deploy-Key — {{ project }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-8">
+
+<div class="card">
+  <div class="card-header d-flex justify-content-between">
+    <h5 class="mb-0"><i class="bi bi-key-fill me-2"></i>GitHub Deploy-Key — {{ project }}</h5>
+    <a href="{% url 'project_detail' project %}" class="btn btn-sm btn-outline-secondary">← Zurück</a>
+  </div>
+  <div class="card-body">
+
+    <div class="alert alert-info" style="background:#1f3a5f;border-color:#1f6feb;color:#e6edf3;">
+      <i class="bi bi-info-circle me-1"></i>
+      Dieser <strong>öffentliche Schlüssel</strong> gilt <em>nur</em> für das Projekt
+      <strong>{{ project }}</strong>. Trage ihn als Deploy Key direkt im GitHub-Repo ein
+      (Read-only reicht für git pull).
+    </div>
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if pub_key %}
+    <h6 class="text-muted mb-2">Öffentlicher Schlüssel:</h6>
+    <pre class="log-output" id="pub-key-box" style="font-size:0.75rem; word-break:break-all; white-space:pre-wrap; max-height:120px;">{{ pub_key }}</pre>
+
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <button class="btn btn-outline-secondary" onclick="copyKey()">
+        <i class="bi bi-clipboard me-1"></i> Kopieren
+      </button>
+      <a href="{% url 'project_deploy_key_download' project %}" class="btn btn-outline-success">
+        <i class="bi bi-download me-1"></i> .pub herunterladen
+      </a>
+      {% if github_keys_url %}
+      <a href="{{ github_keys_url }}" target="_blank" rel="noopener" class="btn btn-outline-primary">
+        <i class="bi bi-github me-1"></i> Direkt zu GitHub Deploy Keys ↗
+      </a>
+      {% endif %}
+    </div>
+
+    <hr class="my-4">
+    <h6 class="text-muted">So fügst du den Key zu GitHub hinzu:</h6>
+    <ol class="small" style="line-height:2">
+      <li>Key oben kopieren (Schaltfläche "Kopieren")</li>
+      <li>
+        {% if github_keys_url %}
+          <a href="{{ github_keys_url }}" target="_blank" rel="noopener">GitHub → {{ project }} → Settings → Deploy keys → Add deploy key</a>
+        {% else %}
+          GitHub → Repo → <em>Settings</em> → <em>Deploy keys</em> → <em>Add deploy key</em>
+        {% endif %}
+      </li>
+      <li>Titel z.B. <code>deploy-{{ project }}</code>, Key einfügen</li>
+      <li><strong>Allow write access</strong> <em>nicht</em> aktivieren (Read-only genügt)</li>
+      <li>Speichern — fertig</li>
+    </ol>
+
+    <div class="alert alert-secondary mt-3 small">
+      <i class="bi bi-terminal me-1"></i>
+      Key-Pfad auf dem Server: <code>/root/.ssh/deploy_{{ project }}_ed25519</code><br>
+      Das Update-Script (<code>/usr/local/bin/{{ project }}_update.sh</code>) wurde automatisch
+      auf diesen Key umgestellt.
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+function copyKey() {
+  const text = document.getElementById('pub-key-box').textContent.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target.closest('button');
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i> Kopiert!';
+    setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard me-1"></i> Kopieren'; }, 2000);
+  });
+}
+</script>
+{% endblock %}

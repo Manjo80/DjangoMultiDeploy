@@ -731,7 +731,7 @@ APPUSER_PASS="${APPUSER_PASS:-}"
 DJKEY="${DJKEY}"
 SSH_KEY_PASSPHRASE="${SSH_KEY_PASSPHRASE:-}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-}"
-GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_github_ed25519}"
+GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/deploy_${PROJECTNAME}_ed25519}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS}"
 DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
 DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
@@ -1082,36 +1082,36 @@ else
 fi  # end appuser_created
 
 # -------------------------------------------------------------------
-# Globaler GitHub Deploy-Key (einmal pro Server, für alle Projekte)
+# Pro-Projekt GitHub Deploy-Key
 # -------------------------------------------------------------------
-GITHUB_DEPLOY_KEY="/root/.ssh/djmanager_github_ed25519"
+GITHUB_DEPLOY_KEY="/root/.ssh/deploy_${PROJECTNAME}_ed25519"
 GITHUB_SSH_OPTS="-o ConnectTimeout=30"
 
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📦 GitHub Repository erkannt: $GITHUB_REPO_URL"
 
-  # Globalen Deploy-Key anlegen falls nicht vorhanden
+  # Pro-Projekt Deploy-Key anlegen
   if [ ! -f "$GITHUB_DEPLOY_KEY" ]; then
-    echo "🔑 Erstelle globalen GitHub Deploy-Key (einmalig für diesen Server)..."
+    echo "🔑 Erstelle GitHub Deploy-Key für Projekt '${PROJECTNAME}'..."
     mkdir -p /root/.ssh
     chmod 700 /root/.ssh
-    ssh-keygen -t ed25519 -C "djmanager@$(hostname -f 2>/dev/null || echo 'server')" \
+    ssh-keygen -t ed25519 -C "deploy-${PROJECTNAME}@$(hostname -f 2>/dev/null || echo 'server')" \
       -f "$GITHUB_DEPLOY_KEY" -N "" -q
     chmod 600 "$GITHUB_DEPLOY_KEY"
     chmod 644 "${GITHUB_DEPLOY_KEY}.pub"
-    echo "✅ Globaler Deploy-Key erstellt: $GITHUB_DEPLOY_KEY"
+    echo "✅ Deploy-Key erstellt: $GITHUB_DEPLOY_KEY"
   else
-    echo "✅ Globaler Deploy-Key bereits vorhanden: $GITHUB_DEPLOY_KEY"
+    echo "✅ Deploy-Key bereits vorhanden: $GITHUB_DEPLOY_KEY"
   fi
 
   echo
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "🔐 ÖFFENTLICHER GITHUB DEPLOY-KEY (einmalig zu GitHub hinzufügen):"
+  echo "🔐 ÖFFENTLICHER GITHUB DEPLOY-KEY für Projekt '${PROJECTNAME}':"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   cat "${GITHUB_DEPLOY_KEY}.pub"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "➡️  Manager-Webinterface → 'GitHub Deploy-Key' → Key kopieren/downloaden"
-  echo "   Dann: GitHub → Settings → SSH and GPG keys → New SSH key"
+  echo "➡️  Manager → Projekt '${PROJECTNAME}' → 'GitHub Deploy-Key' → Key kopieren"
+  echo "   Dann: GitHub → Repo → Settings → Deploy keys → Add deploy key"
   echo
 
   # Retry-Schleife: Key testen, bei Fehler nochmal warten
@@ -1185,7 +1185,7 @@ SSHCONFIGEOF
     echo "##WAIT_GITHUB_CONFIRM##"
   done
 else
-  GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_github_ed25519}"
+  GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/deploy_${PROJECTNAME}_ed25519}"
   echo "⏭️  GitHub nicht genutzt — überspringe GitHub-Setup"
 fi
 

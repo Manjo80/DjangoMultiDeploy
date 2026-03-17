@@ -23,7 +23,7 @@ from .utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
     list_backups, run_update, run_backup, delete_backup, get_ssh_key, start_install,
-    get_global_deploy_key, get_allowed_hosts, get_nginx_server_names,
+    get_global_deploy_key, get_project_deploy_key, get_allowed_hosts, get_nginx_server_names,
     update_allowed_hosts, get_ufw_status, get_server_stats, get_last_backup,
     get_nginx_stats, get_service_restarts,
     extract_project_zip, update_project_from_zip,
@@ -1165,6 +1165,44 @@ def global_deploy_key_download(request):
         raise Http404(error)
     response = HttpResponse(pub_key + '\n', content_type='text/plain')
     response['Content-Disposition'] = 'attachment; filename="djmanager_github_ed25519.pub"'
+    return response
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Per-Project GitHub Deploy Key
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def project_deploy_key(request, project):
+    if not _check_project_access(request.user, project):
+        return render(request, 'control/403.html', status=403)
+    pub_key, error = get_project_deploy_key(project)
+    conf = get_project(project)
+    # Build a direct link to the GitHub repo's deploy-key settings page
+    github_keys_url = None
+    if conf and conf.get('GITHUB'):
+        import re as _re
+        m = _re.search(r'[:/]([^/:]+/[^/]+?)(?:\.git)?$', conf['GITHUB'])
+        if m:
+            github_keys_url = f'https://github.com/{m.group(1)}/settings/keys'
+    return render(request, 'control/project_deploy_key.html', {
+        'project': project,
+        'pub_key': pub_key,
+        'error': error,
+        'conf': conf,
+        'github_keys_url': github_keys_url,
+    })
+
+
+@login_required
+def project_deploy_key_download(request, project):
+    if not _check_project_access(request.user, project):
+        raise Http404()
+    pub_key, error = get_project_deploy_key(project)
+    if error:
+        raise Http404(error)
+    response = HttpResponse(pub_key + '\n', content_type='text/plain')
+    response['Content-Disposition'] = f'attachment; filename="deploy_{project}_ed25519.pub"'
     return response
 
 

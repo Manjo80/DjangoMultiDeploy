@@ -18,6 +18,10 @@ urlpatterns = [
     path('deploy-key/', views.global_deploy_key, name='global_deploy_key'),
     path('deploy-key/download/', views.global_deploy_key_download, name='global_deploy_key_download'),
 
+    # Per-project GitHub deploy key
+    path('project/<str:project>/deploy-key/', views.project_deploy_key, name='project_deploy_key'),
+    path('project/<str:project>/deploy-key/download/', views.project_deploy_key_download, name='project_deploy_key_download'),
+
     # Project management
     path('project/<str:name>/', views.project_detail, name='project_detail'),
     path('project/<str:name>/action/', views.project_action, name='project_action'),
