@@ -289,7 +289,40 @@
         </button>
       </div>
       <div class="card-body">
-        <div class="text-muted small">pip-audit (CVE-Check) + Django Deploy-Check — wird erst beim Klick ausgeführt.</div>
+        <!-- Info-Akkordeon -->
+        <div class="accordion accordion-flush mb-3" id="scanInfoAcc">
+          <div class="accordion-item bg-transparent border border-secondary rounded">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed bg-transparent text-muted small py-2" type="button"
+                      data-bs-toggle="collapse" data-bs-target="#scanInfoBody">
+                <i class="bi bi-info-circle me-2"></i>Was wird geprüft?
+              </button>
+            </h2>
+            <div id="scanInfoBody" class="accordion-collapse collapse">
+              <div class="accordion-body small text-muted pt-1">
+                <div class="row g-2">
+                  <div class="col-md-6">
+                    <strong><i class="bi bi-box-seam me-1"></i>pip-audit</strong><br>
+                    Prüft alle installierten Python-Pakete im venv gegen bekannte CVEs
+                    (NIST / PyPI Advisory Database). Findet verwundbare Abhängigkeiten.
+                  </div>
+                  <div class="col-md-6">
+                    <strong><i class="bi bi-shield-check me-1"></i>Django Deploy Check</strong><br>
+                    Führt <code>manage.py check --deploy</code> aus. Prüft Django-Sicherheitseinstellungen:
+                    Cookie-Sicherheit, HSTS, Allowed Hosts, Debug-Modus u.m.
+                    SSL-Redirect (W008) wird unterdrückt — wird von nginx übernommen.
+                  </div>
+                </div>
+                <hr class="my-2">
+                <div class="row g-1 small">
+                  <div class="col-auto"><span class="badge bg-warning text-dark">ENV</span> = Änderung in der <code>.env</code>-Datei nötig</div>
+                  <div class="col-auto"><span class="badge bg-info text-dark">Code</span> = Änderung in <code>settings.py</code> nötig</div>
+                  <div class="col-auto"><span class="badge bg-secondary">Installation</span> = Server-/Paket-Problem</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div id="scan-output"></div>
       </div>
     </div>
@@ -629,6 +662,48 @@ async function removeHost(host) {
 
 <!-- Security Scan JS -->
 <script>
+// Django security warning codes: source category + hint
+const WARN_META = {
+  'W001': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_PROXY_SSL_HEADER Format veraltet — settings.py aktualisieren.' },
+  'W002': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_HSTS_PRELOAD ohne ausreichendes SECURE_HSTS_SECONDS.' },
+  'W003': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_HSTS_INCLUDE_SUBDOMAINS = True in settings.py setzen.' },
+  'W004': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_HSTS_SECONDS in settings.py setzen (z.B. 31536000). Nicht per .env lösbar — settings.py muss es implementieren.' },
+  'W005': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_HSTS_INCLUDE_SUBDOMAINS fehlt trotz aktivem HSTS.' },
+  'W006': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_CONTENT_TYPE_NOSNIFF = True in settings.py setzen.' },
+  'W007': { src: 'code',  label: 'Code / settings.py', hint: 'X_FRAME_OPTIONS in settings.py setzen.' },
+  'W008': { src: 'nginx', label: 'nginx (OK)',          hint: 'SSL-Redirect wird von nginx übernommen — kein Handlungsbedarf.' },
+  'W009': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_HSTS_PRELOAD = True in settings.py setzen.' },
+  'W010': { src: 'inst',  label: 'Installation',        hint: 'SecurityMiddleware fehlt in MIDDLEWARE — Installation prüfen.' },
+  'W011': { src: 'inst',  label: 'Installation',        hint: 'SessionMiddleware fehlt in MIDDLEWARE.' },
+  'W012': { src: 'env',   label: '.env / Code',         hint: 'SESSION_COOKIE_SECURE=True. Falls MODE=prod gesetzt ist und der Fehler bleibt, muss settings.py es implementieren.' },
+  'W014': { src: 'code',  label: 'Code / settings.py', hint: 'SESSION_COOKIE_HTTPONLY = True in settings.py setzen.' },
+  'W016': { src: 'env',   label: '.env / Code',         hint: 'CSRF_COOKIE_SECURE=True. Falls MODE=prod gesetzt ist und der Fehler bleibt, muss settings.py es implementieren.' },
+  'W017': { src: 'code',  label: 'Code / settings.py', hint: 'CSRF_COOKIE_HTTPONLY = True in settings.py setzen.' },
+  'W018': { src: 'env',   label: '.env',                hint: 'ALLOWED_HOSTS in .env setzen.' },
+  'W019': { src: 'code',  label: 'Code / settings.py', hint: 'X_FRAME_OPTIONS = "DENY" in settings.py setzen.' },
+  'W020': { src: 'env',   label: '.env',                hint: 'DEBUG=False und ALLOWED_HOSTS in .env setzen.' },
+};
+const SRC_BADGE = {
+  env:   '<span class="badge bg-warning text-dark me-1">ENV</span>',
+  code:  '<span class="badge bg-info text-dark me-1">Code</span>',
+  inst:  '<span class="badge bg-secondary me-1">Installation</span>',
+  nginx: '<span class="badge bg-success me-1">nginx ✓</span>',
+};
+
+function parseDeployWarnings(raw) {
+  const warnings = [];
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    const m = line.match(/\(security\.(W\d+)\)/);
+    if (m) {
+      const code = m[1];
+      const meta = WARN_META[code] || { src: 'code', label: 'Code / settings.py', hint: '' };
+      warnings.push({ code, line: line.trim(), meta });
+    }
+  }
+  return warnings;
+}
+
 async function runSecurityScan() {
   const btn = document.getElementById('scan-btn');
   const out = document.getElementById('scan-output');
@@ -643,10 +718,10 @@ async function runSecurityScan() {
     // pip-audit results
     html += '<h6 class="mt-3 mb-2"><i class="bi bi-box-seam me-2"></i>pip-audit — Abhängigkeiten</h6>';
     if (!d.pip_audit.ok && d.pip_audit.error) {
-      html += `<div class="alert alert-secondary small">${d.pip_audit.error}</div>`;
+      html += `<div class="alert alert-secondary small"><span class="badge bg-secondary me-1">Installation</span>${d.pip_audit.error}</div>`;
     } else if (d.pip_audit.vulnerabilities && d.pip_audit.vulnerabilities.length > 0) {
       html += `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.pip_audit.vulnerabilities.length} Sicherheitslücke(n) gefunden!</div>`;
-      html += '<table class="table table-sm"><thead><tr><th>Paket</th><th>Version</th><th>CVE/ID</th><th>Fix</th></tr></thead><tbody>';
+      html += '<table class="table table-sm table-dark"><thead><tr><th>Paket</th><th>Version</th><th>CVE/ID</th><th>Fix</th></tr></thead><tbody>';
       d.pip_audit.vulnerabilities.forEach(v => {
         html += `<tr class="text-danger"><td>${v.package}</td><td>${v.version}</td><td>${v.id}</td><td>${v.fix.join(', ') || '—'}</td></tr>`;
       });
@@ -657,19 +732,34 @@ async function runSecurityScan() {
 
     // Django deploy check
     html += '<h6 class="mt-3 mb-2"><i class="bi bi-shield-check me-2"></i>Django Deploy Check</h6>';
-    if (!d.deploy_check.ok || (d.deploy_check.issues && d.deploy_check.issues.length > 0)) {
-      if (d.deploy_check.error) {
-        html += `<div class="alert alert-secondary small">${d.deploy_check.error}</div>`;
+    if (d.deploy_check.error) {
+      html += `<div class="alert alert-secondary small"><span class="badge bg-secondary me-1">Installation</span>${d.deploy_check.error}</div>`;
+    } else if (!d.deploy_check.ok || (d.deploy_check.issues && d.deploy_check.issues.length > 0)) {
+      const warnings = parseDeployWarnings(d.deploy_check.raw || '');
+      if (warnings.length > 0) {
+        html += '<div class="list-group mb-2">';
+        warnings.forEach(w => {
+          html += `<div class="list-group-item list-group-item-dark border-secondary small py-2">
+            <div class="d-flex align-items-start gap-2">
+              <div class="flex-grow-1">
+                ${SRC_BADGE[w.meta.src] || ''}<strong class="font-monospace">security.${w.code}</strong>
+                <div class="text-muted mt-1">${w.line.replace(/.*\(security\.W\d+\)\s*/, '')}</div>
+                ${w.meta.hint ? `<div class="mt-1"><i class="bi bi-lightbulb text-warning me-1"></i>${w.meta.hint}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+        });
+        html += '</div>';
       }
       if (d.deploy_check.raw) {
         const rawId = 'deploy-check-raw';
-        html += `<div class="d-flex justify-content-end mb-1">
-          <button class="btn btn-sm btn-outline-secondary py-0" onclick="(function(){
+        html += `<details class="mt-2"><summary class="text-muted small" style="cursor:pointer">Vollständige Ausgabe anzeigen
+          <button class="btn btn-sm btn-outline-secondary py-0 ms-2" onclick="event.preventDefault();(function(){
             navigator.clipboard.writeText(document.getElementById('${rawId}').innerText)
               .then(()=>{this.textContent='✓ Kopiert';setTimeout(()=>{this.textContent='Kopieren'},1500)})
               .catch(()=>{});}).call(this)" style="font-size:.75rem">Kopieren</button>
-        </div>`;
-        html += `<pre class="log-output" id="${rawId}">${d.deploy_check.raw}</pre>`;
+        </summary>
+        <pre class="log-output mt-2" id="${rawId}">${d.deploy_check.raw}</pre></details>`;
       }
     } else {
       html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Sicherheitswarnungen.</div>';
