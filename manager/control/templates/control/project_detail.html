@@ -162,11 +162,20 @@
           {% endif %}
         </div>
         <div class="d-flex flex-wrap gap-1">
-          <span class="badge bg-success font-monospace">22 SSH ✅</span>
-          <span class="badge bg-success font-monospace">80 HTTP ✅</span>
-          <span class="badge bg-success font-monospace">443 HTTPS ✅</span>
-          <span class="badge bg-danger font-monospace">{{ conf.GUNICORN_PORT }} Gunicorn 🔒</span>
-          <span class="badge bg-danger font-monospace">8888 Manager 🔒 (via nginx)</span>
+          {# Gunicorn-Port: intern gesperrt #}
+          <span class="badge bg-danger font-monospace">{{ conf.GUNICORN_PORT }} Gunicorn 🔒 intern</span>
+          {# nginx-Port dieses Projekts #}
+          {% if conf.NGINX_PORT %}
+            {% with p=conf.NGINX_PORT|stringformat:"s" %}
+              {% if p == "443" %}
+                <span class="badge {% if ufw.ports.https == 'allow' %}bg-success{% else %}bg-warning text-dark{% endif %} font-monospace">443 HTTPS (nginx) {% if ufw.ports.https == 'allow' %}✅{% else %}?{% endif %}</span>
+              {% elif p == "80" %}
+                <span class="badge {% if ufw.ports.http == 'allow' %}bg-success{% else %}bg-warning text-dark{% endif %} font-monospace">80 HTTP (nginx) {% if ufw.ports.http == 'allow' %}✅{% else %}?{% endif %}</span>
+              {% else %}
+                <span class="badge bg-secondary font-monospace">{{ conf.NGINX_PORT }} Web (nginx)</span>
+              {% endif %}
+            {% endwith %}
+          {% endif %}
         </div>
         {% endif %}
       </div>
@@ -217,8 +226,8 @@
         <a href="{% url 'log_viewer' name %}" class="btn btn-outline-secondary">
           <i class="bi bi-file-text me-1"></i> Logs
         </a>
-        <a href="{% url 'ssh_key_display' name %}" class="btn btn-outline-secondary">
-          <i class="bi bi-key me-1"></i> SSH-Key
+        <a href="{% url 'project_deploy_key' name %}" class="btn btn-outline-secondary">
+          <i class="bi bi-key-fill me-1"></i> GitHub Deploy-Key
         </a>
         {% if conf.PRIMARY_HOST or conf.NGINX_PORT %}
         <a href="{% if conf.PRIMARY_HOST %}https://{{ conf.PRIMARY_HOST }}{% else %}https://{{ request.get_host|cut:":443"|cut:":80" }}:{{ conf.NGINX_PORT }}{% endif %}/djadmin/" target="_blank"

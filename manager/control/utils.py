@@ -337,6 +337,54 @@ def remove_project(name, opts):
 GLOBAL_DEPLOY_KEY = '/root/.ssh/djmanager_github_ed25519'
 
 
+def get_project_deploy_key(project):
+    """
+    Return (pubkey_content, error) for the per-project GitHub deploy key.
+    Generates the key if it doesn't exist yet, then patches the project's
+    update script so it uses this key for git pull.
+    """
+    import re as _re
+    key_path = f'/root/.ssh/deploy_{project}_ed25519'
+    pub_path = key_path + '.pub'
+    if not os.path.exists(key_path):
+        try:
+            import socket
+            comment = f'deploy-{project}@{socket.getfqdn()}'
+            os.makedirs('/root/.ssh', mode=0o700, exist_ok=True)
+            subprocess.run(
+                ['ssh-keygen', '-t', 'ed25519', '-C', comment,
+                 '-f', key_path, '-N', ''],
+                check=True, capture_output=True,
+            )
+            os.chmod(key_path, 0o600)
+            os.chmod(pub_path, 0o644)
+        except Exception as e:
+            return None, f'Key konnte nicht erstellt werden: {e}'
+        # Patch the update script so git pull uses this key
+        script = f'/usr/local/bin/{project}_update.sh'
+        if os.path.exists(script):
+            try:
+                with open(script) as f:
+                    content = f.read()
+                new_content = _re.sub(
+                    r'GITHUB_DEPLOY_KEY="[^"]*"',
+                    f'GITHUB_DEPLOY_KEY="{key_path}"',
+                    content,
+                )
+                if new_content != content:
+                    with open(script, 'w') as f:
+                        f.write(new_content)
+            except OSError:
+                pass  # non-fatal
+    if not os.path.exists(pub_path):
+        return None, f'Public Key nicht gefunden: {pub_path}'
+    try:
+        with open(pub_path) as f:
+            return f.read().strip(), None
+    except OSError as e:
+        return None, str(e)
+
+
 def get_global_deploy_key():
     """Return (pubkey_content, error). Creates the key if it doesn't exist."""
     pub_path = GLOBAL_DEPLOY_KEY + '.pub'
