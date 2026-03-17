@@ -970,10 +970,14 @@ def install_form(request):
         except Exception:
             all_ips = []
     allowed_suggestion = ','.join(all_ips) if all_ips else ''
+    # Pass unused deploy keys for the optional "reuse existing key" dropdown
+    all_keys    = list_deploy_keys()
+    unused_keys = [k for k in all_keys if not k['projects']]
     return render(request, 'control/install_form.html', {
         'next_port':               next_port,
         'server_ips':              all_ips,
         'allowed_hosts_suggestion': allowed_suggestion,
+        'unused_keys':             unused_keys,
     })
 
 
@@ -1043,14 +1047,21 @@ def install_run(request):
     # Create a dedicated deploy key BEFORE the install script runs so it is
     # ready when git clone happens and can be written to the project's .conf.
     if source_type == 'github' and params.get('GITHUB_REPO_URL'):
-        from .utils import create_deploy_key, KEYS_DIR
-        key_label = f'{project} deploy key'
-        key_id, _pub, key_err = create_deploy_key(key_label)
-        if key_id:
-            import os as _os
-            key_path = _os.path.join(KEYS_DIR, f'{key_id}_ed25519')
-            params['GITHUB_DEPLOY_KEY'] = key_path
-            params['DEPLOY_KEY_ID']     = key_id
+        existing_key_id = data.get('EXISTING_DEPLOY_KEY_ID', '').strip()
+        if existing_key_id:
+            # Reuse an existing unused key
+            key_path = os.path.join(KEYS_DIR, f'{existing_key_id}_ed25519')
+            if os.path.exists(key_path):
+                params['GITHUB_DEPLOY_KEY'] = key_path
+                params['DEPLOY_KEY_ID']     = existing_key_id
+            else:
+                existing_key_id = ''  # fallback to create new
+        if not existing_key_id:
+            key_label = f'{project} deploy key'
+            key_id, _pub, _key_err = create_deploy_key(key_label)
+            if key_id:
+                params['GITHUB_DEPLOY_KEY'] = os.path.join(KEYS_DIR, f'{key_id}_ed25519')
+                params['DEPLOY_KEY_ID']     = key_id
 
     run_id   = str(uuid.uuid4())[:8]
     log_dir  = settings.INSTALL_LOG_DIR
