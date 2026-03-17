@@ -2137,6 +2137,9 @@ cat > /usr/local/bin/${PROJECTNAME}_remove.sh <<REMOVEEOF
 #!/bin/bash
 set -euo pipefail
 
+# _read: überspringt Prompts wenn NONINTERACTIVE=true
+_read() { [ "\${NONINTERACTIVE:-false}" = "true" ] && return 0; read "\$@"; }
+
 PROJECT="${PROJECTNAME}"
 APPDIR="${APPDIR}"
 APPUSER="${APPUSER}"

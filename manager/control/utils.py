@@ -320,6 +320,19 @@ def remove_project(name, opts):
     script = f'/usr/local/bin/{name}_remove.sh'
     if not os.path.exists(script):
         return False, f'Remove script not found: {script}'
+    # Ensure _read() helper is defined in the script (older scripts lack it)
+    _read_def = '_read() { [ "${NONINTERACTIVE:-false}" = "true" ] && return 0; read "$@"; }\n'
+    try:
+        with open(script) as f:
+            content = f.read()
+        if '_read()' not in content:
+            # Insert after the shebang line
+            lines = content.split('\n', 2)
+            patched = '\n'.join(lines[:2]) + '\n' + _read_def + '\n'.join(lines[2:])
+            with open(script, 'w') as f:
+                f.write(patched)
+    except OSError:
+        pass  # non-fatal, script will still run and may fail
     env = os.environ.copy()
     env['NONINTERACTIVE'] = 'true'
     for key, val in opts.items():
