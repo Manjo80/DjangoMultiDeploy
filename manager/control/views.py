@@ -1404,7 +1404,10 @@ def project_action(request, name):
 
     elif action == 'manage_command':
         raw_cmd = request.POST.get('manage_cmd', '').strip()
-        ok, output = run_management_command(name, raw_cmd)
+        try:
+            ok, output = run_management_command(name, raw_cmd)
+        except Exception as exc:
+            ok, output = False, f'Interner Fehler: {exc}'
         AuditLog.log(request, f'manage.py {raw_cmd}: {name}', project=name, success=ok)
         return JsonResponse({'ok': ok, 'output': output})
 
