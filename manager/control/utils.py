@@ -933,6 +933,8 @@ def run_django_deploy_check(project):
 
     try:
         env = os.environ.copy()
+        # Remove manager's DJANGO_SETTINGS_MODULE so manage.py sets its own
+        env.pop('DJANGO_SETTINGS_MODULE', None)
         env['PYTHONPATH'] = f'/srv/{project}'
         # Load env from .env file so settings can read secrets
         if os.path.exists(env_file):
