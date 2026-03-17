@@ -1,0 +1,67 @@
+{% extends "control/base.html" %}
+{% block title %}Deploy Key — {{ meta.label }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-8">
+
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="mb-0"><i class="bi bi-key-fill me-2"></i>{{ meta.label }}</h5>
+    <a href="{% url 'deploy_keys_list' %}" class="btn btn-sm btn-outline-secondary">← Alle Keys</a>
+  </div>
+  <div class="card-body">
+
+    <dl class="row small mb-3">
+      <dt class="col-sm-3">ID</dt>
+      <dd class="col-sm-9"><code>{{ meta.id }}</code></dd>
+      <dt class="col-sm-3">Erstellt</dt>
+      <dd class="col-sm-9">{{ meta.created_at|default:"–" }}</dd>
+      <dt class="col-sm-3">Fingerprint</dt>
+      <dd class="col-sm-9 text-muted" style="word-break:break-all">{{ meta.fingerprint|default:"–" }}</dd>
+    </dl>
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if pub_key %}
+    <h6 class="text-muted mb-2">Öffentlicher Schlüssel:</h6>
+    <pre class="log-output" id="pub-key-box" style="font-size:0.75rem; word-break:break-all; white-space:pre-wrap; max-height:120px;">{{ pub_key }}</pre>
+
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <button class="btn btn-outline-secondary" onclick="copyKey()">
+        <i class="bi bi-clipboard me-1"></i> Kopieren
+      </button>
+      <a href="{% url 'deploy_key_detail' key_id %}?download=1" class="btn btn-outline-success">
+        <i class="bi bi-download me-1"></i> .pub herunterladen
+      </a>
+    </div>
+
+    <hr class="my-4">
+    <h6 class="text-muted">Dem GitHub-Repo als Deploy Key hinzufügen:</h6>
+    <ol class="small" style="line-height:2">
+      <li>Key oben kopieren</li>
+      <li>GitHub → Repo → <em>Settings</em> → <em>Deploy keys</em> → <em>Add deploy key</em></li>
+      <li>Titel z.B. <code>{{ meta.label }}</code>, Key einfügen</li>
+      <li><strong>Allow write access</strong> <em>nicht</em> aktivieren (Read-only reicht)</li>
+    </ol>
+    {% endif %}
+
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+function copyKey() {
+  const text = document.getElementById('pub-key-box').textContent.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target.closest('button');
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i> Kopiert!';
+    setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard me-1"></i> Kopieren'; }, 2000);
+  });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,122 @@
+{% extends "control/base.html" %}
+{% block title %}Deploy Keys{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-10">
+
+{% if request.GET.error %}
+<div class="alert alert-danger">{{ request.GET.error }}</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="mb-0"><i class="bi bi-key-fill me-2"></i>GitHub Deploy Keys</h5>
+    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#createModal">
+      <i class="bi bi-plus-lg me-1"></i> Neuer Key
+    </button>
+  </div>
+  <div class="card-body p-0">
+    {% if keys %}
+    <table class="table table-hover mb-0">
+      <thead class="table-dark">
+        <tr>
+          <th>Bezeichnung</th>
+          <th>ID</th>
+          <th>Fingerprint</th>
+          <th>Erstellt</th>
+          <th>Projekte</th>
+          <th class="text-end">Aktionen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in keys %}
+        <tr>
+          <td class="fw-semibold">{{ key.label }}</td>
+          <td><code class="small">{{ key.id }}</code></td>
+          <td class="small text-muted" style="word-break:break-all">{{ key.fingerprint|default:"–" }}</td>
+          <td class="small text-muted">{{ key.created_at|slice:":16" }}</td>
+          <td>
+            {% for proj in key.projects %}
+              <a href="{% url 'project_detail' proj %}" class="badge bg-secondary text-decoration-none me-1">{{ proj }}</a>
+            {% empty %}
+              <span class="text-muted small">–</span>
+            {% endfor %}
+          </td>
+          <td class="text-end">
+            <a href="{% url 'deploy_key_detail' key.id %}" class="btn btn-sm btn-outline-secondary me-1" title="Public Key anzeigen">
+              <i class="bi bi-eye"></i>
+            </a>
+            {% if not key.projects %}
+            <form method="post" action="{% url 'deploy_key_delete' key.id %}" class="d-inline"
+                  onsubmit="return confirm('Key \'{{ key.label }}\' wirklich löschen?')">
+              {% csrf_token %}
+              <button class="btn btn-sm btn-outline-danger" title="Löschen">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+            {% else %}
+            <button class="btn btn-sm btn-outline-danger" disabled
+                    title="Key wird noch verwendet – zuerst Projekt umstellen">
+              <i class="bi bi-trash"></i>
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="p-4 text-muted text-center">
+      Noch keine Deploy Keys vorhanden. Erstelle einen über den Button oben<br>
+      oder installiere ein neues GitHub-Projekt — der Key wird automatisch angelegt.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h6 class="mb-0">Projekte ohne Deploy Key</h6></div>
+  <div class="card-body p-0">
+    {% with unassigned=all_projects|dictsort:"PROJECTNAME" %}
+    {% for proj in all_projects %}
+      {% if not proj.DEPLOY_KEY_ID %}
+      <div class="d-flex align-items-center justify-content-between px-3 py-2 border-bottom">
+        <span>{{ proj.PROJECTNAME }}</span>
+        <a href="{% url 'project_deploy_key' proj.PROJECTNAME %}" class="btn btn-sm btn-outline-primary">
+          Key zuweisen
+        </a>
+      </div>
+      {% endif %}
+    {% endfor %}
+    {% endwith %}
+  </div>
+</div>
+
+</div>
+</div>
+
+<!-- Create Modal -->
+<div class="modal fade" id="createModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="post" action="{% url 'deploy_key_create' %}">
+      {% csrf_token %}
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-key me-2"></i>Neuen Deploy Key erstellen</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label">Bezeichnung</label>
+          <input type="text" name="label" class="form-control" placeholder="z.B. MeinProjekt deploy key" required>
+          <div class="form-text">Der Public Key wird danach im Projekt zugewiesen und muss bei GitHub eingetragen werden.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i> Erstellen</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -336,32 +336,181 @@ def remove_project(name, opts):
 
 GLOBAL_DEPLOY_KEY = '/root/.ssh/djmanager_github_ed25519'
 
+# ── Deploy Key Registry ────────────────────────────────────────────────────────
+KEYS_DIR      = '/root/.ssh/djmanager_keys'
+KEYS_REGISTRY = '/root/.ssh/djmanager_keys/registry.json'
 
-def get_project_deploy_key(project):
+
+def _load_key_registry():
+    """Return the key registry dict (id → metadata). Never raises."""
+    import json
+    try:
+        with open(KEYS_REGISTRY) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_key_registry(registry):
+    import json
+    os.makedirs(KEYS_DIR, mode=0o700, exist_ok=True)
+    with open(KEYS_REGISTRY, 'w') as f:
+        json.dump(registry, f, indent=2)
+    os.chmod(KEYS_REGISTRY, 0o600)
+
+
+def create_deploy_key(label):
     """
-    Return (pubkey_content, error) for the per-project GitHub deploy key.
-    Generates the key if it doesn't exist yet, then patches the project's
-    update script so it uses this key for git pull.
+    Create a new ed25519 deploy key pair, store in KEYS_DIR and registry.
+    Returns (key_id, pub_key_content, error).
+    """
+    import uuid, json
+    from datetime import datetime
+    key_id  = uuid.uuid4().hex[:12]
+    priv    = os.path.join(KEYS_DIR, f'{key_id}_ed25519')
+    pub     = priv + '.pub'
+    try:
+        import socket
+        comment = f'djmanager-{key_id}@{socket.getfqdn()}'
+        os.makedirs(KEYS_DIR, mode=0o700, exist_ok=True)
+        subprocess.run(
+            ['ssh-keygen', '-t', 'ed25519', '-C', comment, '-f', priv, '-N', ''],
+            check=True, capture_output=True,
+        )
+        os.chmod(priv, 0o600)
+        os.chmod(pub,  0o644)
+    except Exception as e:
+        return None, None, f'Key konnte nicht erstellt werden: {e}'
+    # Get fingerprint
+    try:
+        fp_result = subprocess.run(
+            ['ssh-keygen', '-lf', pub], capture_output=True, text=True
+        )
+        fingerprint = fp_result.stdout.split()[1] if fp_result.returncode == 0 else ''
+    except Exception:
+        fingerprint = ''
+    with open(pub) as f:
+        pub_content = f.read().strip()
+    # Add to registry
+    registry = _load_key_registry()
+    registry[key_id] = {
+        'id':          key_id,
+        'label':       label or key_id,
+        'created_at':  datetime.now().isoformat(timespec='seconds'),
+        'fingerprint': fingerprint,
+    }
+    _save_key_registry(registry)
+    return key_id, pub_content, None
+
+
+def list_deploy_keys():
+    """
+    Return list of key dicts, each with an extra 'projects' list of project
+    names that currently use this key (via DEPLOY_KEY_ID in their .conf).
+    """
+    registry = _load_key_registry()
+    # Build project → key_id map
+    proj_key = {}
+    for p in get_all_projects():
+        kid = p.get('DEPLOY_KEY_ID', '').strip()
+        if kid:
+            proj_key.setdefault(kid, []).append(p['PROJECTNAME'])
+    keys = []
+    for key_id, meta in registry.items():
+        pub = os.path.join(KEYS_DIR, f'{key_id}_ed25519.pub')
+        keys.append({
+            **meta,
+            'projects':  proj_key.get(key_id, []),
+            'pub_exists': os.path.exists(pub),
+        })
+    keys.sort(key=lambda k: k.get('created_at', ''))
+    return keys
+
+
+def get_deploy_key_pubkey(key_id):
+    """Return (pub_key_content, error)."""
+    pub = os.path.join(KEYS_DIR, f'{key_id}_ed25519.pub')
+    if not os.path.exists(pub):
+        return None, f'Public Key nicht gefunden (ID: {key_id})'
+    try:
+        with open(pub) as f:
+            return f.read().strip(), None
+    except OSError as e:
+        return None, str(e)
+
+
+def delete_deploy_key(key_id):
+    """
+    Delete key files and remove from registry.
+    Returns (ok, error). Refuses if any project still uses this key.
+    """
+    # Check assignments
+    for p in get_all_projects():
+        if p.get('DEPLOY_KEY_ID', '').strip() == key_id:
+            return False, f'Key wird noch von Projekt "{p["PROJECTNAME"]}" verwendet.'
+    registry = _load_key_registry()
+    if key_id not in registry:
+        return False, 'Key nicht in Registry gefunden.'
+    for suffix in ('_ed25519', '_ed25519.pub'):
+        path = os.path.join(KEYS_DIR, key_id + suffix)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            return False, str(e)
+    del registry[key_id]
+    _save_key_registry(registry)
+    return True, None
+
+
+def set_project_conf_value(project, key, value):
+    """Write or update a single KEY=value line in the project's .conf file."""
+    from django.conf import settings as djsettings
+    conf_path = os.path.join(
+        getattr(djsettings, 'REGISTRY_DIR', '/etc/django-servers.d'),
+        f'{project}.conf',
+    )
+    if not os.path.exists(conf_path):
+        return False, f'Conf nicht gefunden: {conf_path}'
+    try:
+        with open(conf_path) as f:
+            lines = f.readlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.startswith(f'{key}=') or line.startswith(f'{key} ='):
+                new_lines.append(f'{key}="{value}"\n')
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f'{key}="{value}"\n')
+        with open(conf_path, 'w') as f:
+            f.writelines(new_lines)
+        return True, None
+    except OSError as e:
+        return False, str(e)
+
+
+def assign_project_deploy_key(project, key_id):
+    """
+    Assign deploy key key_id to project:
+    - writes DEPLOY_KEY_ID to the project's .conf
+    - patches the update script to use the correct key path
+    Returns (ok, error).
     """
     import re as _re
-    key_path = f'/root/.ssh/deploy_{project}_ed25519'
-    pub_path = key_path + '.pub'
-    if not os.path.exists(key_path):
-        try:
-            import socket
-            comment = f'deploy-{project}@{socket.getfqdn()}'
-            os.makedirs('/root/.ssh', mode=0o700, exist_ok=True)
-            subprocess.run(
-                ['ssh-keygen', '-t', 'ed25519', '-C', comment,
-                 '-f', key_path, '-N', ''],
-                check=True, capture_output=True,
-            )
-            os.chmod(key_path, 0o600)
-            os.chmod(pub_path, 0o644)
-        except Exception as e:
-            return None, f'Key konnte nicht erstellt werden: {e}'
-        # Patch the update script so git pull uses this key
-        script = f'/usr/local/bin/{project}_update.sh'
+    registry = _load_key_registry()
+    if key_id and key_id not in registry:
+        return False, f'Key ID "{key_id}" nicht in Registry.'
+    ok, err = set_project_conf_value(project, 'DEPLOY_KEY_ID', key_id)
+    if not ok:
+        return False, err
+    # Patch update script
+    if key_id:
+        key_path = os.path.join(KEYS_DIR, f'{key_id}_ed25519')
+        script   = f'/usr/local/bin/{project}_update.sh'
         if os.path.exists(script):
             try:
                 with open(script) as f:
@@ -375,14 +524,30 @@ def get_project_deploy_key(project):
                     with open(script, 'w') as f:
                         f.write(new_content)
             except OSError:
-                pass  # non-fatal
-    if not os.path.exists(pub_path):
-        return None, f'Public Key nicht gefunden: {pub_path}'
-    try:
-        with open(pub_path) as f:
-            return f.read().strip(), None
-    except OSError as e:
-        return None, str(e)
+                pass
+    return True, None
+
+
+def get_project_deploy_key(project):
+    """
+    Return (pub_key_content, error) for the project's currently assigned key.
+    Falls back to legacy /root/.ssh/deploy_{project}_ed25519 if no registry key.
+    """
+    conf = get_project(project)
+    if not conf:
+        return None, 'Projekt nicht gefunden'
+    key_id = conf.get('DEPLOY_KEY_ID', '').strip()
+    if key_id:
+        return get_deploy_key_pubkey(key_id)
+    # Legacy fallback
+    legacy = f'/root/.ssh/deploy_{project}_ed25519.pub'
+    if os.path.exists(legacy):
+        try:
+            with open(legacy) as f:
+                return f.read().strip(), None
+        except OSError as e:
+            return None, str(e)
+    return None, 'Kein Deploy Key zugewiesen.'
 
 
 def get_global_deploy_key():
