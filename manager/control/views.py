@@ -29,6 +29,7 @@ from .utils import (
     extract_project_zip, update_project_from_zip,
     run_pip_audit, run_django_deploy_check,
     run_manager_pip_audit, run_manager_deploy_check,
+    sync_env_to_conf,
     get_ufw_port_rules, ufw_toggle_port,
 )
 
@@ -802,6 +803,7 @@ def project_env_view(request, name):
             with open(env_path, 'w') as f:
                 f.write(new_content)
             os.chmod(env_path, 0o600)
+            sync_env_to_conf(name, new_content)
             ok, out = service_action(name, 'restart')
             if ok:
                 success_msg = f'Gespeichert und {name} neu gestartet.'
