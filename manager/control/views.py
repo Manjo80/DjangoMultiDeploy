@@ -24,6 +24,7 @@ from .utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
     list_backups, run_update, run_backup, delete_backup, get_ssh_key, start_install,
+    run_management_command,
     get_global_deploy_key, get_project_deploy_key,
     create_deploy_key, list_deploy_keys, get_deploy_key_pubkey,
     delete_deploy_key, assign_project_deploy_key, KEYS_DIR,
@@ -1400,6 +1401,15 @@ def project_action(request, name):
         else:
             error = f'Backup fehlgeschlagen:\n{output}'
         AuditLog.log(request, f'Backup: {name}', project=name, success=ok)
+
+    elif action == 'manage_command':
+        raw_cmd = request.POST.get('manage_cmd', '').strip()
+        ok, output = run_management_command(name, raw_cmd)
+        if ok:
+            message = f'manage.py {raw_cmd}\n\n{output}'
+        else:
+            error = f'Fehler:\n{output}'
+        AuditLog.log(request, f'manage.py {raw_cmd}: {name}', project=name, success=ok)
 
     conf          = get_project(name)
     backups       = list_backups(name)

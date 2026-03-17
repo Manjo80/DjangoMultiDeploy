@@ -181,6 +181,39 @@
       </div>
     </div>
 
+    <!-- Django Management Commands -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-terminal me-1"></i>Django Management Command</div>
+      <div class="card-body">
+        <form method="post" action="{% url 'project_action' name %}" id="manage-cmd-form">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="manage_command">
+          <div class="input-group">
+            <span class="input-group-text text-muted" style="font-size:.82rem;background:#161b22;border-color:#30363d">
+              python manage.py
+            </span>
+            <input type="text" name="manage_cmd" id="manage-cmd-input"
+                   class="form-control font-monospace"
+                   placeholder="load_glossary  oder  migrate --run-syncdb"
+                   autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                   list="manage-cmd-history"
+                   required>
+            <datalist id="manage-cmd-history"></datalist>
+            <button class="btn btn-outline-primary" type="submit" id="manage-cmd-btn">
+              <i class="bi bi-play-fill me-1"></i> Ausführen
+            </button>
+          </div>
+          <div class="form-text">
+            Akzeptiert z.B. <code>load_glossary</code>, <code>migrate --run-syncdb</code>
+            oder <code>python manage.py load_glossary</code> — wird automatisch mit
+            <code>{{ conf.APPUSER }}</code> in der .venv ausgeführt.
+          </div>
+        </form>
+        <pre id="manage-cmd-output" class="d-none small log-output mt-2"
+             style="max-height:300px;overflow-y:auto;font-size:.78rem;white-space:pre-wrap"></pre>
+      </div>
+    </div>
+
     <div class="card mb-3">
       <div class="card-header">Update & Backup</div>
       <div class="card-body">
@@ -398,6 +431,60 @@
 {% endblock %}
 
 {% block extra_js %}
+<script>
+// ── Management Command (AJAX) ──────────────────────────────────────────────
+(function () {
+  const form    = document.getElementById('manage-cmd-form');
+  const input   = document.getElementById('manage-cmd-input');
+  const btn     = document.getElementById('manage-cmd-btn');
+  const output  = document.getElementById('manage-cmd-output');
+  const history = JSON.parse(localStorage.getItem('manage_cmd_history_{{ name }}') || '[]');
+
+  // Populate datalist with past commands
+  const dl = document.getElementById('manage-cmd-history');
+  history.forEach(c => { const o = document.createElement('option'); o.value = c; dl.appendChild(o); });
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const cmd = input.value.trim();
+    if (!cmd) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Läuft…';
+    output.className = 'small log-output mt-2';
+    output.textContent = '⏳ Ausführen…';
+
+    const fd = new FormData(form);
+    try {
+      const resp = await fetch(form.action, { method: 'POST', body: fd });
+      const text = await resp.text();
+      // Parse Django-rendered response to extract message/error
+      const parser = new DOMParser();
+      const doc    = parser.parseFromString(text, 'text/html');
+      const msgEl  = doc.querySelector('.alert-success pre, .alert-success');
+      const errEl  = doc.querySelector('.alert-danger pre, .alert-danger');
+      if (msgEl) {
+        output.style.borderColor = '#238636';
+        output.textContent = msgEl.textContent.trim();
+      } else if (errEl) {
+        output.style.borderColor = '#da3633';
+        output.textContent = errEl.textContent.trim();
+      } else {
+        output.textContent = '(Keine Ausgabe)';
+      }
+    } catch (err) {
+      output.textContent = 'Fehler: ' + err;
+    }
+
+    // Save to history (deduplicated, max 20)
+    const updated = [cmd, ...history.filter(c => c !== cmd)].slice(0, 20);
+    localStorage.setItem('manage_cmd_history_{{ name }}', JSON.stringify(updated));
+
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-play-fill me-1"></i> Ausführen';
+  });
+})();
+</script>
+
 {% if request.user.is_staff %}
 <script>
 // ── Backup delete ──────────────────────────────────────────────────────────

@@ -129,6 +129,61 @@ def list_backups(project):
     return result
 
 
+def run_management_command(name, raw_cmd):
+    """
+    Run a Django management command for the given project as the app user
+    inside the project's .venv. Returns (ok, output).
+
+    raw_cmd examples accepted:
+      'load_glossary'
+      'load_glossary --file=data.json'
+      'python manage.py load_glossary'
+      'manage.py migrate --run-syncdb'
+    """
+    import shlex, re as _re
+    conf    = get_project(name)
+    if not conf:
+        return False, 'Projekt nicht gefunden'
+    appdir  = conf.get('APPDIR', f'/srv/{name}')
+    appuser = conf.get('APPUSER', '')
+    if not appuser:
+        return False, 'APPUSER nicht konfiguriert'
+
+    venv_python = os.path.join(appdir, '.venv', 'bin', 'python')
+    manage_py   = os.path.join(appdir, 'manage.py')
+    if not os.path.exists(venv_python):
+        return False, f'venv nicht gefunden: {venv_python}'
+    if not os.path.exists(manage_py):
+        return False, f'manage.py nicht gefunden: {manage_py}'
+
+    # Normalize input → extract just the subcommand + args
+    # Strip leading 'python manage.py', 'manage.py', './manage.py'
+    cmd_clean = raw_cmd.strip()
+    cmd_clean = _re.sub(r'^(python\s+)?(\./)?manage\.py\s*', '', cmd_clean).strip()
+    if not cmd_clean:
+        return False, 'Kein Kommando angegeben'
+
+    # Security: block shell metacharacters
+    if _re.search(r'[;&|`$<>]', cmd_clean):
+        return False, 'Ungültige Zeichen im Kommando (keine Shell-Sonderzeichen erlaubt)'
+
+    full_cmd = (
+        f'cd {shlex.quote(appdir)} && '
+        f'{shlex.quote(venv_python)} manage.py {cmd_clean}'
+    )
+    try:
+        result = subprocess.run(
+            ['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd],
+            capture_output=True, text=True, timeout=300,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return result.returncode == 0, output or '(keine Ausgabe)'
+    except subprocess.TimeoutExpired:
+        return False, 'Timeout nach 300 Sekunden'
+    except Exception as e:
+        return False, str(e)
+
+
 def run_update(name):
     """Run the project update script. Returns (ok, output)."""
     script = f'/usr/local/bin/{name}_update.sh'
