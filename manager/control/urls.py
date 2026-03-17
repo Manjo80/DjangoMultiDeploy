@@ -14,13 +14,20 @@ urlpatterns = [
     path('install/ssh-key/<str:project>/confirm/', views.ssh_key_confirm, name='ssh_key_confirm'),
     path('install/ssh-key/<str:project>/download/', views.ssh_key_download, name='ssh_key_download'),
 
-    # Global GitHub deploy key
+    # Global GitHub deploy key (legacy)
     path('deploy-key/', views.global_deploy_key, name='global_deploy_key'),
     path('deploy-key/download/', views.global_deploy_key_download, name='global_deploy_key_download'),
 
-    # Per-project GitHub deploy key
+    # Deploy Key Registry
+    path('deploy-keys/', views.deploy_keys_list, name='deploy_keys_list'),
+    path('deploy-keys/create/', views.deploy_key_create, name='deploy_key_create'),
+    path('deploy-keys/<str:key_id>/', views.deploy_key_detail, name='deploy_key_detail'),
+    path('deploy-keys/<str:key_id>/delete/', views.deploy_key_delete, name='deploy_key_delete'),
+
+    # Per-project GitHub deploy key + assign
     path('project/<str:project>/deploy-key/', views.project_deploy_key, name='project_deploy_key'),
     path('project/<str:project>/deploy-key/download/', views.project_deploy_key_download, name='project_deploy_key_download'),
+    path('project/<str:project>/deploy-key/assign/', views.project_assign_key, name='project_assign_key'),
 
     # Project management
     path('project/<str:name>/', views.project_detail, name='project_detail'),

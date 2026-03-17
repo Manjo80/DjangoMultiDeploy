@@ -3,27 +3,31 @@
 
 {% block content %}
 <div class="row justify-content-center">
-<div class="col-lg-8">
+<div class="col-lg-9">
 
-<div class="card">
-  <div class="card-header d-flex justify-content-between">
+<!-- Current key card -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
     <h5 class="mb-0"><i class="bi bi-key-fill me-2"></i>GitHub Deploy-Key — {{ project }}</h5>
     <a href="{% url 'project_detail' project %}" class="btn btn-sm btn-outline-secondary">← Zurück</a>
   </div>
   <div class="card-body">
 
-    <div class="alert alert-info" style="background:#1f3a5f;border-color:#1f6feb;color:#e6edf3;">
-      <i class="bi bi-info-circle me-1"></i>
-      Dieser <strong>öffentliche Schlüssel</strong> gilt <em>nur</em> für das Projekt
-      <strong>{{ project }}</strong>. Trage ihn als Deploy Key direkt im GitHub-Repo ein
-      (Read-only reicht für git pull).
-    </div>
-
     {% if error %}
-    <div class="alert alert-danger">{{ error }}</div>
+    <div class="alert alert-warning">
+      <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
+    </div>
     {% endif %}
 
     {% if pub_key %}
+    <div class="alert alert-info py-2 small">
+      <i class="bi bi-info-circle me-1"></i>
+      Dieser <strong>öffentliche Schlüssel</strong> muss einmalig als
+      <a href="{{ github_keys_url }}" target="_blank" rel="noopener">Deploy Key im GitHub-Repo</a>
+      eingetragen werden.
+      {% if current_key_id %}<br>Key-ID: <code>{{ current_key_id }}</code>{% endif %}
+    </div>
+
     <h6 class="text-muted mb-2">Öffentlicher Schlüssel:</h6>
     <pre class="log-output" id="pub-key-box" style="font-size:0.75rem; word-break:break-all; white-space:pre-wrap; max-height:120px;">{{ pub_key }}</pre>
 
@@ -36,35 +40,62 @@
       </a>
       {% if github_keys_url %}
       <a href="{{ github_keys_url }}" target="_blank" rel="noopener" class="btn btn-outline-primary">
-        <i class="bi bi-github me-1"></i> Direkt zu GitHub Deploy Keys ↗
+        <i class="bi bi-github me-1"></i> GitHub Deploy Keys ↗
       </a>
       {% endif %}
     </div>
-
-    <hr class="my-4">
-    <h6 class="text-muted">So fügst du den Key zu GitHub hinzu:</h6>
-    <ol class="small" style="line-height:2">
-      <li>Key oben kopieren (Schaltfläche "Kopieren")</li>
-      <li>
-        {% if github_keys_url %}
-          <a href="{{ github_keys_url }}" target="_blank" rel="noopener">GitHub → {{ project }} → Settings → Deploy keys → Add deploy key</a>
-        {% else %}
-          GitHub → Repo → <em>Settings</em> → <em>Deploy keys</em> → <em>Add deploy key</em>
-        {% endif %}
-      </li>
-      <li>Titel z.B. <code>deploy-{{ project }}</code>, Key einfügen</li>
-      <li><strong>Allow write access</strong> <em>nicht</em> aktivieren (Read-only genügt)</li>
-      <li>Speichern — fertig</li>
-    </ol>
-
-    <div class="alert alert-secondary mt-3 small">
-      <i class="bi bi-terminal me-1"></i>
-      Key-Pfad auf dem Server: <code>/root/.ssh/deploy_{{ project }}_ed25519</code><br>
-      Das Update-Script (<code>/usr/local/bin/{{ project }}_update.sh</code>) wurde automatisch
-      auf diesen Key umgestellt.
+    {% else %}
+    <div class="alert alert-secondary">
+      Diesem Projekt ist noch kein Deploy Key zugewiesen.
+      Wähle unten einen Key aus oder erstelle einen neuen.
     </div>
     {% endif %}
 
+  </div>
+</div>
+
+<!-- Assign / change key -->
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h6 class="mb-0">Key zuweisen / wechseln</h6>
+    <a href="{% url 'deploy_keys_list' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-list-ul me-1"></i> Alle Keys verwalten
+    </a>
+  </div>
+  <div class="card-body">
+    <form method="post" action="{% url 'project_assign_key' project %}">
+      {% csrf_token %}
+      <div class="mb-3">
+        <label class="form-label">Verfügbare Keys</label>
+        <select name="key_id" class="form-select">
+          <option value="">— kein Key (deaktivieren) —</option>
+          {% for key in all_keys %}
+          <option value="{{ key.id }}"
+            {% if key.id == current_key_id %}selected{% endif %}>
+            {{ key.label }}
+            {% if key.projects %}
+              (derzeit: {% for p in key.projects %}{{ p }}{% if not forloop.last %}, {% endif %}{% endfor %})
+            {% endif %}
+          </option>
+          {% empty %}
+          <option disabled>Noch keine Keys vorhanden</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">
+        <i class="bi bi-check-lg me-1"></i> Key zuweisen &amp; Update-Script aktualisieren
+      </button>
+    </form>
+
+    <hr>
+    <form method="post" action="{% url 'deploy_key_create' %}">
+      {% csrf_token %}
+      <input type="hidden" name="label" value="{{ project }} deploy key">
+      <input type="hidden" name="project" value="{{ project }}">
+      <button type="submit" class="btn btn-outline-success">
+        <i class="bi bi-plus-lg me-1"></i> Neuen Key erstellen &amp; sofort zuweisen
+      </button>
+    </form>
   </div>
 </div>
 

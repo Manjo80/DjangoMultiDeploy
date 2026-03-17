@@ -731,7 +731,7 @@ APPUSER_PASS="${APPUSER_PASS:-}"
 DJKEY="${DJKEY}"
 SSH_KEY_PASSPHRASE="${SSH_KEY_PASSPHRASE:-}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-}"
-GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/deploy_${PROJECTNAME}_ed25519}"
+GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_keys/${PROJECTNAME}_ed25519}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS}"
 DJANGO_ADMIN_USER="${DJANGO_ADMIN_USER:-admin}"
 DJANGO_ADMIN_EMAIL="${DJANGO_ADMIN_EMAIL:-admin@localhost}"
@@ -1084,17 +1084,18 @@ fi  # end appuser_created
 # -------------------------------------------------------------------
 # Pro-Projekt GitHub Deploy-Key
 # -------------------------------------------------------------------
-GITHUB_DEPLOY_KEY="/root/.ssh/deploy_${PROJECTNAME}_ed25519"
+GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_keys/${PROJECTNAME}_ed25519}"
 GITHUB_SSH_OPTS="-o ConnectTimeout=30"
 
 if [[ "$USE_GITHUB" == "true" ]]; then
   echo "📦 GitHub Repository erkannt: $GITHUB_REPO_URL"
 
-  # Pro-Projekt Deploy-Key anlegen
+  # Pro-Projekt Deploy-Key – wird normalerweise vom Manager vorab erstellt
+  # (GITHUB_DEPLOY_KEY und DEPLOY_KEY_ID kommen als Env-Var)
   if [ ! -f "$GITHUB_DEPLOY_KEY" ]; then
     echo "🔑 Erstelle GitHub Deploy-Key für Projekt '${PROJECTNAME}'..."
-    mkdir -p /root/.ssh
-    chmod 700 /root/.ssh
+    mkdir -p /root/.ssh/djmanager_keys
+    chmod 700 /root/.ssh/djmanager_keys
     ssh-keygen -t ed25519 -C "deploy-${PROJECTNAME}@$(hostname -f 2>/dev/null || echo 'server')" \
       -f "$GITHUB_DEPLOY_KEY" -N "" -q
     chmod 600 "$GITHUB_DEPLOY_KEY"
@@ -1185,7 +1186,7 @@ SSHCONFIGEOF
     echo "##WAIT_GITHUB_CONFIRM##"
   done
 else
-  GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/deploy_${PROJECTNAME}_ed25519}"
+  GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY:-/root/.ssh/djmanager_keys/${PROJECTNAME}_ed25519}"
   echo "⏭️  GitHub nicht genutzt — überspringe GitHub-Setup"
 fi
 
@@ -1955,6 +1956,7 @@ LOCAL_IP="${LOCAL_IP}"
 HOSTNAME_FQDN="${HOSTNAME_FQDN}"
 PRIMARY_HOST="${LOCAL_IP}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"
+DEPLOY_KEY_ID="${DEPLOY_KEY_ID:-}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS}"
 LANGUAGE_CODE="${LANGUAGE_CODE}"
 TIME_ZONE="${TIME_ZONE}"
