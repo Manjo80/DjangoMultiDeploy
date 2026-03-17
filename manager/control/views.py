@@ -1405,11 +1405,8 @@ def project_action(request, name):
     elif action == 'manage_command':
         raw_cmd = request.POST.get('manage_cmd', '').strip()
         ok, output = run_management_command(name, raw_cmd)
-        if ok:
-            message = f'manage.py {raw_cmd}\n\n{output}'
-        else:
-            error = f'Fehler:\n{output}'
         AuditLog.log(request, f'manage.py {raw_cmd}: {name}', project=name, success=ok)
+        return JsonResponse({'ok': ok, 'output': output})
 
     conf          = get_project(name)
     backups       = list_backups(name)

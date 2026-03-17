@@ -456,21 +456,9 @@
     const fd = new FormData(form);
     try {
       const resp = await fetch(form.action, { method: 'POST', body: fd });
-      const text = await resp.text();
-      // Parse Django-rendered response to extract message/error
-      const parser = new DOMParser();
-      const doc    = parser.parseFromString(text, 'text/html');
-      const msgEl  = doc.querySelector('.alert-success pre, .alert-success');
-      const errEl  = doc.querySelector('.alert-danger pre, .alert-danger');
-      if (msgEl) {
-        output.style.borderColor = '#238636';
-        output.textContent = msgEl.textContent.trim();
-      } else if (errEl) {
-        output.style.borderColor = '#da3633';
-        output.textContent = errEl.textContent.trim();
-      } else {
-        output.textContent = '(Keine Ausgabe)';
-      }
+      const data = await resp.json();
+      output.style.borderColor = data.ok ? '#238636' : '#da3633';
+      output.textContent = data.output || '(keine Ausgabe)';
     } catch (err) {
       output.textContent = 'Fehler: ' + err;
     }
