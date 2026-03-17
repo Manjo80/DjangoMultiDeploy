@@ -323,7 +323,8 @@ def remove_project(name, opts):
     appuser = conf.get('APPUSER', '')
     dbtype  = conf.get('DBTYPE', '')
     dbname  = conf.get('DBNAME', '')
-    nginx_port = conf.get('NGINX_PORT', '')
+    nginx_port    = conf.get('NGINX_PORT', '')
+    gunicorn_port = conf.get('GUNICORN_PORT', '')
     log = []
     ok  = True
 
@@ -359,6 +360,8 @@ def remove_project(name, opts):
     # ── UFW ───────────────────────────────────────────────────────────────────
     if nginx_port:
         _run('ufw', 'delete', 'allow', f'{nginx_port}/tcp')
+    if gunicorn_port:
+        _run('ufw', 'delete', 'allow', f'{gunicorn_port}/tcp')
 
     # ── Config files ──────────────────────────────────────────────────────────
     for p in [
