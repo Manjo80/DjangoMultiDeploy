@@ -981,8 +981,7 @@ def run_django_deploy_check(project):
                         env[k.strip()] = v.strip().strip('"\'')  # overwrite, not setdefault
 
         result = subprocess.run(
-            [venv_python, manage_py, 'check', '--deploy',
-             '--silenced-checks', 'security.W008'],  # W008=SECURE_SSL_REDIRECT: always handled by nginx
+            [venv_python, manage_py, 'check', '--deploy'],
             capture_output=True, text=True, timeout=30,
             cwd=f'/srv/{project}', env=env,
         )
@@ -990,6 +989,21 @@ def run_django_deploy_check(project):
         output = (result.stdout + result.stderr).strip()
         # Prepend detected MODE so it's visible in the output
         output = f'[deploy check] MODE={mode_used}\n\n' + output
+        # Filter silenced checks from output (compatible with all Django versions)
+        # W008=SECURE_SSL_REDIRECT: handled by nginx
+        SILENCED = {'security.W008'}
+        filtered_lines = []
+        skip_block = False
+        for line in output.splitlines():
+            stripped = line.strip()
+            if any(f'({c})' in stripped for c in SILENCED):
+                skip_block = True  # skip this warning line
+                continue
+            if skip_block and stripped and not stripped.startswith('?:') and not stripped.startswith('System check'):
+                continue  # skip continuation lines of silenced warning
+            skip_block = False
+            filtered_lines.append(line)
+        output = '\n'.join(filtered_lines)
         issues = []
         for line in output.splitlines():
             line = line.strip()
