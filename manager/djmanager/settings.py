@@ -113,7 +113,8 @@ SECURE_CONTENT_TYPE_NOSNIFF = os.getenv('SECURE_CONTENT_TYPE_NOSNIFF', 'False') 
 X_FRAME_OPTIONS        = os.getenv('X_FRAME_OPTIONS', 'SAMEORIGIN')
 
 # W008: SSL-Redirect übernimmt nginx — Django soll es nicht zusätzlich tun
-SILENCED_SYSTEM_CHECKS = ['security.W008']
+# W021: HSTS Preload-List-Eintrag ist ein manueller Schritt, nicht automatisch
+SILENCED_SYSTEM_CHECKS = ['security.W008', 'security.W021']
 
 # ── Manager-specific ──────────────────────────────────────────────────────────
 
