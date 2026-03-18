@@ -456,11 +456,22 @@
     const fd = new FormData(form);
     try {
       const resp = await fetch(form.action, { method: 'POST', body: fd });
-      const data = await resp.json();
+      let data;
+      try {
+        data = await resp.json();
+      } catch (_) {
+        // Server returned HTML instead of JSON (500, redirect, etc.)
+        output.style.borderColor = '#da3633';
+        output.textContent = `Server-Fehler (HTTP ${resp.status}) — kein JSON erhalten.\nBitte Manager-Logs prüfen.`;
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-play-fill me-1"></i> Ausführen';
+        return;
+      }
       output.style.borderColor = data.ok ? '#238636' : '#da3633';
       output.textContent = data.output || '(keine Ausgabe)';
     } catch (err) {
-      output.textContent = 'Fehler: ' + err;
+      output.style.borderColor = '#da3633';
+      output.textContent = 'Netzwerkfehler: ' + err;
     }
 
     // Save to history (deduplicated, max 20)
