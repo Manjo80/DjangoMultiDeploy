@@ -455,7 +455,7 @@
 
     const fd = new FormData(form);
     try {
-      const resp = await fetch(form.action, { method: 'POST', body: fd });
+      const resp = await fetch(form.getAttribute('action'), { method: 'POST', body: fd });
       let data;
       try {
         data = await resp.json();
