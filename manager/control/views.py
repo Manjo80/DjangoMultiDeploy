@@ -1536,6 +1536,7 @@ def log_viewer(request, name):
     return render(request, 'control/log_viewer.html', {
         'name': name, 'conf': conf, 'logs': logs,
         'log_type': log_type, 'lines': lines,
+        'is_manager': bool(conf.get('_is_manager')),
     })
 
 
