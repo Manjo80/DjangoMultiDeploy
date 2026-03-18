@@ -163,7 +163,12 @@ LOGGING = {
         },
         'django.request': {
             'handlers': ['file', 'console'],
-            'level': 'ERROR',
+            'level': 'WARNING',    # WARNING statt ERROR → 404/403 werden auch geloggt
+            'propagate': False,
+        },
+        'djmanager.views': {
+            'handlers': ['file', 'console'],
+            'level': 'WARNING',
             'propagate': False,
         },
     },
