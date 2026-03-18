@@ -559,8 +559,8 @@ def user_edit(request, uid):
         raise
 
 
-@admin_required
 @require_POST
+@admin_required
 def user_delete(request, uid):
     target = get_object_or_404(User, pk=uid)
     if target == request.user:
@@ -985,8 +985,8 @@ def install_form(request):
     })
 
 
-@admin_required
 @require_POST
+@admin_required
 def install_run(request):
     data        = request.POST
     source_type = data.get('source_type', 'new').strip()
@@ -1345,8 +1345,8 @@ def project_detail(request, name):
     })
 
 
-@operator_required
 @require_POST
+@operator_required
 def project_allowed_hosts(request, name):
     if not _check_project_access(request.user, name):
         return JsonResponse({'ok': False, 'error': 'Zugriff verweigert'}, status=403)
@@ -1372,8 +1372,8 @@ def project_allowed_hosts(request, name):
     return JsonResponse({'ok': ok, 'message': msg, 'hosts': current})
 
 
-@operator_required
 @require_POST
+@operator_required
 def project_action(request, name):
     if not _check_project_access(request.user, name):
         return render(request, 'control/403.html', status=403)
@@ -1411,6 +1411,7 @@ def project_action(request, name):
         try:
             ok, output = run_management_command(name, raw_cmd)
         except Exception as exc:
+            logger.exception('run_management_command failed: project=%s cmd=%r', name, raw_cmd)
             ok, output = False, f'Interner Fehler: {exc}'
         AuditLog.log(request, f'manage.py {raw_cmd}: {name}', project=name, success=ok)
         return JsonResponse({'ok': ok, 'output': output})
@@ -1434,8 +1435,8 @@ def project_action(request, name):
     })
 
 
-@operator_required
 @require_POST
+@operator_required
 def backup_delete(request, name):
     if not _check_project_access(request.user, name):
         return JsonResponse({'ok': False, 'message': 'Zugriff verweigert'}, status=403)
@@ -1450,8 +1451,8 @@ def backup_delete(request, name):
     ]})
 
 
-@operator_required
 @require_POST
+@operator_required
 def project_upload_zip(request, name):
     if not _check_project_access(request.user, name):
         return JsonResponse({'ok': False, 'output': 'Zugriff verweigert'}, status=403)
@@ -1551,8 +1552,8 @@ def remove_confirm(request, name):
     return render(request, 'control/remove_confirm.html', {'name': name, 'conf': conf})
 
 
-@admin_required
 @require_POST
+@admin_required
 def remove_run(request, name):
     opts = {
         'remove_appdir':  bool(request.POST.get('remove_appdir')),
@@ -1585,8 +1586,8 @@ def remove_done(request):
 # Update (operator+)
 # ──────────────────────────────────────────────────────────────────────────────
 
-@operator_required
 @require_POST
+@operator_required
 def project_update(request, name):
     if not _check_project_access(request.user, name):
         return JsonResponse({'ok': False, 'output': 'Zugriff verweigert'}, status=403)
@@ -1599,8 +1600,8 @@ def project_update(request, name):
 # Manager self-management (action + update)
 # ──────────────────────────────────────────────────────────────────────────────
 
-@operator_required
 @require_POST
+@operator_required
 def manager_action(request):
     """Start / stop / restart the djmanager service itself."""
     action  = request.POST.get('action', '')
@@ -1620,8 +1621,8 @@ def manager_action(request):
     return JsonResponse({'ok': ok, 'message': output or ('OK' if ok else 'Fehler')})
 
 
-@admin_required
 @require_POST
+@admin_required
 def manager_update(request):
     """Run djmanager_update.sh asynchronously (git pull + service restart)."""
     service = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
