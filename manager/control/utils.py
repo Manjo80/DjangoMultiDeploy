@@ -93,17 +93,27 @@ def get_journal_logs(name, lines=100):
 
 def get_nginx_log(name, log_type='access', lines=100):
     """Return last N lines of nginx access or error log for a project."""
-    log_path = f'/var/log/nginx/{name}_{log_type}.log'
-    if not os.path.exists(log_path):
-        return f'Log file not found: {log_path}'
-    try:
-        result = subprocess.run(
-            ['tail', '-n', str(lines), log_path],
-            capture_output=True, text=True, timeout=10
-        )
-        return result.stdout
-    except Exception as e:
-        return f'Error reading log: {e}'
+    # Install script writes: /var/log/nginx/{name}.access.log (dot separator)
+    # Fallback: underscore separator (older installs) and default nginx logs
+    candidates = [
+        f'/var/log/nginx/{name}.{log_type}.log',      # current format
+        f'/var/log/nginx/{name}_{log_type}.log',       # legacy format
+        f'/var/log/nginx/{log_type}.log',              # default nginx log
+    ]
+    for log_path in candidates:
+        if os.path.exists(log_path):
+            try:
+                result = subprocess.run(
+                    ['tail', '-n', str(lines), log_path],
+                    capture_output=True, text=True, timeout=10
+                )
+                return result.stdout or f'(Datei leer: {log_path})'
+            except Exception as e:
+                return f'Fehler beim Lesen von {log_path}: {e}'
+    return (
+        f'Log-Datei nicht gefunden. Gesucht:\n'
+        + '\n'.join(f'  {p}' for p in candidates)
+    )
 
 
 def list_backups(project):
