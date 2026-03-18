@@ -1828,8 +1828,9 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_session_cache   shared:SSL:10m;
 
-    # Per-Projekt Access-Log mit Antwortzeit
+    # Per-Projekt Access- und Error-Log
     access_log /var/log/nginx/${PROJECTNAME}.access.log reqtime;
+    error_log  /var/log/nginx/${PROJECTNAME}.error.log;
 
     # Gzip Komprimierung
     gzip on;
@@ -2858,6 +2859,10 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Manager-Logs (sichtbar im Log-Viewer)
+    access_log /var/log/nginx/djmanager.access.log;
+    error_log  /var/log/nginx/djmanager.error.log;
 
     # Statische Dateien des Managers
     location /static/ {
