@@ -5,6 +5,7 @@ import os
 import json
 import time
 import uuid
+import logging
 import subprocess
 from pathlib import Path
 from functools import wraps
@@ -20,6 +21,8 @@ from django.contrib import messages
 from django.conf import settings
 
 from .models import UserProfile, AuditLog, SecuritySettings, ProjectPermission
+
+logger = logging.getLogger('djmanager.views')
 from .utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
@@ -1375,6 +1378,7 @@ def project_action(request, name):
     if not _check_project_access(request.user, name):
         return render(request, 'control/403.html', status=403)
     action  = request.POST.get('action', '')
+    logger.warning('project_action: name=%r action=%r user=%s', name, action, request.user)
     message = ''
     error   = ''
 
