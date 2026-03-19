@@ -278,6 +278,17 @@
           </button>
           {% endif %}
         </div>
+        {% if p.favorite_commands %}
+        <div class="d-flex gap-1 flex-wrap mt-1 pt-1 border-top border-secondary">
+          {% for fav in p.favorite_commands %}
+          <button class="btn btn-sm btn-outline-secondary"
+                  onclick="runFavCmd('{{ p.PROJECTNAME }}', '{{ fav.command|escapejs }}', '{{ fav.label|escapejs }}', this)"
+                  title="python manage.py {{ fav.command }}">
+            <i class="bi bi-terminal me-1"></i>{{ fav.label }}
+          </button>
+          {% endfor %}
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -357,6 +368,28 @@ async function managerAction(action, btn) {
     } else {
       alert('Verbindungsfehler.');
     }
+  }
+}
+
+async function runFavCmd(project, cmd, label, btn) {
+  btn.disabled = true;
+  const origHtml = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', csrf);
+  fd.append('action', 'manage_command');
+  fd.append('manage_cmd', cmd);
+  try {
+    const r = await fetch(`/project/${project}/action/`, {method: 'POST', body: fd});
+    let data;
+    try { data = await r.json(); } catch(_) { data = {ok: false, output: `HTTP ${r.status}`}; }
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    alert(data.ok ? `✅ ${label}:\n${data.output}` : `❌ ${label} fehlgeschlagen:\n${data.output}`);
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    alert('Verbindungsfehler: ' + e.message);
   }
 }
 

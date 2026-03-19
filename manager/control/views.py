@@ -20,7 +20,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.conf import settings
 
-from .models import UserProfile, AuditLog, SecuritySettings, ProjectPermission
+from .models import UserProfile, AuditLog, SecuritySettings, ProjectPermission, FavoriteCommand
 
 logger = logging.getLogger('djmanager.views')
 from .utils import (
@@ -39,6 +39,7 @@ from .utils import (
     run_manager_pip_audit, run_manager_deploy_check,
     sync_env_to_conf,
     get_ufw_port_rules, ufw_toggle_port,
+    run_migration_status, run_pip_outdated,
 )
 
 
@@ -941,6 +942,14 @@ def dashboard(request):
         allowed_hosts = [h for h in settings.ALLOWED_HOSTS if h != '*']
         manager_info  = _get_manager_info() if role in (
             UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR) else None
+        # Attach favorite commands to each project dict
+        project_names = [p.get('PROJECTNAME') for p in all_projects if p.get('PROJECTNAME')]
+        fav_qs = FavoriteCommand.objects.filter(project_name__in=project_names)
+        fav_by_project = {}
+        for fav in fav_qs:
+            fav_by_project.setdefault(fav.project_name, []).append(fav)
+        for p in all_projects:
+            p['favorite_commands'] = fav_by_project.get(p.get('PROJECTNAME', ''), [])
         return render(request, 'control/dashboard.html', {
             'projects':      all_projects,
             'ufw':           ufw,
@@ -1329,19 +1338,21 @@ def project_detail(request, name):
     conf = get_project(name)
     if not conf:
         raise Http404(f'Projekt "{name}" nicht gefunden.')
-    backups       = list_backups(name)
-    allowed_hosts = get_allowed_hosts(name)
-    nginx_names   = get_nginx_server_names(name)
-    ufw           = get_ufw_status(conf.get('GUNICORN_PORT'))
-    role          = _get_role(request.user)
+    backups           = list_backups(name)
+    allowed_hosts     = get_allowed_hosts(name)
+    nginx_names       = get_nginx_server_names(name)
+    ufw               = get_ufw_status(conf.get('GUNICORN_PORT'))
+    role              = _get_role(request.user)
+    favorite_commands = list(FavoriteCommand.objects.filter(project_name=name))
     return render(request, 'control/project_detail.html', {
-        'conf':          conf,
-        'name':          name,
-        'backups':       backups,
-        'allowed_hosts': allowed_hosts,
-        'nginx_names':   nginx_names,
-        'ufw':           ufw,
-        'role':          role,
+        'conf':              conf,
+        'name':              name,
+        'backups':           backups,
+        'allowed_hosts':     allowed_hosts,
+        'nginx_names':       nginx_names,
+        'ufw':               ufw,
+        'role':              role,
+        'favorite_commands': favorite_commands,
     })
 
 
@@ -1416,22 +1427,24 @@ def project_action(request, name):
         AuditLog.log(request, f'manage.py {raw_cmd}: {name}', project=name, success=ok)
         return JsonResponse({'ok': ok, 'output': output})
 
-    conf          = get_project(name)
-    backups       = list_backups(name)
-    allowed_hosts = get_allowed_hosts(name)
-    nginx_names   = get_nginx_server_names(name)
-    ufw           = get_ufw_status(conf.get('GUNICORN_PORT') if conf else None)
-    role          = _get_role(request.user)
+    conf              = get_project(name)
+    backups           = list_backups(name)
+    allowed_hosts     = get_allowed_hosts(name)
+    nginx_names       = get_nginx_server_names(name)
+    ufw               = get_ufw_status(conf.get('GUNICORN_PORT') if conf else None)
+    role              = _get_role(request.user)
+    favorite_commands = list(FavoriteCommand.objects.filter(project_name=name))
     return render(request, 'control/project_detail.html', {
-        'conf':          conf,
-        'name':          name,
-        'backups':       backups,
-        'allowed_hosts': allowed_hosts,
-        'nginx_names':   nginx_names,
-        'ufw':           ufw,
-        'message':       message,
-        'error':         error,
-        'role':          role,
+        'conf':              conf,
+        'name':              name,
+        'backups':           backups,
+        'allowed_hosts':     allowed_hosts,
+        'nginx_names':       nginx_names,
+        'ufw':               ufw,
+        'message':           message,
+        'error':             error,
+        'role':              role,
+        'favorite_commands': favorite_commands,
     })
 
 
@@ -1595,6 +1608,86 @@ def project_update(request, name):
     ok, output = run_update(name)
     AuditLog.log(request, f'Git-Update: {name}', project=name, success=ok)
     return JsonResponse({'ok': ok, 'output': output})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Favorite Commands — per-project quick-access management command buttons
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def project_favorite_commands(request, name):
+    """GET: list as JSON. POST add/delete favorite commands."""
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'ok': False, 'error': 'Zugriff verweigert'}, status=403)
+
+    if request.method == 'GET':
+        cmds = list(FavoriteCommand.objects.filter(project_name=name).values(
+            'id', 'label', 'command', 'order'))
+        return JsonResponse({'ok': True, 'commands': cmds})
+
+    # POST: add or delete
+    role = _get_role(request.user)
+    if role not in (UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR):
+        return JsonResponse({'ok': False, 'error': 'Nur Admins/Operators erlaubt'}, status=403)
+
+    action = request.POST.get('action', '')
+
+    if action == 'add':
+        import re as _re
+        label   = request.POST.get('label', '').strip()[:80]
+        command = request.POST.get('command', '').strip()[:500]
+        # Strip leading 'python manage.py' / 'manage.py'
+        command = _re.sub(r'^(python\s+)?(\./)?manage\.py\s*', '', command).strip()
+        if not label or not command:
+            return JsonResponse({'ok': False, 'error': 'Label und Befehl erforderlich'})
+        if _re.search(r'[;&|`$<>]', command):
+            return JsonResponse({'ok': False, 'error': 'Ungültige Zeichen im Befehl'})
+        obj, created = FavoriteCommand.objects.get_or_create(
+            project_name=name, command=command,
+            defaults={'label': label},
+        )
+        if not created:
+            return JsonResponse({'ok': False, 'error': f'Befehl "{command}" bereits vorhanden'})
+        AuditLog.log(request, f'Favorit hinzugefügt: {command}', project=name)
+        cmds = list(FavoriteCommand.objects.filter(project_name=name).values(
+            'id', 'label', 'command', 'order'))
+        return JsonResponse({'ok': True, 'commands': cmds})
+
+    elif action == 'delete':
+        pk = request.POST.get('pk', '')
+        deleted, _ = FavoriteCommand.objects.filter(project_name=name, pk=pk).delete()
+        if not deleted:
+            return JsonResponse({'ok': False, 'error': 'Eintrag nicht gefunden'})
+        AuditLog.log(request, f'Favorit entfernt (pk={pk})', project=name)
+        cmds = list(FavoriteCommand.objects.filter(project_name=name).values(
+            'id', 'label', 'command', 'order'))
+        return JsonResponse({'ok': True, 'commands': cmds})
+
+    return JsonResponse({'ok': False, 'error': 'Unbekannte Aktion'})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Migration Status
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def project_migrations(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    result = run_migration_status(name)
+    return JsonResponse(result)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Outdated Packages
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def project_pip_outdated(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    result = run_pip_outdated(name)
+    return JsonResponse(result)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

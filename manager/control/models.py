@@ -170,6 +170,30 @@ class SecuritySettings(models.Model):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# FavoriteCommand — per-project quick-access management commands
+# ──────────────────────────────────────────────────────────────────────────────
+
+class FavoriteCommand(models.Model):
+    """
+    A management command shortcut for a specific project.
+    Shown as a quick-action button next to Start/Stop/Restart.
+    """
+    project_name = models.CharField(max_length=100)
+    label        = models.CharField(max_length=80,
+                                    help_text='Button-Beschriftung, z.B. "Migrate"')
+    command      = models.CharField(max_length=500,
+                                    help_text='manage.py Unterbefehl, z.B. "migrate" oder "load_glossary"')
+    order        = models.IntegerField(default=0, help_text='Sortierung (aufsteigend)')
+
+    class Meta:
+        ordering        = ['project_name', 'order', 'label']
+        unique_together = ('project_name', 'command')
+
+    def __str__(self):
+        return f'{self.project_name}: {self.label} ({self.command})'
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ProjectPermission — per-project access for Operator/Viewer users
 # ──────────────────────────────────────────────────────────────────────────────
 

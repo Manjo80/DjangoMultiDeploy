@@ -126,21 +126,74 @@
   <!-- Actions -->
   <div class="col-md-6">
     <div class="card mb-3">
-      <div class="card-header">Service-Steuerung</div>
-      <div class="card-body d-flex gap-2 flex-wrap">
-        <form method="post" action="{% url 'project_action' name %}">
-          {% csrf_token %}<input type="hidden" name="action" value="start">
-          <button class="btn btn-success"><i class="bi bi-play-fill me-1"></i> Starten</button>
-        </form>
-        <form method="post" action="{% url 'project_action' name %}">
-          {% csrf_token %}<input type="hidden" name="action" value="stop">
-          <button class="btn btn-warning"><i class="bi bi-stop-fill me-1"></i> Stoppen</button>
-        </form>
-        <form method="post" action="{% url 'project_action' name %}">
-          {% csrf_token %}<input type="hidden" name="action" value="restart">
-          <button class="btn btn-info"><i class="bi bi-arrow-clockwise me-1"></i> Neustart</button>
-        </form>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Service-Steuerung</span>
       </div>
+      <div class="card-body">
+        <div class="d-flex gap-2 flex-wrap mb-2">
+          <form method="post" action="{% url 'project_action' name %}">
+            {% csrf_token %}<input type="hidden" name="action" value="start">
+            <button class="btn btn-success"><i class="bi bi-play-fill me-1"></i> Starten</button>
+          </form>
+          <form method="post" action="{% url 'project_action' name %}">
+            {% csrf_token %}<input type="hidden" name="action" value="stop">
+            <button class="btn btn-warning"><i class="bi bi-stop-fill me-1"></i> Stoppen</button>
+          </form>
+          <form method="post" action="{% url 'project_action' name %}">
+            {% csrf_token %}<input type="hidden" name="action" value="restart">
+            <button class="btn btn-info"><i class="bi bi-arrow-clockwise me-1"></i> Neustart</button>
+          </form>
+        </div>
+        {% if favorite_commands %}
+        <div class="border-top pt-2 mt-1">
+          <small class="text-muted d-block mb-1"><i class="bi bi-star-fill me-1 text-warning"></i>Favoriten</small>
+          <div class="d-flex gap-2 flex-wrap" id="fav-cmd-buttons">
+            {% for fav in favorite_commands %}
+            <button class="btn btn-sm btn-outline-secondary"
+                    onclick="runFavoriteCommand('{{ fav.command|escapejs }}', '{{ fav.label|escapejs }}', this)"
+                    title="python manage.py {{ fav.command }}">
+              <i class="bi bi-terminal me-1"></i>{{ fav.label }}
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% if role == 'admin' or role == 'operator' %}
+      <div class="card-footer py-2">
+        <button class="btn btn-sm btn-outline-secondary w-100" type="button"
+                data-bs-toggle="collapse" data-bs-target="#fav-cmd-manage">
+          <i class="bi bi-star me-1"></i> Favoriten verwalten
+        </button>
+        <div class="collapse mt-2" id="fav-cmd-manage">
+          <div id="fav-cmd-list" class="mb-2">
+            {% for fav in favorite_commands %}
+            <div class="d-flex align-items-center gap-2 mb-1 fav-item" data-pk="{{ fav.pk }}">
+              <span class="badge bg-dark border border-secondary font-monospace flex-grow-1 text-start">
+                <strong>{{ fav.label }}</strong> — <code>manage.py {{ fav.command }}</code>
+              </span>
+              <button class="btn btn-sm btn-outline-danger py-0 px-1"
+                      onclick="deleteFavoriteCommand({{ fav.pk }}, this)" title="Entfernen">
+                <i class="bi bi-trash"></i>
+              </button>
+            </div>
+            {% empty %}
+            <p class="text-muted small mb-2" id="fav-empty-hint">Noch keine Favoriten.</p>
+            {% endfor %}
+          </div>
+          <div class="input-group input-group-sm mb-1">
+            <input type="text" id="fav-label-input" class="form-control bg-dark text-light border-secondary"
+                   placeholder='Label, z.B. "Migrate"' maxlength="80">
+            <input type="text" id="fav-cmd-input" class="form-control bg-dark text-light border-secondary font-monospace"
+                   placeholder='Befehl, z.B. "migrate"' maxlength="500">
+            <button class="btn btn-outline-warning" onclick="addFavoriteCommand()">
+              <i class="bi bi-plus-lg"></i>
+            </button>
+          </div>
+          <div id="fav-msg" class="d-none small mt-1"></div>
+        </div>
+      </div>
+      {% endif %}
     </div>
 
     <!-- Firewall Status -->
@@ -370,6 +423,42 @@
     </div>
   </div>
 
+  <!-- Migration-Status (lazy-loaded) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-database-check me-1"></i>Migration-Status</span>
+        <button id="mig-btn" class="btn btn-sm btn-outline-info" onclick="loadMigrations()">
+          <i class="bi bi-arrow-clockwise me-1"></i>Migrations laden
+        </button>
+      </div>
+      <div id="mig-container" class="card-body d-none">
+        <div id="mig-loading" class="text-muted small">
+          <span class="spinner-border spinner-border-sm me-1"></span> Lade…
+        </div>
+        <div id="mig-content" class="d-none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Veraltete Pakete (lazy-loaded) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-box-arrow-up me-1"></i>Veraltete Pakete (pip outdated)</span>
+        <button id="outdated-btn" class="btn btn-sm btn-outline-warning" onclick="loadOutdated()">
+          <i class="bi bi-arrow-clockwise me-1"></i>Pakete prüfen
+        </button>
+      </div>
+      <div id="outdated-container" class="card-body d-none">
+        <div id="outdated-loading" class="text-muted small">
+          <span class="spinner-border spinner-border-sm me-1"></span> Lade… (kann etwas dauern)
+        </div>
+        <div id="outdated-content" class="d-none"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Statistiken (lazy-loaded) -->
   <div class="col-12">
     <div class="card">
@@ -429,6 +518,12 @@
 
 </div>
 {% endblock %}
+
+<!-- Favorite command output (outside card, shown after execution) -->
+<div id="fav-cmd-output-wrapper" class="d-none mb-3">
+  <pre id="fav-cmd-output" class="small log-output"
+       style="max-height:200px;overflow-y:auto;font-size:.78rem;white-space:pre-wrap"></pre>
+</div>
 
 {% block extra_js %}
 <script>
@@ -751,6 +846,304 @@ async function removeHost(host) {
     showMsg('✅ ' + host + ' entfernt. ' + data.message, true);
   } else {
     showMsg('❌ ' + (data.error || data.message), false);
+  }
+}
+</script>
+
+<!-- Favorite Commands JS -->
+<script>
+const favCmdUrl = "{% url 'project_favorite_commands' name %}";
+
+async function runFavoriteCommand(cmd, label, btn) {
+  const wrapper = document.getElementById('fav-cmd-output-wrapper');
+  const output  = document.getElementById('fav-cmd-output');
+  const origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
+  wrapper.classList.remove('d-none');
+  output.textContent = `⏳ ${label} (manage.py ${cmd}) …`;
+  output.style.borderColor = '#30363d';
+
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('action', 'manage_command');
+  fd.append('manage_cmd', cmd);
+  try {
+    const r = await fetch("{% url 'project_action' name %}", {method: 'POST', body: fd});
+    let data;
+    try { data = await r.json(); } catch (_) {
+      output.textContent = `Server-Fehler (HTTP ${r.status})`;
+      output.style.borderColor = '#da3633';
+      btn.disabled = false; btn.innerHTML = origHtml; return;
+    }
+    output.style.borderColor = data.ok ? '#238636' : '#da3633';
+    output.textContent = data.output || '(keine Ausgabe)';
+  } catch(err) {
+    output.textContent = 'Netzwerkfehler: ' + err;
+    output.style.borderColor = '#da3633';
+  }
+  btn.disabled = false;
+  btn.innerHTML = origHtml;
+}
+
+async function addFavoriteCommand() {
+  const label   = document.getElementById('fav-label-input').value.trim();
+  const command = document.getElementById('fav-cmd-input').value.trim();
+  const msgEl   = document.getElementById('fav-msg');
+  if (!label || !command) {
+    showFavMsg('Label und Befehl eingeben.', false); return;
+  }
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('action', 'add');
+  fd.append('label', label);
+  fd.append('command', command);
+  try {
+    const r = await fetch(favCmdUrl, {method: 'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('fav-label-input').value = '';
+      document.getElementById('fav-cmd-input').value = '';
+      renderFavList(d.commands);
+      renderFavButtons(d.commands);
+      showFavMsg('✅ Favorit hinzugefügt.', true);
+    } else {
+      showFavMsg('❌ ' + (d.error || 'Fehler'), false);
+    }
+  } catch(e) { showFavMsg('❌ Verbindungsfehler', false); }
+}
+
+async function deleteFavoriteCommand(pk, btn) {
+  if (!confirm('Favorit wirklich entfernen?')) return;
+  btn.disabled = true;
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('action', 'delete');
+  fd.append('pk', pk);
+  try {
+    const r = await fetch(favCmdUrl, {method: 'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) {
+      renderFavList(d.commands);
+      renderFavButtons(d.commands);
+      showFavMsg('✅ Entfernt.', true);
+    } else {
+      btn.disabled = false;
+      showFavMsg('❌ ' + (d.error || 'Fehler'), false);
+    }
+  } catch(e) { btn.disabled = false; showFavMsg('❌ Verbindungsfehler', false); }
+}
+
+function renderFavList(commands) {
+  const listEl = document.getElementById('fav-cmd-list');
+  if (!listEl) return;
+  if (!commands.length) {
+    listEl.innerHTML = '<p class="text-muted small mb-2">Noch keine Favoriten.</p>';
+    return;
+  }
+  listEl.innerHTML = commands.map(c => `
+    <div class="d-flex align-items-center gap-2 mb-1 fav-item" data-pk="${c.id}">
+      <span class="badge bg-dark border border-secondary font-monospace flex-grow-1 text-start">
+        <strong>${c.label}</strong> — <code>manage.py ${c.command}</code>
+      </span>
+      <button class="btn btn-sm btn-outline-danger py-0 px-1"
+              onclick="deleteFavoriteCommand(${c.id}, this)" title="Entfernen">
+        <i class="bi bi-trash"></i>
+      </button>
+    </div>`).join('');
+}
+
+function renderFavButtons(commands) {
+  // Update the quick-buttons area in the Service-Steuerung card
+  let section = document.getElementById('fav-cmd-buttons');
+  const card = document.querySelector('.card .card-body');
+  if (!commands.length) {
+    if (section) section.closest('.border-top').remove();
+    return;
+  }
+  if (!section) {
+    // Create the section if it doesn't exist yet
+    const cardBody = document.querySelector('[id^="fav-cmd-buttons"]')?.closest('.card-body')
+                  || document.querySelectorAll('.card-body')[1];
+    if (!cardBody) return;
+    const div = document.createElement('div');
+    div.className = 'border-top pt-2 mt-1';
+    div.innerHTML = `<small class="text-muted d-block mb-1"><i class="bi bi-star-fill me-1 text-warning"></i>Favoriten</small>
+      <div class="d-flex gap-2 flex-wrap" id="fav-cmd-buttons"></div>`;
+    cardBody.appendChild(div);
+    section = document.getElementById('fav-cmd-buttons');
+  }
+  section.innerHTML = commands.map(c =>
+    `<button class="btn btn-sm btn-outline-secondary"
+             onclick="runFavoriteCommand('${c.command.replace(/'/g,"\\'")}', '${c.label.replace(/'/g,"\\'")}', this)"
+             title="python manage.py ${c.command}">
+       <i class="bi bi-terminal me-1"></i>${c.label}
+     </button>`
+  ).join('');
+}
+
+function showFavMsg(msg, ok) {
+  const el = document.getElementById('fav-msg');
+  if (!el) return;
+  el.className = ok ? 'small mt-1 text-success' : 'small mt-1 text-danger';
+  el.textContent = msg;
+  el.classList.remove('d-none');
+  setTimeout(() => el.classList.add('d-none'), 4000);
+}
+</script>
+
+<!-- Migration Status JS -->
+<script>
+const migUrl = "{% url 'project_migrations' name %}";
+let migLoaded = false;
+
+async function loadMigrations() {
+  if (migLoaded) return;
+  const container = document.getElementById('mig-container');
+  const loading   = document.getElementById('mig-loading');
+  const content   = document.getElementById('mig-content');
+  const btn       = document.getElementById('mig-btn');
+  container.classList.remove('d-none');
+  btn.disabled = true;
+  loading.classList.remove('d-none');
+  content.classList.add('d-none');
+
+  try {
+    const r = await fetch(migUrl);
+    const d = await r.json();
+
+    if (!d.ok) {
+      content.innerHTML = `<div class="alert alert-danger small">${d.error}</div>`;
+      loading.classList.add('d-none');
+      content.classList.remove('d-none');
+      btn.disabled = false;
+      return;
+    }
+
+    if (!d.apps || !d.apps.length) {
+      content.innerHTML = '<div class="text-muted small">Keine Migrations gefunden.</div>';
+    } else {
+      // Count totals
+      let totalApplied = 0, totalPending = 0;
+      d.apps.forEach(app => app.migrations.forEach(m => m.applied ? totalApplied++ : totalPending++));
+
+      let html = '';
+      if (totalPending > 0) {
+        html += `<div class="alert alert-warning small py-2 mb-3">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          <strong>${totalPending} ausstehende Migration(en)!</strong>
+          Führe <code>manage.py migrate</code> aus.
+        </div>`;
+      } else {
+        html += `<div class="alert small py-2 mb-3" style="background:#0d2918;border-color:#238636;color:#3fb950">
+          <i class="bi bi-check-circle me-1"></i>Alle Migrations angewendet (${totalApplied} gesamt).
+        </div>`;
+      }
+
+      html += '<div class="accordion accordion-flush" id="migAcc">';
+      d.apps.forEach((app, i) => {
+        const pendingCount = app.migrations.filter(m => !m.applied).length;
+        const badgeHtml = pendingCount > 0
+          ? `<span class="badge bg-warning text-dark ms-2">${pendingCount} ausstehend</span>`
+          : `<span class="badge bg-success ms-2">✓</span>`;
+        html += `
+          <div class="accordion-item bg-transparent border-secondary">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed bg-transparent text-light py-2 small"
+                      type="button" data-bs-toggle="collapse" data-bs-target="#mig-app-${i}">
+                <span class="font-monospace">${app.app}</span>${badgeHtml}
+                <span class="text-muted ms-2">(${app.migrations.length})</span>
+              </button>
+            </h2>
+            <div id="mig-app-${i}" class="accordion-collapse collapse">
+              <div class="accordion-body py-1 px-2">
+                <table class="table table-sm table-dark mb-0">
+                  ${app.migrations.map(m => `
+                    <tr>
+                      <td class="font-monospace small">${m.name}</td>
+                      <td class="text-end text-nowrap">
+                        ${m.applied
+                          ? '<span class="badge bg-success">✓ angewendet</span>'
+                          : '<span class="badge bg-warning text-dark">⏳ ausstehend</span>'}
+                      </td>
+                    </tr>`).join('')}
+                </table>
+              </div>
+            </div>
+          </div>`;
+      });
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    loading.classList.add('d-none');
+    content.classList.remove('d-none');
+    migLoaded = true;
+    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Neu laden';
+    btn.disabled = false;
+    migLoaded = false; // allow reload
+  } catch(err) {
+    loading.innerHTML = `<span class="text-danger">Fehler: ${err.message}</span>`;
+    btn.disabled = false;
+  }
+}
+</script>
+
+<!-- Outdated Packages JS -->
+<script>
+const outdatedUrl = "{% url 'project_pip_outdated' name %}";
+let outdatedLoaded = false;
+
+async function loadOutdated() {
+  if (outdatedLoaded) return;
+  const container = document.getElementById('outdated-container');
+  const loading   = document.getElementById('outdated-loading');
+  const content   = document.getElementById('outdated-content');
+  const btn       = document.getElementById('outdated-btn');
+  container.classList.remove('d-none');
+  btn.disabled = true;
+  loading.classList.remove('d-none');
+  content.classList.add('d-none');
+
+  try {
+    const r = await fetch(outdatedUrl);
+    const d = await r.json();
+
+    if (!d.ok) {
+      content.innerHTML = `<div class="alert alert-danger small">${d.error}</div>`;
+    } else if (!d.packages || !d.packages.length) {
+      content.innerHTML = `<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950">
+        <i class="bi bi-check-circle me-1"></i>Alle Pakete sind aktuell.
+      </div>`;
+    } else {
+      let html = `<div class="alert alert-warning small py-2 mb-3">
+        <i class="bi bi-arrow-up-circle me-1"></i>
+        <strong>${d.packages.length} Paket(e)</strong> können aktualisiert werden.
+      </div>
+      <table class="table table-sm table-dark">
+        <thead><tr><th>Paket</th><th>Installiert</th><th>Neueste</th></tr></thead>
+        <tbody>`;
+      d.packages.forEach(p => {
+        html += `<tr>
+          <td class="font-monospace">${p.name}</td>
+          <td class="font-monospace text-muted">${p.current}</td>
+          <td class="font-monospace text-warning">${p.latest}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      html += `<div class="text-muted small">Aktualisiere mit: <code>pip install --upgrade paketname</code> (in der .venv des Projekts)</div>`;
+      content.innerHTML = html;
+    }
+
+    loading.classList.add('d-none');
+    content.classList.remove('d-none');
+    outdatedLoaded = true;
+    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Neu laden';
+    btn.disabled = false;
+    outdatedLoaded = false; // allow reload
+  } catch(err) {
+    loading.innerHTML = `<span class="text-danger">Fehler: ${err.message}</span>`;
+    btn.disabled = false;
   }
 }
 </script>
