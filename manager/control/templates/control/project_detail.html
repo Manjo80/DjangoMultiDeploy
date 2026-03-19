@@ -158,6 +158,8 @@
           </div>
         </div>
         {% endif %}
+        <pre id="fav-cmd-output" class="small log-output mt-2 d-none"
+             style="max-height:200px;overflow-y:auto;font-size:.78rem;white-space:pre-wrap"></pre>
       </div>
       {% if role == 'admin' or role == 'operator' %}
       <div class="card-footer py-2">
@@ -323,6 +325,21 @@
         {% endif %}
       </div>
     </div>
+
+    {% if role == 'admin' %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-copy me-1"></i> Staging-Klon</div>
+      <div class="card-body">
+        <p class="text-muted small mb-2">
+          Erstellt eine Testkopie dieses Projekts mit eigenem Linux-User, eigener Datenbank
+          und automatisch generierten Passwörtern. Zum Testen von Updates — danach einfach löschen.
+        </p>
+        <a href="{% url 'project_clone_form' name %}" class="btn btn-outline-info">
+          <i class="bi bi-copy me-1"></i> Staging-Klon erstellen
+        </a>
+      </div>
+    </div>
+    {% endif %}
 
     <div class="card border-danger">
       <div class="card-header text-danger">Gefahrenzone</div>
@@ -518,12 +535,6 @@
 
 </div>
 {% endblock %}
-
-<!-- Favorite command output (outside card, shown after execution) -->
-<div id="fav-cmd-output-wrapper" class="d-none mb-3">
-  <pre id="fav-cmd-output" class="small log-output"
-       style="max-height:200px;overflow-y:auto;font-size:.78rem;white-space:pre-wrap"></pre>
-</div>
 
 {% block extra_js %}
 <script>
@@ -855,13 +866,12 @@ async function removeHost(host) {
 const favCmdUrl = "{% url 'project_favorite_commands' name %}";
 
 async function runFavoriteCommand(cmd, label, btn) {
-  const wrapper = document.getElementById('fav-cmd-output-wrapper');
-  const output  = document.getElementById('fav-cmd-output');
+  const output   = document.getElementById('fav-cmd-output');
   const origHtml = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
-  wrapper.classList.remove('d-none');
-  output.textContent = `⏳ ${label} (manage.py ${cmd}) …`;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> ' + label;
+  output.classList.remove('d-none');
+  output.textContent = `⏳ manage.py ${cmd} …`;
   output.style.borderColor = '#30363d';
 
   const fd = new FormData();
@@ -1091,8 +1101,9 @@ async function loadMigrations() {
 
 <!-- Outdated Packages JS -->
 <script>
-const outdatedUrl = "{% url 'project_pip_outdated' name %}";
-let outdatedLoaded = false;
+const outdatedUrl   = "{% url 'project_pip_outdated' name %}";
+const pipUpgradeUrl = "{% url 'project_pip_upgrade' name %}";
+let outdatedLoaded  = false;
 
 async function loadOutdated() {
   if (outdatedLoaded) return;
@@ -1120,18 +1131,25 @@ async function loadOutdated() {
         <i class="bi bi-arrow-up-circle me-1"></i>
         <strong>${d.packages.length} Paket(e)</strong> können aktualisiert werden.
       </div>
+      <div id="pip-upgrade-output" class="d-none mb-2"></div>
       <table class="table table-sm table-dark">
-        <thead><tr><th>Paket</th><th>Installiert</th><th>Neueste</th></tr></thead>
+        <thead><tr><th>Paket</th><th>Installiert</th><th>Neueste</th><th></th></tr></thead>
         <tbody>`;
       d.packages.forEach(p => {
-        html += `<tr>
+        html += `<tr id="pkg-row-${p.name}">
           <td class="font-monospace">${p.name}</td>
           <td class="font-monospace text-muted">${p.current}</td>
           <td class="font-monospace text-warning">${p.latest}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-outline-success py-0 px-2"
+                    onclick="upgradePkg('${p.name}', this)"
+                    title="pip install --upgrade ${p.name}">
+              <i class="bi bi-arrow-up-circle me-1"></i>Update
+            </button>
+          </td>
         </tr>`;
       });
       html += '</tbody></table>';
-      html += `<div class="text-muted small">Aktualisiere mit: <code>pip install --upgrade paketname</code> (in der .venv des Projekts)</div>`;
       content.innerHTML = html;
     }
 
@@ -1140,10 +1158,53 @@ async function loadOutdated() {
     outdatedLoaded = true;
     btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Neu laden';
     btn.disabled = false;
-    outdatedLoaded = false; // allow reload
+    outdatedLoaded = false;
   } catch(err) {
     loading.innerHTML = `<span class="text-danger">Fehler: ${err.message}</span>`;
     btn.disabled = false;
+  }
+}
+
+async function upgradePkg(pkgName, btn) {
+  if (!confirm(`"${pkgName}" wirklich aktualisieren?\n\nDer Service bleibt aktiv, ein Neustart danach wird empfohlen.`)) return;
+  const origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
+
+  const outEl = document.getElementById('pip-upgrade-output');
+  if (outEl) {
+    outEl.className = 'small log-output mb-2';
+    outEl.textContent = `⏳ pip install --upgrade ${pkgName} …`;
+    outEl.classList.remove('d-none');
+  }
+
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('package', pkgName);
+  try {
+    const r = await fetch(pipUpgradeUrl, {method: 'POST', body: fd});
+    const d = await r.json();
+    if (outEl) {
+      outEl.style.borderColor = d.ok ? '#238636' : '#da3633';
+      outEl.textContent = d.output;
+    }
+    if (d.ok) {
+      // Mark row as updated
+      const row = document.getElementById(`pkg-row-${pkgName}`);
+      if (row) {
+        row.classList.add('text-muted');
+        btn.innerHTML = '<i class="bi bi-check-lg text-success"></i> Aktualisiert';
+        btn.disabled = true;
+        btn.className = 'btn btn-sm btn-outline-secondary py-0 px-2';
+      }
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
+  } catch(e) {
+    if (outEl) { outEl.style.borderColor = '#da3633'; outEl.textContent = 'Verbindungsfehler: ' + e.message; }
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
   }
 }
 </script>

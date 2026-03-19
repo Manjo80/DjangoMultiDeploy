@@ -1571,3 +1571,33 @@ def run_pip_outdated(name):
         return {'ok': False, 'packages': [], 'error': 'Ungültige pip-Ausgabe'}
     except Exception as e:
         return {'ok': False, 'packages': [], 'error': str(e)}
+
+
+def run_pip_upgrade(name, package_name):
+    """
+    Upgrade a single package in the project venv.
+    Returns {'ok': bool, 'output': str}
+    """
+    import re as _re
+    if not package_name or not _re.match(r'^[A-Za-z0-9_.\-]+$', package_name):
+        return {'ok': False, 'output': 'Ungültiger Paketname'}
+    conf = get_project(name)
+    if not conf:
+        return {'ok': False, 'output': 'Projekt nicht gefunden'}
+    appdir      = conf.get('APPDIR', f'/srv/{name}')
+    appuser     = conf.get('APPUSER', '')
+    venv_python = os.path.join(appdir, '.venv', 'bin', 'python')
+    if not os.path.exists(venv_python):
+        return {'ok': False, 'output': f'venv nicht gefunden: {venv_python}'}
+
+    full_cmd = f'{shlex.quote(venv_python)} -m pip install --upgrade {shlex.quote(package_name)}'
+    run_args = (['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd]
+                if appuser else ['bash', '-c', full_cmd])
+    try:
+        result = subprocess.run(run_args, capture_output=True, text=True, timeout=180)
+        output = (result.stdout + result.stderr).strip()
+        return {'ok': result.returncode == 0, 'output': output or '(keine Ausgabe)'}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'output': 'Timeout nach 180 Sekunden'}
+    except Exception as e:
+        return {'ok': False, 'output': str(e)}
