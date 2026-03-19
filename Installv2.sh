@@ -807,11 +807,14 @@ if [ "$DBTYPE" = "postgresql" ]; then
 elif [ "$DBTYPE" = "mysql" ]; then
   echo "📦 Installiere MySQL-Entwicklungspakete..."
   _apt_install python3-dev
-  # Debian 13+ (trixie): libmysqlclient-dev entfernt → libmariadb-dev verwenden
-  if apt-cache show libmysqlclient-dev >/dev/null 2>&1; then
+  # Debian 13+ (trixie): libmysqlclient-dev ist nur noch ein virtuelles Paket
+  # (nicht installierbar). apt-cache show gibt trotzdem 0 zurück weil das Paket
+  # im Cache "referenziert" wird. apt-get -s (Simulation) prüft korrekt ob
+  # das Paket wirklich installiert werden kann.
+  if apt-get -s install libmysqlclient-dev >/dev/null 2>&1; then
     _apt_install libmysqlclient-dev default-libmysqlclient-dev
   else
-    echo "ℹ️  libmysqlclient-dev nicht gefunden — verwende libmariadb-dev (Debian 13+)"
+    echo "ℹ️  libmysqlclient-dev nicht installierbar — verwende libmariadb-dev (Debian 13+)"
     _apt_install libmariadb-dev libmariadb-dev-compat
   fi
 fi
