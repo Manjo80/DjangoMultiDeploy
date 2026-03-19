@@ -39,7 +39,7 @@ from .utils import (
     run_manager_pip_audit, run_manager_deploy_check,
     sync_env_to_conf,
     get_ufw_port_rules, ufw_toggle_port,
-    run_migration_status, run_pip_outdated,
+    run_migration_status, run_pip_outdated, run_pip_upgrade,
 )
 
 
@@ -1688,6 +1688,177 @@ def project_pip_outdated(request, name):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     result = run_pip_outdated(name)
     return JsonResponse(result)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pip Upgrade (single package)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@require_POST
+@operator_required
+def project_pip_upgrade(request, name):
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'ok': False, 'output': 'Zugriff verweigert'}, status=403)
+    package = request.POST.get('package', '').strip()
+    if not package:
+        return JsonResponse({'ok': False, 'output': 'Kein Paketname angegeben'})
+    result = run_pip_upgrade(name, package)
+    AuditLog.log(request, f'pip upgrade {package}: {name}', project=name, success=result['ok'])
+    return JsonResponse(result)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Staging Clone — create a test copy of a project
+# ──────────────────────────────────────────────────────────────────────────────
+
+@admin_required
+def project_clone_form(request, name):
+    """Show a form to clone a project as a staging environment."""
+    conf = get_project(name)
+    if not conf:
+        raise Http404(f'Projekt "{name}" nicht gefunden.')
+
+    import secrets, string
+    def _rand_pw(n=16):
+        alphabet = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(n))
+
+    # Suggest defaults
+    staging_name = f'{name}stg'
+    used_ports   = {p.get('GUNICORN_PORT') for p in get_all_projects() if p.get('GUNICORN_PORT')}
+    next_port    = next((str(p) for p in range(8000, 9000) if str(p) not in used_ports), '8010')
+
+    return render(request, 'control/project_clone.html', {
+        'conf':         conf,
+        'name':         name,
+        'staging_name': staging_name,
+        'next_port':    next_port,
+        'db_pass':      _rand_pw(),
+        'app_pass':     _rand_pw(),
+        'admin_pass':   _rand_pw(),
+    })
+
+
+@require_POST
+@admin_required
+def project_clone_run(request, name):
+    """Start installing a staging clone of the project."""
+    conf = get_project(name)
+    if not conf:
+        raise Http404(f'Projekt "{name}" nicht gefunden.')
+
+    staging_name = request.POST.get('staging_name', f'{name}stg').strip()
+    # Basic validation: only alphanumeric + underscore, no spaces
+    import re as _re
+    if not _re.match(r'^[a-zA-Z][a-zA-Z0-9_]{1,29}$', staging_name):
+        return render(request, 'control/project_clone.html', {
+            'conf': conf, 'name': name, 'staging_name': staging_name,
+            'error': 'Ungültiger Name (nur Buchstaben, Ziffern, _, 2-30 Zeichen, muss mit Buchstabe beginnen)',
+        })
+    if get_project(staging_name):
+        return render(request, 'control/project_clone.html', {
+            'conf': conf, 'name': name, 'staging_name': staging_name,
+            'error': f'Projekt "{staging_name}" existiert bereits.',
+        })
+
+    gunicorn_port = request.POST.get('gunicorn_port', '').strip()
+    db_pass       = request.POST.get('db_pass', '').strip()
+    app_pass      = request.POST.get('app_pass', '').strip()
+    admin_pass    = request.POST.get('admin_pass', '').strip()
+
+    github_url = conf.get('GITHUB_REPO_URL', '').strip()
+
+    params = {
+        'PROJECTNAME':        staging_name,
+        'APPUSER':            staging_name,
+        'MODESEL':            '1',    # DEV mode for staging
+        'GUNICORN_PORT':      gunicorn_port,
+        'GUNICORN_WORKERS':   '2',
+        'ALLOWED_HOSTS':      '*',
+        'DBTYPE_SEL':         {'postgresql': '2', 'mysql': '3', 'sqlite': '1'}.get(
+                                  conf.get('DBTYPE', 'sqlite'), '1'),
+        'DBMODE':             '2',    # local DB
+        'DBNAME':             staging_name,
+        'DBUSER':             staging_name,
+        'DBPASS':             db_pass,
+        'APPUSER_PASS':       app_pass,
+        'DJANGO_ADMIN_USER':  'admin',
+        'DJANGO_ADMIN_EMAIL': 'admin@localhost',
+        'DJANGO_ADMIN_PASS':  admin_pass,
+        'LANGUAGE_CODE':      conf.get('LANGUAGE_CODE', 'de-de'),
+        'TIME_ZONE':          conf.get('TIME_ZONE', 'Europe/Berlin'),
+        '_INSTALL_SEL':       '1',
+        'UPGRADE':            'n',
+        'INSTALL_FAIL2BAN':   'n',
+    }
+
+    if github_url:
+        params['SOURCE_TYPE']       = 'github'
+        params['GITHUB_REPO_URL']   = github_url
+        # Reuse project's deploy key if available
+        deploy_key_id = conf.get('DEPLOY_KEY_ID', '').strip()
+        if deploy_key_id:
+            key_path = os.path.join(KEYS_DIR, f'{deploy_key_id}_ed25519')
+            if os.path.exists(key_path):
+                params['GITHUB_DEPLOY_KEY'] = key_path
+                params['DEPLOY_KEY_ID']     = deploy_key_id
+    else:
+        # No GitHub → create a ZIP of the existing project
+        appdir   = conf.get('APPDIR', f'/srv/{name}')
+        zip_path = f'/tmp/djmanager_clone_{staging_name}.zip'
+        try:
+            import zipfile
+            excludes = {'.venv', 'venv', '__pycache__', 'staticfiles', 'media', '.git'}
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                base = Path(appdir)
+                for fpath in base.rglob('*'):
+                    # Skip excluded directories
+                    parts = fpath.relative_to(base).parts
+                    if any(p in excludes for p in parts):
+                        continue
+                    if fpath.name in ('.env',):
+                        continue
+                    if fpath.is_file():
+                        zf.write(fpath, fpath.relative_to(base))
+            params['SOURCE_TYPE']       = 'zip'
+            params['UPLOAD_ZIP_PATH']   = zip_path
+        except Exception as e:
+            return render(request, 'control/project_clone.html', {
+                'conf': conf, 'name': name, 'staging_name': staging_name,
+                'error': f'Fehler beim Erstellen des ZIP-Archivs: {e}',
+            })
+
+    run_id   = str(uuid.uuid4())[:8]
+    log_dir  = settings.INSTALL_LOG_DIR
+    log_name = f'{staging_name}_{run_id}.log'
+    log_path = os.path.join(log_dir, log_name)
+
+    env = os.environ.copy()
+    env.update({k: v for k, v in params.items() if v})
+    env['NONINTERACTIVE'] = 'true'
+
+    os.makedirs(log_dir, exist_ok=True)
+    with open(log_path, 'w') as log_f:
+        subprocess.Popen(
+            ['bash', settings.INSTALL_SCRIPT],
+            env=env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+    AuditLog.log(request, f'Staging-Klon gestartet: {staging_name} (von {name})',
+                 project=name, details=f'Port: {gunicorn_port}')
+
+    # Store credentials in session so we can show them on progress page
+    request.session[f'clone_creds_{run_id}'] = {
+        'staging_name': staging_name,
+        'db_pass':      db_pass,
+        'app_pass':     app_pass,
+        'admin_pass':   admin_pass,
+    }
+    return redirect('install_progress', project=staging_name, run_id=run_id)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

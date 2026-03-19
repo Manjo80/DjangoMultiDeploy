@@ -1,0 +1,142 @@
+{% extends "control/base.html" %}
+{% block title %}Staging-Klon: {{ name }} — DjangoMultiDeploy{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3><i class="bi bi-copy me-2"></i>Staging-Klon von <strong>{{ name }}</strong></h3>
+  <a href="{% url 'project_detail' name %}" class="btn btn-sm btn-outline-secondary">← {{ name }}</a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header">Klon-Konfiguration</div>
+      <div class="card-body">
+        <form method="post" action="{% url 'project_clone_run' name %}">
+          {% csrf_token %}
+
+          <div class="mb-3">
+            <label class="form-label">Name des Staging-Projekts</label>
+            <input type="text" name="staging_name" class="form-control bg-dark text-light border-secondary font-monospace"
+                   value="{{ staging_name }}" required
+                   pattern="[a-zA-Z][a-zA-Z0-9_]{1,29}"
+                   title="Nur Buchstaben, Ziffern, _, 2-30 Zeichen, muss mit Buchstabe beginnen">
+            <div class="form-text">Wird als Linux-User, Datenbankname und Projektname verwendet.</div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Gunicorn-Port</label>
+            <input type="number" name="gunicorn_port" class="form-control bg-dark text-light border-secondary"
+                   value="{{ next_port }}" min="1024" max="65535" required>
+          </div>
+
+          <hr class="border-secondary">
+          <h6 class="text-muted mb-3"><i class="bi bi-key me-1"></i>Auto-generierte Zugangsdaten</h6>
+          <div class="alert alert-warning small py-2 mb-3">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            <strong>Notiere diese Passwörter jetzt!</strong> Sie werden nach dem Start nicht mehr angezeigt.
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Datenbank-Passwort</label>
+            <div class="input-group">
+              <input type="text" name="db_pass" id="db-pass"
+                     class="form-control bg-dark text-light border-secondary font-monospace"
+                     value="{{ db_pass }}" required>
+              <button type="button" class="btn btn-outline-secondary" onclick="copyVal('db-pass')">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Linux-User Passwort</label>
+            <div class="input-group">
+              <input type="text" name="app_pass" id="app-pass"
+                     class="form-control bg-dark text-light border-secondary font-monospace"
+                     value="{{ app_pass }}" required>
+              <button type="button" class="btn btn-outline-secondary" onclick="copyVal('app-pass')">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Django Admin Passwort</label>
+            <div class="input-group">
+              <input type="text" name="admin_pass" id="admin-pass"
+                     class="form-control bg-dark text-light border-secondary font-monospace"
+                     value="{{ admin_pass }}" required>
+              <button type="button" class="btn btn-outline-secondary" onclick="copyVal('admin-pass')">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
+            <div class="form-text">Django-Admin-Login: <strong>admin</strong> / dieses Passwort</div>
+          </div>
+
+          <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="btn btn-info">
+              <i class="bi bi-copy me-1"></i> Staging-Klon starten
+            </button>
+            <a href="{% url 'project_detail' name %}" class="btn btn-outline-secondary">Abbrechen</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header">Quell-Projekt: {{ name }}</div>
+      <div class="card-body small">
+        <table class="table table-sm table-dark mb-0">
+          <tr><th class="text-muted">Modus</th><td>{{ conf.MODE|default:"-" }}</td></tr>
+          <tr><th class="text-muted">DB-Typ</th><td>{{ conf.DBTYPE|default:"-" }}</td></tr>
+          <tr><th class="text-muted">GitHub</th>
+              <td class="text-break">
+                {% if conf.GITHUB_REPO_URL %}
+                  <span class="badge bg-success">✓ GitHub</span>
+                  <small class="text-muted d-block">Klon zieht aus GitHub</small>
+                {% else %}
+                  <span class="badge bg-secondary">Kein GitHub</span>
+                  <small class="text-muted d-block">Klon aus ZIP des Projektverzeichnisses</small>
+                {% endif %}
+              </td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i>Was passiert?</div>
+      <div class="card-body small text-muted">
+        <ol class="ps-3 mb-0">
+          <li>Neuer Linux-User <code>{{ staging_name }}</code> wird erstellt</li>
+          <li>Neues Django-Projekt installiert (Modus: DEV)</li>
+          <li>Eigene Datenbank <code>{{ staging_name }}</code></li>
+          <li>Eigener Gunicorn-Port</li>
+          <li>Erscheint im Dashboard wie jedes andere Projekt</li>
+          <li>Zum Löschen: Gefahrenzone → Projekt entfernen</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function copyVal(id) {
+  const el = document.getElementById(id);
+  navigator.clipboard.writeText(el.value).then(() => {
+    // Brief visual feedback
+    el.style.borderColor = '#238636';
+    setTimeout(() => el.style.borderColor = '', 1500);
+  });
+}
+</script>
+{% endblock %}
