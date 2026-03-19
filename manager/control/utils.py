@@ -1479,3 +1479,95 @@ def run_manager_deploy_check():
         return {'ok': False, 'issues': [], 'raw': '', 'error': 'Timeout (deploy check)'}
     except Exception as e:
         return {'ok': False, 'issues': [], 'raw': '', 'error': str(e)}
+
+
+def run_migration_status(name):
+    """
+    Run 'manage.py showmigrations --list' for the given project.
+    Returns {'ok': bool, 'apps': [{'app': str, 'migrations': [{'name': str, 'applied': bool}]}], 'error': str}
+    """
+    import re as _re
+    conf = get_project(name)
+    if not conf:
+        return {'ok': False, 'apps': [], 'error': 'Projekt nicht gefunden'}
+    appdir      = conf.get('APPDIR', f'/srv/{name}')
+    appuser     = conf.get('APPUSER', '')
+    venv_python = os.path.join(appdir, '.venv', 'bin', 'python')
+    manage_py   = os.path.join(appdir, 'manage.py')
+    if not os.path.exists(venv_python):
+        return {'ok': False, 'apps': [], 'error': f'venv nicht gefunden: {venv_python}'}
+    if not os.path.exists(manage_py):
+        return {'ok': False, 'apps': [], 'error': f'manage.py nicht gefunden: {manage_py}'}
+
+    full_cmd = (
+        f'cd {shlex.quote(appdir)} && '
+        f'{shlex.quote(venv_python)} manage.py showmigrations --list'
+    )
+    run_args = (['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd]
+                if appuser else ['bash', '-c', full_cmd])
+    try:
+        result = subprocess.run(run_args, capture_output=True, text=True, timeout=60)
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode != 0 and not result.stdout.strip():
+            return {'ok': False, 'apps': [], 'error': output[:500]}
+
+        # Parse output: app lines have no leading space, migration lines start with ' [X]' or ' [ ]'
+        apps = []
+        current_app = None
+        for line in result.stdout.splitlines():
+            app_match = _re.match(r'^(\S+)$', line.strip())
+            mig_match = _re.match(r'^\s+\[( |X)\]\s+(.+)$', line)
+            if app_match and not line.startswith(' '):
+                current_app = {'app': line.strip(), 'migrations': []}
+                apps.append(current_app)
+            elif mig_match and current_app is not None:
+                current_app['migrations'].append({
+                    'name':    mig_match.group(2).strip(),
+                    'applied': mig_match.group(1) == 'X',
+                })
+        return {'ok': True, 'apps': apps, 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'apps': [], 'error': 'Timeout nach 60 Sekunden'}
+    except Exception as e:
+        return {'ok': False, 'apps': [], 'error': str(e)}
+
+
+def run_pip_outdated(name):
+    """
+    Run 'pip list --outdated --format=json' in the project venv.
+    Returns {'ok': bool, 'packages': [{'name', 'current', 'latest', 'type'}], 'error': str}
+    """
+    conf = get_project(name)
+    if not conf:
+        return {'ok': False, 'packages': [], 'error': 'Projekt nicht gefunden'}
+    appdir      = conf.get('APPDIR', f'/srv/{name}')
+    appuser     = conf.get('APPUSER', '')
+    venv_python = os.path.join(appdir, '.venv', 'bin', 'python')
+    if not os.path.exists(venv_python):
+        return {'ok': False, 'packages': [], 'error': f'venv nicht gefunden: {venv_python}'}
+
+    full_cmd = f'{shlex.quote(venv_python)} -m pip list --outdated --format=json'
+    run_args = (['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd]
+                if appuser else ['bash', '-c', full_cmd])
+    try:
+        result = subprocess.run(run_args, capture_output=True, text=True, timeout=120)
+        raw = result.stdout.strip()
+        if not raw:
+            return {'ok': True, 'packages': [], 'error': ''}
+        data = json.loads(raw)
+        packages = [
+            {
+                'name':    p.get('name', ''),
+                'current': p.get('version', ''),
+                'latest':  p.get('latest_version', ''),
+                'type':    p.get('latest_filetype', ''),
+            }
+            for p in data
+        ]
+        return {'ok': True, 'packages': packages, 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'packages': [], 'error': 'Timeout nach 120 Sekunden'}
+    except json.JSONDecodeError:
+        return {'ok': False, 'packages': [], 'error': 'Ungültige pip-Ausgabe'}
+    except Exception as e:
+        return {'ok': False, 'packages': [], 'error': str(e)}
