@@ -30,7 +30,7 @@ from .utils import (
     run_management_command,
     get_global_deploy_key, get_project_deploy_key,
     create_deploy_key, list_deploy_keys, get_deploy_key_pubkey,
-    delete_deploy_key, assign_project_deploy_key, KEYS_DIR,
+    delete_deploy_key, assign_project_deploy_key, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     get_allowed_hosts, get_nginx_server_names,
     update_allowed_hosts, get_ufw_status, get_server_stats, get_last_backup,
     get_nginx_stats, get_service_restarts,
@@ -1802,6 +1802,13 @@ def project_clone_run(request, name):
             if os.path.exists(key_path):
                 params['GITHUB_DEPLOY_KEY'] = key_path
                 params['DEPLOY_KEY_ID']     = deploy_key_id
+        else:
+            # Fall back to legacy per-project key, then global key
+            legacy_key = f'/root/.ssh/deploy_{name}_ed25519'
+            if os.path.exists(legacy_key):
+                params['GITHUB_DEPLOY_KEY'] = legacy_key
+            elif os.path.exists(GLOBAL_DEPLOY_KEY):
+                params['GITHUB_DEPLOY_KEY'] = GLOBAL_DEPLOY_KEY
     else:
         # No GitHub → create a ZIP of the existing project
         appdir   = conf.get('APPDIR', f'/srv/{name}')
