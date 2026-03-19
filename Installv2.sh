@@ -806,7 +806,14 @@ if [ "$DBTYPE" = "postgresql" ]; then
   _apt_install libpq-dev
 elif [ "$DBTYPE" = "mysql" ]; then
   echo "📦 Installiere MySQL-Entwicklungspakete..."
-  _apt_install libmysqlclient-dev python3-dev default-libmysqlclient-dev
+  _apt_install python3-dev
+  # Debian 13+ (trixie): libmysqlclient-dev entfernt → libmariadb-dev verwenden
+  if apt-cache show libmysqlclient-dev >/dev/null 2>&1; then
+    _apt_install libmysqlclient-dev default-libmysqlclient-dev
+  else
+    echo "ℹ️  libmysqlclient-dev nicht gefunden — verwende libmariadb-dev (Debian 13+)"
+    _apt_install libmariadb-dev libmariadb-dev-compat
+  fi
 fi
 
 # Paket-Cache leeren — frees ~200-500 MB apt cache
