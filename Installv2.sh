@@ -2034,12 +2034,21 @@ echo "💾 Erstelle Sicherung vor Update..."
 # Git Pull (falls Git-Repo vorhanden)
 if [ -d "\$APPDIR/.git" ]; then
   echo "📥 Git Pull..."
-  GITHUB_DEPLOY_KEY="/root/.ssh/djmanager_github_ed25519"
+  GITHUB_DEPLOY_KEY="${GITHUB_DEPLOY_KEY}"
   # safe.directory: verhindert "dubious ownership" Fehler wenn root
   # ein Repo eines anderen Benutzers (\$APPUSER) pullt
   git config --global --add safe.directory "\$APPDIR" 2>/dev/null || true
-  GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
-    git -C "\$APPDIR" pull
+  git config --global pull.rebase false 2>/dev/null || true
+  git -C "\$APPDIR" stash --quiet 2>/dev/null || true
+  if [ -f "\$GITHUB_DEPLOY_KEY" ]; then
+    GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
+      git -C "\$APPDIR" pull --ff-only 2>/dev/null \
+      || GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
+         git -C "\$APPDIR" pull --no-rebase
+  else
+    git -C "\$APPDIR" pull --ff-only 2>/dev/null \
+      || git -C "\$APPDIR" pull --no-rebase
+  fi
 else
   echo "⏭️  Kein Git-Repository gefunden (überspringe git pull)"
 fi
