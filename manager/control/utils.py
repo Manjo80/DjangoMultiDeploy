@@ -196,15 +196,51 @@ def run_management_command(name, raw_cmd):
 
 def run_update(name):
     """Run the project update script. Returns (ok, output)."""
+    import re as _re
     script = f'/usr/local/bin/{name}_update.sh'
     if not os.path.exists(script):
         return False, f'Update script not found: {script}'
+
+    # Auto-patch: if the project has a registered deploy key, ensure the
+    # update script uses it. This fixes projects installed before the
+    # per-project deploy key system was in place (they had the global
+    # djmanager key hardcoded) and keeps scripts in sync after key rotation.
+    conf = get_project(name)
+    if conf:
+        key_id = conf.get('DEPLOY_KEY_ID', '').strip()
+        if key_id:
+            key_path = os.path.join(KEYS_DIR, f'{key_id}_ed25519')
+            if os.path.exists(key_path):
+                try:
+                    with open(script) as f:
+                        content = f.read()
+                    new_content = _re.sub(
+                        r'GITHUB_DEPLOY_KEY="[^"]*"',
+                        f'GITHUB_DEPLOY_KEY="{key_path}"',
+                        content,
+                    )
+                    if new_content != content:
+                        with open(script, 'w') as f:
+                            f.write(new_content)
+                except OSError:
+                    pass
+
     try:
         result = subprocess.run(
             [script],
             capture_output=True, text=True, timeout=300
         )
-        return result.returncode == 0, (result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        if result.returncode != 0 and (
+            'Repository not found' in output
+            or 'Could not read from remote repository' in output
+        ):
+            output += (
+                f'\n\n💡 Hinweis: Der Deploy-Key für Projekt "{name}" hat keinen Zugriff auf das GitHub-Repository.\n'
+                f'   → Manager → Deploy Keys → Key für "{name}" anlegen/zuweisen\n'
+                f'   → GitHub → Repo → Settings → Deploy keys → Key eintragen (Read access)'
+            )
+        return result.returncode == 0, output
     except Exception as e:
         return False, str(e)
 
