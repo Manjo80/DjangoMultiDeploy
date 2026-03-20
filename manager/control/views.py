@@ -1741,8 +1741,9 @@ def project_http_scan(request, name):
             url = f'http://{url_host}/'
             check_tls = False
         else:
-            url = f'http://{url_host}:{nginx_port}/'
-            check_tls = False
+            # DjangoMultiDeploy konfiguriert nginx immer mit SSL auf custom Ports
+            url = f'https://{url_host}:{nginx_port}/'
+            check_tls = True
         result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
 
     return JsonResponse(result)
@@ -1801,10 +1802,9 @@ def manager_http_scan(request):
             url = f'http://{url_host}/'
             check_tls = False
         else:
-            # Custom port: assume HTTPS if port looks like a TLS port, else HTTP
-            check_tls = nginx_port in ('8443', '4443')
-            scheme = 'https' if check_tls else 'http'
-            url = f'{scheme}://{url_host}:{nginx_port}/'
+            # DjangoMultiDeploy konfiguriert nginx immer mit SSL auf custom Ports
+            url = f'https://{url_host}:{nginx_port}/'
+            check_tls = True
         result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
 
     return JsonResponse(result)
