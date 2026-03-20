@@ -9,6 +9,7 @@ import uuid
 import signal
 import logging
 import datetime
+import ipaddress
 import subprocess
 from pathlib import Path
 from functools import wraps
@@ -105,11 +106,24 @@ def _check_project_access(user, name):
 
 _INTERNAL_HOSTS = {'127.0.0.1', 'localhost', '::1', '0.0.0.0'}
 
+
+def _is_ip_address(h):
+    """Return True if h is a valid IPv4 or IPv6 address (not a hostname)."""
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        return False
+
+
 def _build_extern_scan_hosts(nginx_names, allowed_hosts):
     """Return deduplicated list of external HTTP scan targets.
 
-    Filters out loopback/localhost entries and wildcards, and removes
-    duplicates that appear in both nginx_names and allowed_hosts.
+    Filters out loopback/localhost entries, wildcards, raw IP addresses,
+    and removes duplicates that appear in both nginx_names and allowed_hosts.
+    Only proper hostnames (domain names) are returned, since raw IPs are
+    unreliable scan targets (private IPs require LAN access, IPv6 may be
+    unroutable, and servers often can't reach their own public IP).
     """
     seen = set()
     result = []
@@ -118,6 +132,7 @@ def _build_extern_scan_hosts(nginx_names, allowed_hosts):
         if (h and h not in _INTERNAL_HOSTS
                 and not h.startswith('127.')
                 and not h.startswith('.')
+                and not _is_ip_address(h)
                 and h not in seen):
             seen.add(h)
             result.append(h)
@@ -971,10 +986,11 @@ def dashboard(request):
         allowed_hosts = [h for h in settings.ALLOWED_HOSTS if h != '*']
         manager_info  = _get_manager_info() if role in (
             UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR) else None
-        # Manager hostnames for HTTP scan target selector (exclude localhost/IPs)
+        # Manager hostnames for HTTP scan target selector (only proper domain names)
         manager_allowed_hosts = [
             h for h in allowed_hosts
-            if h and h != 'localhost' and not h.startswith('127.') and '.' in h
+            if h and h != 'localhost' and not h.startswith('127.')
+            and '.' in h and not _is_ip_address(h)
         ]
         # Attach favorite commands to each project dict
         project_names = [p.get('PROJECTNAME') for p in all_projects if p.get('PROJECTNAME')]
@@ -1711,15 +1727,21 @@ def project_http_scan(request, name):
     else:
         # target is a hostname or IP — use the project's configured nginx port
         hostname = target
+        # IPv6 addresses must be wrapped in brackets in URLs
+        try:
+            addr = ipaddress.ip_address(hostname)
+            url_host = f'[{hostname}]' if isinstance(addr, ipaddress.IPv6Address) else hostname
+        except ValueError:
+            url_host = hostname
         nginx_port = str(conf.get('NGINX_PORT', '443')).strip()
         if nginx_port == '443':
-            url = f'https://{hostname}/'
+            url = f'https://{url_host}/'
             check_tls = True
         elif nginx_port == '80':
-            url = f'http://{hostname}/'
+            url = f'http://{url_host}/'
             check_tls = False
         else:
-            url = f'http://{hostname}:{nginx_port}/'
+            url = f'http://{url_host}:{nginx_port}/'
             check_tls = False
         result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
 
@@ -1760,7 +1782,13 @@ def manager_http_scan(request):
             result = run_http_security_scan(url, hostname=None, check_tls=False)
     else:
         hostname = target
-        url = f'https://{hostname}/'
+        # IPv6 addresses must be wrapped in brackets in URLs
+        try:
+            addr = ipaddress.ip_address(hostname)
+            url_host = f'[{hostname}]' if isinstance(addr, ipaddress.IPv6Address) else hostname
+        except ValueError:
+            url_host = hostname
+        url = f'https://{url_host}/'
         result = run_http_security_scan(url, hostname=hostname, check_tls=True)
 
     return JsonResponse(result)
