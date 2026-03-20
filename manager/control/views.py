@@ -100,6 +100,31 @@ def _check_project_access(user, name):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+_INTERNAL_HOSTS = {'127.0.0.1', 'localhost', '::1', '0.0.0.0'}
+
+def _build_extern_scan_hosts(nginx_names, allowed_hosts):
+    """Return deduplicated list of external HTTP scan targets.
+
+    Filters out loopback/localhost entries and wildcards, and removes
+    duplicates that appear in both nginx_names and allowed_hosts.
+    """
+    seen = set()
+    result = []
+    for h in nginx_names + allowed_hosts:
+        h = h.strip()
+        if (h and h not in _INTERNAL_HOSTS
+                and not h.startswith('127.')
+                and not h.startswith('.')
+                and h not in seen):
+            seen.add(h)
+            result.append(h)
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Manager self-info helper
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1484,12 +1509,14 @@ def project_detail(request, name):
     ufw               = get_ufw_status(conf.get('GUNICORN_PORT'))
     role              = _get_role(request.user)
     favorite_commands = list(FavoriteCommand.objects.filter(project_name=name))
+    extern_scan_hosts = _build_extern_scan_hosts(nginx_names, allowed_hosts)
     return render(request, 'control/project_detail.html', {
         'conf':              conf,
         'name':              name,
         'backups':           backups,
         'allowed_hosts':     allowed_hosts,
         'nginx_names':       nginx_names,
+        'extern_scan_hosts': extern_scan_hosts,
         'ufw':               ufw,
         'role':              role,
         'favorite_commands': favorite_commands,
@@ -1574,12 +1601,14 @@ def project_action(request, name):
     ufw               = get_ufw_status(conf.get('GUNICORN_PORT') if conf else None)
     role              = _get_role(request.user)
     favorite_commands = list(FavoriteCommand.objects.filter(project_name=name))
+    extern_scan_hosts = _build_extern_scan_hosts(nginx_names, allowed_hosts)
     return render(request, 'control/project_detail.html', {
         'conf':              conf,
         'name':              name,
         'backups':           backups,
         'allowed_hosts':     allowed_hosts,
         'nginx_names':       nginx_names,
+        'extern_scan_hosts': extern_scan_hosts,
         'ufw':               ufw,
         'message':           message,
         'error':             error,
@@ -1680,11 +1709,19 @@ def project_http_scan(request, name):
         url = f'http://127.0.0.1:{port}/'
         result = run_http_security_scan(url, hostname=None, check_tls=False)
     else:
-        # target is a hostname
+        # target is a hostname or IP — use the project's configured nginx port
         hostname = target
-        # Prefer HTTPS
-        url = f'https://{hostname}/'
-        result = run_http_security_scan(url, hostname=hostname, check_tls=True)
+        nginx_port = str(conf.get('NGINX_PORT', '443')).strip()
+        if nginx_port == '443':
+            url = f'https://{hostname}/'
+            check_tls = True
+        elif nginx_port == '80':
+            url = f'http://{hostname}/'
+            check_tls = False
+        else:
+            url = f'http://{hostname}:{nginx_port}/'
+            check_tls = False
+        result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
 
     return JsonResponse(result)
 

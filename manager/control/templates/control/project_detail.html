@@ -391,13 +391,13 @@
     </div>
   </div>
 
-  <!-- Sicherheitsscan (lazy-loaded) -->
+  <!-- Sicherheitsscan (pip-audit + Deploy + HTTP/TLS) -->
   <div class="col-12">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-shield-exclamation me-1"></i>Sicherheitsscan</span>
         <button id="scan-btn" class="btn btn-sm btn-outline-warning" onclick="runSecurityScan()">
-          <i class="bi bi-shield-lock me-1"></i>Scan starten
+          <i class="bi bi-shield-lock me-1"></i>pip-audit + Deploy
         </button>
       </div>
       <div class="card-body">
@@ -424,6 +424,13 @@
                     Cookie-Sicherheit, HSTS, Allowed Hosts, Debug-Modus u.m.
                     SSL-Redirect (W008) wird unterdrückt — wird von nginx übernommen.
                   </div>
+                  <div class="col-md-6">
+                    <strong><i class="bi bi-globe2 me-1"></i>HTTP / TLS Security Scan</strong><br>
+                    Prüft Response-Header (HSTS, CSP, X-Frame-Options…), TLS-Version &amp;
+                    Zertifikat, Cookie-Flags sowie typische Konfigurationslecks (<code>.env</code>,
+                    <code>.git</code>, Backups). Intern = direkter Gunicorn-Zugriff (kein TLS).
+                    Extern = über nginx (Port {{ conf.NGINX_PORT|default:"443" }}).
+                  </div>
                 </div>
                 <hr class="my-2">
                 <div class="row g-1 small">
@@ -436,18 +443,13 @@
           </div>
         </div>
         <div id="scan-output"></div>
-      </div>
-    </div>
-  </div>
 
-  <!-- HTTP / TLS Sicherheitsscan -->
-  <div class="col-12">
-    <div class="card">
-      <div class="card-header">
-        <i class="bi bi-globe2 me-1"></i>HTTP / TLS Security Scan
-        <span class="text-muted small ms-2">— Headers, TLS, Cookies, Konfigurationslecks</span>
-      </div>
-      <div class="card-body">
+        <!-- HTTP / TLS Security Scan -->
+        <hr class="border-secondary my-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="small fw-semibold"><i class="bi bi-globe2 me-1"></i>HTTP / TLS Security Scan</span>
+          <span class="text-muted small">Headers, TLS, Cookies, Konfigurationslecks</span>
+        </div>
 
         <!-- Target-Auswahl -->
         <div class="mb-3">
@@ -457,24 +459,16 @@
                     onclick="runHttpScan('internal')">
               <i class="bi bi-hdd-network me-1"></i>Intern (Gunicorn Port {{ conf.GUNICORN_PORT }})
             </button>
-            {% for h in nginx_names %}
+            {% for h in extern_scan_hosts %}
             <button class="btn btn-sm btn-outline-info" id="http-scan-btn-{{ forloop.counter }}"
                     onclick="runHttpScan('{{ h }}')">
               <i class="bi bi-globe me-1"></i>{{ h }}
             </button>
             {% endfor %}
-            {% for h in allowed_hosts %}
-              {% if h != 'localhost' and h != '127.0.0.1' and not h|slice:":1" == "." %}
-            <button class="btn btn-sm btn-outline-info" id="http-scan-btn-ah-{{ forloop.counter }}"
-                    onclick="runHttpScan('{{ h }}')">
-              <i class="bi bi-globe me-1"></i>{{ h }}
-            </button>
-              {% endif %}
-            {% endfor %}
           </div>
           <div class="form-text">
             <i class="bi bi-info-circle me-1"></i>
-            Intern = direkter Gunicorn-Zugriff (kein TLS). Extern = HTTPS über den Hostnamen.
+            Intern = direkter Gunicorn-Zugriff (kein TLS). Extern = über nginx (Port {{ conf.NGINX_PORT|default:"443" }}).
           </div>
         </div>
 
