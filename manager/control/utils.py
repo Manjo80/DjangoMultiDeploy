@@ -1649,6 +1649,42 @@ def run_pip_upgrade(name, package_name):
 # HTTP / TLS Security Scan
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _get_local_ips():
+    """Return the set of IPv4 addresses assigned to this host."""
+    ips = set()
+    try:
+        out = subprocess.check_output(['hostname', '-I'], text=True, timeout=3)
+        for token in out.split():
+            try:
+                addr = ipaddress.ip_address(token)
+                if isinstance(addr, ipaddress.IPv4Address):
+                    ips.add(token)
+            except ValueError:
+                pass
+    except Exception:
+        pass
+    return ips
+
+
+def _resolve_connect_ip(hostname, port):
+    """
+    Resolve hostname to an IPv4 connect address.
+    If the IP belongs to this host (hairpin-NAT situation), return 127.0.0.1
+    so nginx can be reached via the loopback interface.
+    Returns (connect_ip, original_ipv4) or (None, None) on failure.
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
+        if not infos:
+            return None, None
+        ipv4 = infos[0][4][0]
+        local_ips = _get_local_ips()
+        connect_ip = '127.0.0.1' if ipv4 in local_ips else ipv4
+        return connect_ip, ipv4
+    except socket.gaierror:
+        return None, None
+
+
 def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
     """
     Fetch a URL and return (status_code, headers_dict, body_bytes, final_url, error).
@@ -1661,27 +1697,23 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
 
     # Custom connection classes that force IPv4 at TCP level but keep original
     # hostname for SNI (TLS) and Host header — required for nginx virtual hosting.
+    # Also detects hairpin-NAT (server connecting to its own external IP) and
+    # redirects to 127.0.0.1 so nginx loopback routing works correctly.
     class _V4Conn(http.client.HTTPConnection):
         def connect(self):
-            try:
-                infos = socket.getaddrinfo(self.host, self.port or 80, socket.AF_INET)
-                if infos:
-                    self.host = infos[0][4][0]
-            except socket.gaierror:
-                pass
+            connect_ip, _ = _resolve_connect_ip(self.host, self.port or 80)
+            if connect_ip:
+                self.host = connect_ip
             super().connect()
 
     class _V4TLSConn(http.client.HTTPSConnection):
         def connect(self):
-            try:
-                infos = socket.getaddrinfo(self.host, self.port or 443, socket.AF_INET)
-                if infos:
-                    # Preserve original hostname for SNI before overwriting self.host
-                    if not self._server_hostname:
-                        self._server_hostname = self.host
-                    self.host = infos[0][4][0]
-            except socket.gaierror:
-                pass
+            connect_ip, _ = _resolve_connect_ip(self.host, self.port or 443)
+            if connect_ip:
+                # Preserve original hostname for SNI (getattr for Python compat)
+                if not getattr(self, '_server_hostname', None):
+                    self._server_hostname = self.host
+                self.host = connect_ip
             super().connect()
 
     class _V4HTTPHandler(urllib.request.HTTPHandler):
@@ -1728,12 +1760,9 @@ def _check_tls(hostname, port=443):
     }
     try:
         ctx = ssl.create_default_context()
-        # Prefer IPv4 to avoid [Errno 101] Network is unreachable on hosts without IPv6
-        try:
-            infos = socket.getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
-            connect_addr = infos[0][4]
-        except socket.gaierror:
-            connect_addr = (hostname, port)
+        # Force IPv4 and handle hairpin-NAT (server → own external IP → 127.0.0.1)
+        connect_ip, _ = _resolve_connect_ip(hostname, port)
+        connect_addr = (connect_ip or hostname, port)
         with socket.create_connection(connect_addr, timeout=10) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                 result['reachable'] = True
