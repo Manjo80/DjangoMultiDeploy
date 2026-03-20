@@ -9,6 +9,7 @@ import glob
 import shlex
 import ssl
 import socket
+import ipaddress
 import urllib.request
 import urllib.error
 import datetime
@@ -1911,7 +1912,13 @@ def _check_cookies(headers):
 
 def _check_http_redirect(hostname, port=80):
     """Check if HTTP (port 80) redirects to HTTPS."""
-    url = f'http://{hostname}:{port}/'
+    # IPv6 addresses must be wrapped in brackets in URLs
+    try:
+        addr = ipaddress.ip_address(hostname)
+        url_host = f'[{hostname}]' if isinstance(addr, ipaddress.IPv6Address) else hostname
+    except ValueError:
+        url_host = hostname
+    url = f'http://{url_host}:{port}/'
     try:
         status, hdrs, _, _, err = _http_get(url, timeout=8, verify_ssl=False, follow_redirects=False)
         if err:
