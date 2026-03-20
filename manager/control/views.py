@@ -2,10 +2,13 @@
 DjangoMultiDeploy Manager — Views
 """
 import os
+import glob
 import json
 import time
 import uuid
+import signal
 import logging
+import datetime
 import subprocess
 from pathlib import Path
 from functools import wraps
@@ -30,7 +33,7 @@ from .utils import (
     run_management_command,
     get_global_deploy_key, get_project_deploy_key,
     create_deploy_key, list_deploy_keys, get_deploy_key_pubkey,
-    delete_deploy_key, assign_project_deploy_key, KEYS_DIR,
+    delete_deploy_key, assign_project_deploy_key, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     get_allowed_hosts, get_nginx_server_names,
     update_allowed_hosts, get_ufw_status, get_server_stats, get_last_backup,
     get_nginx_stats, get_service_restarts,
@@ -1086,8 +1089,9 @@ def install_run(request):
     env['NONINTERACTIVE'] = 'true'
 
     os.makedirs(log_dir, exist_ok=True)
+    os.makedirs('/tmp/djmanager_installs', exist_ok=True)
     with open(log_path, 'w') as log_f:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             ['bash', settings.INSTALL_SCRIPT],
             env=env,
             stdout=log_f,
@@ -1095,6 +1099,8 @@ def install_run(request):
             start_new_session=True,
             close_fds=True,
         )
+    pid_path = f'/tmp/djmanager_installs/{project}_{run_id}.pid'
+    Path(pid_path).write_text(str(proc.pid))
 
     AuditLog.log(request, f'Projekt-Installation gestartet: {project}',
                  project=project, details=f'Quelle: {source_type}')
@@ -1150,6 +1156,133 @@ def _install_finished(log_path, current_size):
         return 'INSTALLATION FERTIG' in content or 'ABBRUCH' in content or 'FEHLER' in content
     except Exception:
         return False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Installation Manager
+# ──────────────────────────────────────────────────────────────────────────────
+
+@admin_required
+def install_manager(request):
+    """Listet alle laufenden/abgeschlossenen Installationen auf."""
+    log_dir = settings.INSTALL_LOG_DIR
+    tmp_dir = '/tmp/djmanager_installs'
+    installs = []
+
+    try:
+        log_files = sorted(
+            glob.glob(os.path.join(log_dir, '*.log')),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+    except Exception:
+        log_files = []
+
+    for log_path in log_files:
+        log_name = os.path.basename(log_path)
+        if not log_name.endswith('.log'):
+            continue
+        base = log_name[:-4]
+        # Format: {project}_{run_id}.log — run_id ist immer 8 Zeichen
+        if len(base) < 10 or '_' not in base:
+            continue
+        run_id  = base[-8:]
+        project = base[:-9]  # project = base ohne _run_id
+
+        pid_path      = os.path.join(tmp_dir, f'{project}_{run_id}.pid')
+        pid           = None
+        process_alive = False
+
+        if os.path.exists(pid_path):
+            try:
+                pid = int(Path(pid_path).read_text().strip())
+                os.kill(pid, 0)
+                process_alive = True
+            except (OSError, ValueError, ProcessLookupError):
+                process_alive = False
+
+        try:
+            with open(log_path, 'rb') as f:
+                content = f.read().decode('utf-8', errors='replace')
+        except Exception:
+            content = ''
+
+        if 'INSTALLATION FERTIG' in content:
+            status = 'fertig'
+        elif 'ABBRUCH' in content or 'FEHLER' in content:
+            status = 'fehler'
+        elif process_alive:
+            last_marker = content.rfind('##WAIT_GITHUB_CONFIRM##')
+            if last_marker != -1:
+                after = content[last_marker:]
+                if 'successfully authenticated' in after or 'INSTALLATION FERTIG' in after:
+                    status = 'laeuft'
+                else:
+                    status = 'wartet'
+            else:
+                status = 'laeuft'
+        else:
+            status = 'unbekannt'
+
+        try:
+            mtime   = os.path.getmtime(log_path)
+            started = datetime.datetime.fromtimestamp(mtime).strftime('%d.%m.%Y %H:%M')
+        except Exception:
+            started = '–'
+
+        installs.append({
+            'project':       project,
+            'run_id':        run_id,
+            'log_name':      log_name,
+            'status':        status,
+            'pid':           pid,
+            'process_alive': process_alive,
+            'started':       started,
+        })
+
+    return render(request, 'control/install_manager.html', {'installs': installs})
+
+
+@admin_required
+@require_POST
+def install_kill(request, project, run_id):
+    """Bricht eine laufende Installation ab und räumt auf."""
+    tmp_dir = '/tmp/djmanager_installs'
+    log_dir = settings.INSTALL_LOG_DIR
+    killed  = False
+
+    pid_path = os.path.join(tmp_dir, f'{project}_{run_id}.pid')
+    if os.path.exists(pid_path):
+        try:
+            pid = int(Path(pid_path).read_text().strip())
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+                killed = True
+            except ProcessLookupError:
+                pass
+        except (ValueError, OSError):
+            pass
+        try:
+            os.unlink(pid_path)
+        except OSError:
+            pass
+
+    for suffix in ['_github_confirm', '_github_wait']:
+        f = os.path.join(tmp_dir, f'{project}{suffix}')
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+
+    log_path = os.path.join(log_dir, f'{project}_{run_id}.log')
+    try:
+        os.unlink(log_path)
+    except OSError:
+        pass
+
+    AuditLog.log(request, f'Installation abgebrochen/gelöscht: {project}', project=project)
+    return JsonResponse({'ok': True, 'killed': killed})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1802,6 +1935,13 @@ def project_clone_run(request, name):
             if os.path.exists(key_path):
                 params['GITHUB_DEPLOY_KEY'] = key_path
                 params['DEPLOY_KEY_ID']     = deploy_key_id
+        else:
+            # Fall back to legacy per-project key, then global key
+            legacy_key = f'/root/.ssh/deploy_{name}_ed25519'
+            if os.path.exists(legacy_key):
+                params['GITHUB_DEPLOY_KEY'] = legacy_key
+            elif os.path.exists(GLOBAL_DEPLOY_KEY):
+                params['GITHUB_DEPLOY_KEY'] = GLOBAL_DEPLOY_KEY
     else:
         # No GitHub → create a ZIP of the existing project
         appdir   = conf.get('APPDIR', f'/srv/{name}')
