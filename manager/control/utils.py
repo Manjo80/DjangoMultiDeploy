@@ -1650,8 +1650,13 @@ def run_pip_upgrade(name, package_name):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _get_local_ips():
-    """Return the set of IPv4 addresses assigned to this host."""
+    """Return the set of IPv4 addresses assigned to this host.
+
+    Tries ``hostname -I`` first (Linux), falls back to socket-based
+    resolution so the function works on any POSIX system.
+    """
     ips = set()
+    # Primary: hostname -I (Linux only)
     try:
         out = subprocess.check_output(['hostname', '-I'], text=True, timeout=3)
         for token in out.split():
@@ -1663,6 +1668,16 @@ def _get_local_ips():
                 pass
     except Exception:
         pass
+    # Fallback: socket resolution (cross-platform)
+    if not ips:
+        try:
+            hostname = socket.gethostname()
+            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                ip = info[4][0]
+                if ip and not ip.startswith('127.'):
+                    ips.add(ip)
+        except Exception:
+            pass
     return ips
 
 
@@ -1734,10 +1749,19 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
     try:
         with opener.open(url, timeout=timeout) as resp:
             hdrs = {k.lower(): v for k, v in resp.headers.items()}
+            # Preserve ALL Set-Cookie headers — dict comprehension above keeps
+            # only the last one when multiple cookies are set.
+            sc_all = resp.headers.get_all('set-cookie') if hasattr(resp.headers, 'get_all') else None
+            if sc_all and len(sc_all) > 1:
+                hdrs['set-cookie'] = '\n'.join(sc_all)
             body = resp.read(4096)
             return resp.status, hdrs, body, resp.url, None
     except urllib.error.HTTPError as e:
         hdrs = {k.lower(): v for k, v in e.headers.items()} if e.headers else {}
+        if e.headers and hasattr(e.headers, 'get_all'):
+            sc_all = e.headers.get_all('set-cookie')
+            if sc_all and len(sc_all) > 1:
+                hdrs['set-cookie'] = '\n'.join(sc_all)
         return e.code, hdrs, b'', url, None
     except urllib.error.URLError as e:
         return None, {}, b'', url, str(e.reason)
@@ -1786,10 +1810,17 @@ def _check_tls(hostname, port=443):
         result['reachable'] = True
         result['cert_valid'] = False
         result['error'] = f'Zertifikat ungültig: {e}'
+    except ssl.SSLError as e:
+        # Host reachable but TLS negotiation failed (wrong SNI, cipher mismatch, etc.)
+        result['reachable'] = True
+        result['error'] = f'TLS-Fehler: {e.reason or str(e)}'
     except ConnectionRefusedError:
         result['error'] = 'Verbindung abgelehnt'
     except socket.timeout:
         result['error'] = 'Timeout'
+    except OSError as e:
+        # Catches socket errors like EHOSTUNREACH, ENETUNREACH, ETIMEDOUT
+        result['error'] = str(e)
     except Exception as e:
         result['error'] = str(e)
     return result
@@ -1812,30 +1843,44 @@ def _check_config_leaks(base_url, timeout=8):
         ('/djadmin/',          'Django-Admin (djadmin/) erreichbar'),
         ('/robots.txt',        'robots.txt (Info)'),
     ]
+    # Paths where a redirect (301/302) is likely a false positive
+    # (e.g. auth redirect to login page, not an actual file served)
+    _REDIRECT_FALSE_POSITIVE = {
+        '/.env', '/.env.local', '/.env.production',
+        '/backup.zip', '/backup.tar.gz', '/db.sqlite3',
+        '/phpinfo.php', '/wp-login.php',
+    }
+
     leaks = []
     for path, label in PATHS:
         url = base_url.rstrip('/') + path
         status, hdrs, body, _, err = _http_get(url, timeout=timeout, verify_ssl=False)
         if err:
             continue
-        if status in (200, 301, 302):
+        # For sensitive file paths, only a 200 counts as an actual leak;
+        # redirects (301/302/307/308) most likely mean an auth wall, not exposure.
+        if path in _REDIRECT_FALSE_POSITIVE:
+            if status != 200:
+                continue
+        elif status not in (200, 301, 302, 307, 308):
+            continue
+        severity = 'critical'
+        note = ''
+        if path in ('/robots.txt', '/admin/login/', '/djadmin/'):
+            severity = 'info'
+        elif path.startswith('/.git'):
             severity = 'critical'
-            note = ''
-            if path in ('/robots.txt', '/admin/login/', '/djadmin/'):
-                severity = 'info'
-            elif path.startswith('/.git'):
-                severity = 'critical'
-                note = 'Git-History enthält möglicherweise Secrets und Code-History!'
-            elif path == '/.env':
-                severity = 'critical'
-                note = 'Env-Datei öffentlich zugänglich — Secrets exponiert!'
-            leaks.append({
-                'path': path,
-                'label': label,
-                'status': status,
-                'severity': severity,
-                'note': note,
-            })
+            note = 'Git-History enthält möglicherweise Secrets und Code-History!'
+        elif path == '/.env':
+            severity = 'critical'
+            note = 'Env-Datei öffentlich zugänglich — Secrets exponiert!'
+        leaks.append({
+            'path': path,
+            'label': label,
+            'status': status,
+            'severity': severity,
+            'note': note,
+        })
     return leaks
 
 
@@ -2034,13 +2079,20 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
 
     is_https = target_url.startswith('https://')
 
+    # Extract actual port from URL (do not hardcode 443/80)
+    from urllib.parse import urlparse as _urlparse
+    _parsed_url = _urlparse(target_url)
+    _netloc_port = _parsed_url.port  # None if not explicit
+    _tls_port = _netloc_port if _netloc_port else 443
+    _http_port = 80  # HTTP redirect check always uses port 80
+
     # 1. TLS check
     if check_tls and is_https and hostname:
-        result['tls'] = _check_tls(hostname, port=443)
+        result['tls'] = _check_tls(hostname, port=_tls_port)
 
     # 2. HTTP → HTTPS redirect check
     if hostname and is_https:
-        result['http_redirect'] = _check_http_redirect(hostname, port=80)
+        result['http_redirect'] = _check_http_redirect(hostname, port=_http_port)
 
     # 3. Fetch the target URL for headers + cookies
     status, hdrs, body, final_url, err = _http_get(
@@ -2092,10 +2144,10 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
         tls = result['tls']
         if not tls.get('cert_valid'):
             sev_count['critical'] += 1
-        elif tls.get('cert_days_left') is not None and tls['cert_days_left'] < 30:
-            sev_count['high'] += 1
         elif tls.get('cert_days_left') is not None and tls['cert_days_left'] < 14:
             sev_count['critical'] += 1
+        elif tls.get('cert_days_left') is not None and tls['cert_days_left'] < 30:
+            sev_count['high'] += 1
         ver = tls.get('tls_version', '')
         if ver in ('TLSv1', 'TLSv1.1', 'SSLv3', 'SSLv2'):
             sev_count['high'] += 1
