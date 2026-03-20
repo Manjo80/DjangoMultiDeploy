@@ -77,6 +77,16 @@ mark_done() {
   printf 'LAST_STEP="%s"\n' "${1}" >> "$STATE_FILE"
 }
 
+# Prüft ob ein Port in der UFW-Firewall explizit erlaubt ist.
+# Gibt 0 zurück wenn: ufw nicht vorhanden, ufw inaktiv, oder Port erlaubt.
+# Gibt 1 zurück wenn: ufw aktiv und Port NICHT explizit erlaubt.
+_ufw_port_allowed() {
+  local _port="$1"
+  command -v ufw >/dev/null 2>&1 || return 0
+  ufw status 2>/dev/null | grep -q "Status: active" || return 1
+  ufw status 2>/dev/null | grep -qE "^${_port}[/ ].*ALLOW"
+}
+
 # Unterbrochene Installationen suchen
 mapfile -t _STATES < <(compgen -G "/tmp/django_install_*.state" 2>/dev/null || true)
 if [ "${#_STATES[@]}" -gt 0 ] && [ -f "${_STATES[0]}" ]; then
@@ -488,10 +498,10 @@ echo "✅ Gunicorn-Port: $GUNICORN_PORT"
 # Alle lokalen IPs für ALLOWED_HOSTS (kein Hostname-Prompt nötig)
 # Zugriff läuft ausschließlich über nginx (port-basiert) — kein server_name
 NGINX_PORT="${NGINX_PORT:-$((GUNICORN_PORT + 1000))}"
-echo "🔌 nginx-HTTPS-Port: ${NGINX_PORT}  (Gunicorn intern: 127.0.0.1:${GUNICORN_PORT})"
+echo "🔌 nginx-HTTPS-Port: ${NGINX_PORT}  (Gunicorn: ${LOCAL_IP}:${GUNICORN_PORT})"
 
 # ALLOWED_HOSTS: alle lokalen IPs + Loopback — kein Hostname (Reverse Proxy sendet ggf. Domain)
-ALLOWED_HOSTS="${ALL_LOCAL_IPS},127.0.0.1,localhost"
+ALLOWED_HOSTS="${ALL_LOCAL_IPS},localhost"
 ALLOWED_HOSTS="$(echo "$ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
 # -------------------------------------------------------------------
@@ -509,8 +519,18 @@ CSRF_TRUSTED_ORIGINS_VALUE="$(echo "$ALL_LOCAL_IPS" | tr ',' '\n' | grep -v '^$'
     print "http://" ip ":" port
     print "https://" ip ":" port
   }' | awk '!seen[$0]++' | paste -sd, -)"
-# Loopback ergänzen
-CSRF_TRUSTED_ORIGINS_VALUE="${CSRF_TRUSTED_ORIGINS_VALUE},http://127.0.0.1:${NGINX_PORT},https://127.0.0.1:${NGINX_PORT}"
+# Gunicorn-Port (8000-8999) nur in CSRF aufnehmen wenn Firewall ihn erlaubt
+if _ufw_port_allowed "${GUNICORN_PORT}"; then
+  _GUNICORN_CSRF="$(echo "$ALL_LOCAL_IPS" | tr ',' '\n' | grep -v '^$' | awk \
+    -v port="$GUNICORN_PORT" '
+    NF {
+      ip = $0
+      if (index(ip, ":") > 0) ip = "[" ip "]"
+      print "http://" ip ":" port
+      print "https://" ip ":" port
+    }' | awk '!seen[$0]++' | paste -sd, -)"
+  [ -n "$_GUNICORN_CSRF" ] && CSRF_TRUSTED_ORIGINS_VALUE="${CSRF_TRUSTED_ORIGINS_VALUE},${_GUNICORN_CSRF}"
+fi
 
 # -------------------------------------------------------------------
 # Datenbank-Typ auswählen
@@ -1748,7 +1768,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind 127.0.0.1:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
+ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind ${LOCAL_IP}:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
 Restart=always
 RestartSec=10
 
@@ -1824,7 +1844,7 @@ fi
 # Self-Signed SSL-Zertifikat bereitstellen (einmalig, geteilt für alle Sites)
 _generate_selfsigned_cert
 
-# NGINX_PORT: HTTPS-Port für diese App (Gunicorn intern auf 127.0.0.1:GUNICORN_PORT)
+# NGINX_PORT: HTTPS-Port für diese App (Gunicorn auf ${LOCAL_IP}:GUNICORN_PORT)
 _NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ')"
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
 server {
@@ -1869,7 +1889,7 @@ server {
     location ~* ^/(login|djadmin|accounts/login|api/auth) {
         limit_req zone=django_login burst=5 nodelay;
         add_header Retry-After 60 always;
-        proxy_pass http://127.0.0.1:${GUNICORN_PORT};
+        proxy_pass http://${LOCAL_IP}:${GUNICORN_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -1897,7 +1917,7 @@ server {
     # Django App
     location / {
         limit_req zone=django_general burst=30 nodelay;
-        proxy_pass http://127.0.0.1:${GUNICORN_PORT};
+        proxy_pass http://${LOCAL_IP}:${GUNICORN_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -1937,7 +1957,7 @@ echo "   https://${LOCAL_IP}:${NGINX_PORT}/"
 echo
 echo "🔀 Externer Reverse Proxy → Ziel:"
 echo "   https://${LOCAL_IP}:${NGINX_PORT}  (SSL verify off / insecure)"
-echo "   Gunicorn intern: 127.0.0.1:${GUNICORN_PORT}"
+_ufw_port_allowed "${GUNICORN_PORT}" && echo "   Gunicorn direkt:  ${LOCAL_IP}:${GUNICORN_PORT}  (Firewall erlaubt)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 else
   echo "⏭️  Nginx bereits konfiguriert - überspringe"
@@ -1992,7 +2012,7 @@ if command -v ufw >/dev/null 2>&1; then
   # Gunicorn-Port von außen sperren (läuft ohnehin auf 127.0.0.1, Doppelabsicherung)
   ufw deny "${GUNICORN_PORT}/tcp" comment "Gunicorn ${PROJECTNAME} (intern only)" 2>/dev/null || true
   ufw reload 2>/dev/null || true
-  echo "  ✅ Port $GUNICORN_PORT extern gesperrt (nginx → 127.0.0.1:${GUNICORN_PORT} intern OK)"
+  echo "  ✅ Port $GUNICORN_PORT extern gesperrt (nginx → ${LOCAL_IP}:${GUNICORN_PORT})"
 else
   echo "  ℹ️  ufw nicht gefunden — Firewall muss manuell konfiguriert werden"
   echo "     Empfehlung: apt install ufw && ufw deny ${GUNICORN_PORT}/tcp"
@@ -2278,9 +2298,10 @@ for _conf in "$CONF_DIR"/*.conf; do
   _PORT=$(grep '^GUNICORN_PORT=' "$_conf" | cut -d= -f2 | tr -d '"')
   _MODE=$(grep '^MODE='         "$_conf" | cut -d= -f2 | tr -d '"')
   _DB=$(grep   '^DBTYPE='       "$_conf" | cut -d= -f2 | tr -d '"')
+  _CLIP=$(grep '^LOCAL_IP='     "$_conf" | cut -d= -f2 | tr -d '"')
   systemctl is-active --quiet "$_PROJ" 2>/dev/null && _SVC="aktiv ✅" || _SVC="gestoppt ❌"
   _HTTP=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 \
-    "http://127.0.0.1:${_PORT:-8000}/health/" 2>/dev/null || echo "---")
+    "http://${_CLIP:-127.0.0.1}:${_PORT:-8000}/health/" 2>/dev/null || echo "---")
   case "$_HTTP" in 200) _HSTR="200 ✅";; ---) _HSTR="timeout ⏱";; *) _HSTR="${_HTTP} ⚠️";; esac
   printf "║  %-20s %-7s %-6s %-10s %-12s %-10s  ║\n" \
     "$_PROJ" "${_PORT:-?}" "${_MODE:-?}" "${_DB:-?}" "$_SVC" "$_HSTR"
@@ -2457,7 +2478,7 @@ for _conf in "$CONF_DIR"/*.conf; do
   echo "  ┌─────────────────────────────────────────────────────────────────"
   echo "  │  👤 App-User:    $_USER"
   echo "  │  📁 Pfad:        $_APPDIR"
-  echo "  │  🌐 Modus:       $_MODE  |  🔌 Gunicorn: 127.0.0.1:${_PORT:-8000}"
+  echo "  │  🌐 Modus:       $_MODE  |  🔌 Gunicorn: ${_LIP:-127.0.0.1}:${_PORT:-8000}"
   if [ -n "$_DBNAME" ]; then
     echo "  │  🗄️  DB:         ${_DB:-?}  |  Name: $_DBNAME  |  Host: ${_DBHOST:-localhost}:${_DBPORT:-5432}"
   else
@@ -2517,7 +2538,11 @@ echo "╚═══════════════════════�
 echo "📁 Projektverzeichnis:  $APPDIR"
 echo "👤 App-Benutzer:        $APPUSER"
 echo "🌐 Modus:               $MODE (DEBUG=$DEBUG_VALUE)"
-echo "🔌 Gunicorn-Port:       127.0.0.1:${GUNICORN_PORT}  (intern)"
+if _ufw_port_allowed "${GUNICORN_PORT}"; then
+  echo "🔌 Gunicorn-Port:       ${LOCAL_IP}:${GUNICORN_PORT}  (Firewall erlaubt)"
+else
+  echo "🔌 Gunicorn-Port:       ${LOCAL_IP}:${GUNICORN_PORT}  (nur intern, Firewall gesperrt)"
+fi
 echo "🗄️  Datenbank:          ${DBTYPE^^}"
 if [ "$DBTYPE" != "sqlite" ]; then
   echo "   DB-Engine:           $DB_ENGINE"
@@ -2551,7 +2576,7 @@ echo
 echo "🔀 Externer Reverse Proxy → Ziel:"
 echo "   https://${LOCAL_IP}:${NGINX_PORT}  (SSL verify off / insecure erlaubt)"
 echo "   nginx-Config: /etc/nginx/sites-available/${PROJECTNAME}"
-echo "   Gunicorn intern: 127.0.0.1:${GUNICORN_PORT}"
+_ufw_port_allowed "${GUNICORN_PORT}" && echo "   Gunicorn direkt:  ${LOCAL_IP}:${GUNICORN_PORT}  (Firewall offen)"
 echo
 echo "   Beim nächsten Login wird die vollständige Serverübersicht"
 echo "   mit allen Django-Projekten angezeigt (/etc/profile.d/00_django_motd.sh)"
@@ -2595,7 +2620,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
-  echo "🔌 Manager-Gunicorn:     127.0.0.1:$_MANAGER_PORT (intern)"
+  echo "🔌 Manager-Gunicorn:     ${_MGR_DEFAULT_IP}:$_MANAGER_PORT"
   echo "🔒 nginx HTTPS:          https://${_MGR_DEFAULT_IP}:443/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   echo
@@ -2648,16 +2673,19 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MANAGER_SECRET="$(openssl rand -hex 32)"
 
   # ALLOWED_HOSTS: alle lokalen IPs + Loopback (kein Hostname — port-basierter Zugriff via nginx)
-  _MGR_ALLOWED_HOSTS="${_ALL_MGR_IPS},${_MGR_DEFAULT_IP},127.0.0.1,localhost"
+  _MGR_ALLOWED_HOSTS="${_ALL_MGR_IPS},${_MGR_DEFAULT_IP},localhost"
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
   # CSRF_TRUSTED_ORIGINS: http + https für alle IPs, Standard-Ports (80/443)
   # IPv6-Adressen (enthalten ':') müssen in eckigen Klammern stehen
   _MGR_CSRF_ORIGINS=""
-  for _ip in $(echo "${_ALL_MGR_IPS},${_MGR_DEFAULT_IP},127.0.0.1" | tr ',' '\n' | grep -v '^$' | sort -u); do
+  for _ip in $(echo "${_ALL_MGR_IPS},${_MGR_DEFAULT_IP}" | tr ',' '\n' | grep -v '^$' | sort -u); do
     if echo "$_ip" | grep -q ':'; then _ip_h="[${_ip}]"; else _ip_h="$_ip"; fi
     _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h},https://${_ip_h}"
-    _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h}:${_MANAGER_PORT},https://${_ip_h}:${_MANAGER_PORT}"
+    # Gunicorn-Port (8000-8999) nur wenn Firewall ihn explizit erlaubt
+    if _ufw_port_allowed "${_MANAGER_PORT}"; then
+      _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h}:${_MANAGER_PORT},https://${_ip_h}:${_MANAGER_PORT}"
+    fi
     _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h}:80,https://${_ip_h}:443"
   done
   _MGR_CSRF_ORIGINS="$(echo "$_MGR_CSRF_ORIGINS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
@@ -2832,7 +2860,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind 127.0.0.1:${_MANAGER_PORT} --workers 1 --timeout 120
+ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind ${_MGR_DEFAULT_IP}:${_MANAGER_PORT} --workers 1 --timeout 120
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
@@ -2843,7 +2871,7 @@ MANSERVEOF
 
   systemctl daemon-reload
   systemctl enable --now djmanager
-  echo "✅ Manager-Service gestartet (0.0.0.0:${_MANAGER_PORT} + nginx Port 80)"
+  echo "✅ Manager-Service gestartet (${_MGR_DEFAULT_IP}:${_MANAGER_PORT} + nginx Port 80)"
 
   # nginx Reverse Proxy für Manager
   # Manager ist über nginx (Port 80) und direkt über Port 8888 erreichbar
@@ -2890,9 +2918,9 @@ server {
         access_log off;
     }
 
-    # Manager-App (Gunicorn auf 127.0.0.1:PORT)
+    # Manager-App (Gunicorn auf ${_MGR_DEFAULT_IP}:PORT)
     location / {
-        proxy_pass http://127.0.0.1:${_MANAGER_PORT};
+        proxy_pass http://${_MGR_DEFAULT_IP}:${_MANAGER_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -2959,7 +2987,7 @@ MGNGINXEOF
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
   echo "🔒 Manager-URL:    https://${_MGR_IP}/"
-  echo "   (nginx Port 443/SSL → 127.0.0.1:${_MANAGER_PORT})"
+  echo "   (nginx Port 443/SSL → ${_MGR_DEFAULT_IP}:${_MANAGER_PORT})"
   echo "   HTTP Port 80 leitet automatisch auf HTTPS weiter."
   echo
   echo "🔀 Externer Reverse Proxy → Ziel:"
