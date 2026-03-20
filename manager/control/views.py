@@ -946,6 +946,11 @@ def dashboard(request):
         allowed_hosts = [h for h in settings.ALLOWED_HOSTS if h != '*']
         manager_info  = _get_manager_info() if role in (
             UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR) else None
+        # Manager hostnames for HTTP scan target selector (exclude localhost/IPs)
+        manager_allowed_hosts = [
+            h for h in allowed_hosts
+            if h and h != 'localhost' and not h.startswith('127.') and '.' in h
+        ]
         # Attach favorite commands to each project dict
         project_names = [p.get('PROJECTNAME') for p in all_projects if p.get('PROJECTNAME')]
         fav_qs = FavoriteCommand.objects.filter(project_name__in=project_names)
@@ -955,12 +960,13 @@ def dashboard(request):
         for p in all_projects:
             p['favorite_commands'] = fav_by_project.get(p.get('PROJECTNAME', ''), [])
         return render(request, 'control/dashboard.html', {
-            'projects':      all_projects,
-            'ufw':           ufw,
-            'server_stats':  server_stats,
-            'role':          role,
-            'allowed_hosts': allowed_hosts,
-            'manager_info':  manager_info,
+            'projects':              all_projects,
+            'ufw':                   ufw,
+            'server_stats':          server_stats,
+            'role':                  role,
+            'allowed_hosts':         allowed_hosts,
+            'manager_info':          manager_info,
+            'manager_allowed_hosts': manager_allowed_hosts,
         })
     except Exception:
         _log.error('dashboard() crashed:\n%s', traceback.format_exc())
