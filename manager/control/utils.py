@@ -1653,20 +1653,47 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
     """
     Fetch a URL and return (status_code, headers_dict, body_bytes, final_url, error).
     headers_dict keys are lowercased.
+    Resolves domain names to IPv4 first to avoid IPv6 connectivity issues.
     """
+    from urllib.parse import urlparse
+
+    # Pre-resolve domain names to IPv4 to avoid hangs/errors on IPv6-less hosts
+    parsed = urlparse(url)
+    orig_hostname = parsed.hostname or ''
+    fetch_url = url
+    extra_host_header = None
+    try:
+        ipaddress.ip_address(orig_hostname.strip('[]'))  # already an IP literal
+    except ValueError:
+        # It's a domain name — resolve to IPv4
+        if orig_hostname:
+            try:
+                infos = socket.getaddrinfo(orig_hostname, None, socket.AF_INET)
+                if infos:
+                    ipv4 = infos[0][4][0]
+                    port = parsed.port
+                    netloc = f'{ipv4}:{port}' if port else ipv4
+                    fetch_url = parsed._replace(netloc=netloc).geturl()
+                    extra_host_header = orig_hostname  # preserve for virtual hosting
+            except socket.gaierror:
+                pass
+
     ctx = ssl.create_default_context() if verify_ssl else ssl._create_unverified_context()
     opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
-    opener.addheaders = [('User-Agent', 'DjangoMultiDeploySecurityScanner/1.0')]
+    headers = [('User-Agent', 'DjangoMultiDeploySecurityScanner/1.0')]
+    if extra_host_header:
+        headers.append(('Host', extra_host_header))
+    opener.addheaders = headers
     if not follow_redirects:
         class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
                 return None
         opener.add_handler(NoRedirectHandler())
     try:
-        with opener.open(url, timeout=timeout) as resp:
+        with opener.open(fetch_url, timeout=timeout) as resp:
             hdrs = {k.lower(): v for k, v in resp.headers.items()}
             body = resp.read(4096)
-            return resp.status, hdrs, body, resp.url, None
+            return resp.status, hdrs, body, url, None
     except urllib.error.HTTPError as e:
         hdrs = {k.lower(): v for k, v in e.headers.items()} if e.headers else {}
         return e.code, hdrs, b'', url, None
@@ -1691,7 +1718,13 @@ def _check_tls(hostname, port=443):
     }
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((hostname, port), timeout=10) as sock:
+        # Prefer IPv4 to avoid [Errno 101] Network is unreachable on hosts without IPv6
+        try:
+            infos = socket.getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
+            connect_addr = infos[0][4]
+        except socket.gaierror:
+            connect_addr = (hostname, port)
+        with socket.create_connection(connect_addr, timeout=10) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                 result['reachable'] = True
                 result['tls_version'] = ssock.version()
