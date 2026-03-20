@@ -1653,47 +1653,57 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
     """
     Fetch a URL and return (status_code, headers_dict, body_bytes, final_url, error).
     headers_dict keys are lowercased.
-    Resolves domain names to IPv4 first to avoid IPv6 connectivity issues.
+    Forces IPv4 TCP connections to avoid IPv6 issues, while preserving SNI/Host.
     """
-    from urllib.parse import urlparse
-
-    # Pre-resolve domain names to IPv4 to avoid hangs/errors on IPv6-less hosts
-    parsed = urlparse(url)
-    orig_hostname = parsed.hostname or ''
-    fetch_url = url
-    extra_host_header = None
-    try:
-        ipaddress.ip_address(orig_hostname.strip('[]'))  # already an IP literal
-    except ValueError:
-        # It's a domain name — resolve to IPv4
-        if orig_hostname:
-            try:
-                infos = socket.getaddrinfo(orig_hostname, None, socket.AF_INET)
-                if infos:
-                    ipv4 = infos[0][4][0]
-                    port = parsed.port
-                    netloc = f'{ipv4}:{port}' if port else ipv4
-                    fetch_url = parsed._replace(netloc=netloc).geturl()
-                    extra_host_header = orig_hostname  # preserve for virtual hosting
-            except socket.gaierror:
-                pass
+    import http.client
 
     ctx = ssl.create_default_context() if verify_ssl else ssl._create_unverified_context()
-    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
-    headers = [('User-Agent', 'DjangoMultiDeploySecurityScanner/1.0')]
-    if extra_host_header:
-        headers.append(('Host', extra_host_header))
-    opener.addheaders = headers
+
+    # Custom connection classes that force IPv4 at TCP level but keep original
+    # hostname for SNI (TLS) and Host header — required for nginx virtual hosting.
+    class _V4Conn(http.client.HTTPConnection):
+        def connect(self):
+            try:
+                infos = socket.getaddrinfo(self.host, self.port or 80, socket.AF_INET)
+                if infos:
+                    self.host = infos[0][4][0]
+            except socket.gaierror:
+                pass
+            super().connect()
+
+    class _V4TLSConn(http.client.HTTPSConnection):
+        def connect(self):
+            try:
+                infos = socket.getaddrinfo(self.host, self.port or 443, socket.AF_INET)
+                if infos:
+                    # Preserve original hostname for SNI before overwriting self.host
+                    if not self._server_hostname:
+                        self._server_hostname = self.host
+                    self.host = infos[0][4][0]
+            except socket.gaierror:
+                pass
+            super().connect()
+
+    class _V4HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(_V4Conn, req)
+
+    class _V4HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(_V4TLSConn, req, context=ctx)
+
+    opener = urllib.request.build_opener(_V4HTTPHandler(), _V4HTTPSHandler())
+    opener.addheaders = [('User-Agent', 'DjangoMultiDeploySecurityScanner/1.0')]
     if not follow_redirects:
         class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
                 return None
         opener.add_handler(NoRedirectHandler())
     try:
-        with opener.open(fetch_url, timeout=timeout) as resp:
+        with opener.open(url, timeout=timeout) as resp:
             hdrs = {k.lower(): v for k, v in resp.headers.items()}
             body = resp.read(4096)
-            return resp.status, hdrs, body, url, None
+            return resp.status, hdrs, body, resp.url, None
     except urllib.error.HTTPError as e:
         hdrs = {k.lower(): v for k, v in e.headers.items()} if e.headers else {}
         return e.code, hdrs, b'', url, None
