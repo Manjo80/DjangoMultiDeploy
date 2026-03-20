@@ -1756,22 +1756,26 @@ def manager_http_scan(request):
 
     target = request.GET.get('target', 'internal')
 
+    # Read manager conf once — used for both internal and external branches
+    import re as _re
+    manager_port = getattr(settings, 'MANAGER_PORT', None)
+    manager_nginx_port = getattr(settings, 'MANAGER_NGINX_PORT', None)
+    mgr_conf_path = '/etc/django-servers.d/djmanager.conf'
+    if os.path.exists(mgr_conf_path) and (not manager_port or not manager_nginx_port):
+        try:
+            with open(mgr_conf_path) as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    m = _re.match(r'GUNICORN_PORT=(\d+)', _line)
+                    if m and not manager_port:
+                        manager_port = m.group(1)
+                    m = _re.match(r'NGINX_PORT=(\d+)', _line)
+                    if m and not manager_nginx_port:
+                        manager_nginx_port = m.group(1)
+        except OSError:
+            pass
+
     if target == 'internal':
-        manager_port = getattr(settings, 'MANAGER_PORT', None)
-        if not manager_port:
-            # Try to read from env/conf
-            mgr_conf_path = '/etc/django-servers.d/djmanager.conf'
-            if os.path.exists(mgr_conf_path):
-                import re as _re
-                try:
-                    with open(mgr_conf_path) as f:
-                        for line in f:
-                            m = _re.match(r'GUNICORN_PORT=(\d+)', line.strip())
-                            if m:
-                                manager_port = m.group(1)
-                                break
-                except OSError:
-                    pass
         if not manager_port:
             # Fallback: use the request host
             host = request.get_host().split(':')[0]
@@ -1788,8 +1792,20 @@ def manager_http_scan(request):
             url_host = f'[{hostname}]' if isinstance(addr, ipaddress.IPv6Address) else hostname
         except ValueError:
             url_host = hostname
-        url = f'https://{url_host}/'
-        result = run_http_security_scan(url, hostname=hostname, check_tls=True)
+        # Use configured nginx port (like project scans) — not always 443
+        nginx_port = str(manager_nginx_port or '443').strip()
+        if nginx_port == '443':
+            url = f'https://{url_host}/'
+            check_tls = True
+        elif nginx_port == '80':
+            url = f'http://{url_host}/'
+            check_tls = False
+        else:
+            # Custom port: assume HTTPS if port looks like a TLS port, else HTTP
+            check_tls = nginx_port in ('8443', '4443')
+            scheme = 'https' if check_tls else 'http'
+            url = f'{scheme}://{url_host}:{nginx_port}/'
+        result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
 
     return JsonResponse(result)
 
