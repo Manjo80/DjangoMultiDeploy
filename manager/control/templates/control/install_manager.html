@@ -70,12 +70,15 @@
                 <i class="bi bi-play-circle me-1"></i> Weiter
               </a>
               {% endif %}
-              <a href="{% url 'install_stream' inst.log_name %}?offset=0"
+              <a href="{% url 'install_progress' inst.project inst.run_id %}"
                  class="btn btn-sm btn-outline-secondary" target="_blank" title="Log anzeigen">
                 <i class="bi bi-file-text"></i>
               </a>
               <button class="btn btn-sm btn-outline-danger"
-                      onclick="killInstall('{{ inst.project }}', '{{ inst.run_id }}')"
+                      data-kill-url="{% url 'install_kill' inst.project inst.run_id %}"
+                      data-project="{{ inst.project }}"
+                      data-run-id="{{ inst.run_id }}"
+                      onclick="killInstall(this)"
                       title="Installation abbrechen und Log löschen">
                 <i class="bi bi-trash"></i>
               </button>
@@ -97,10 +100,12 @@
 <script>
 const csrfToken = '{{ csrf_token }}';
 
-async function killInstall(project, runId) {
+async function killInstall(btn) {
+  const project = btn.dataset.project;
+  const runId   = btn.dataset.runId;
+  const url     = btn.dataset.killUrl;
   if (!confirm(`Installation von "${project}" (${runId}) wirklich abbrechen und Log löschen?`)) return;
 
-  const url = `/control/install/kill/${project}/${runId}/`;
   try {
     const r = await fetch(url, {
       method: 'POST',
