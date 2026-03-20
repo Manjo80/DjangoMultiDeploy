@@ -1694,8 +1694,18 @@ def _resolve_connect_ip(hostname, port):
             return None, None
         ipv4 = infos[0][4][0]
         local_ips = _get_local_ips()
-        connect_ip = '127.0.0.1' if ipv4 in local_ips else ipv4
-        return connect_ip, ipv4
+        if ipv4 in local_ips:
+            return '127.0.0.1', ipv4
+        # The resolved IP is not in local_ips — this can happen when the server
+        # is behind NAT and only has a private interface IP (hostname -I returns
+        # e.g. 10.x.x.x) while gps2.famhub.eu resolves to the public IP.
+        # Probe loopback: if nginx is listening on this port locally, use 127.0.0.1.
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=2):
+                return '127.0.0.1', ipv4
+        except OSError:
+            pass
+        return ipv4, ipv4
     except socket.gaierror:
         return None, None
 
