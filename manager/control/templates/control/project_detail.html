@@ -440,6 +440,54 @@
     </div>
   </div>
 
+  <!-- HTTP / TLS Sicherheitsscan -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-globe2 me-1"></i>HTTP / TLS Security Scan
+        <span class="text-muted small ms-2">— Headers, TLS, Cookies, Konfigurationslecks</span>
+      </div>
+      <div class="card-body">
+
+        <!-- Target-Auswahl -->
+        <div class="mb-3">
+          <label class="form-label small text-muted">Scan-Ziel auswählen:</label>
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <button class="btn btn-sm btn-outline-secondary active" id="http-scan-btn-internal"
+                    onclick="runHttpScan('internal')">
+              <i class="bi bi-hdd-network me-1"></i>Intern (Gunicorn Port {{ conf.GUNICORN_PORT }})
+            </button>
+            {% for h in nginx_names %}
+            <button class="btn btn-sm btn-outline-info" id="http-scan-btn-{{ forloop.counter }}"
+                    onclick="runHttpScan('{{ h }}')">
+              <i class="bi bi-globe me-1"></i>{{ h }}
+            </button>
+            {% endfor %}
+            {% for h in allowed_hosts %}
+              {% if h != 'localhost' and h != '127.0.0.1' and not h|slice:":1" == "." %}
+            <button class="btn btn-sm btn-outline-info" id="http-scan-btn-ah-{{ forloop.counter }}"
+                    onclick="runHttpScan('{{ h }}')">
+              <i class="bi bi-globe me-1"></i>{{ h }}
+            </button>
+              {% endif %}
+            {% endfor %}
+          </div>
+          <div class="form-text">
+            <i class="bi bi-info-circle me-1"></i>
+            Intern = direkter Gunicorn-Zugriff (kein TLS). Extern = HTTPS über den Hostnamen.
+          </div>
+        </div>
+
+        <!-- Spinner + Output -->
+        <div id="http-scan-loading" class="d-none text-muted small mb-2">
+          <span class="spinner-border spinner-border-sm me-1"></span>
+          Scanne... (TLS + Header + Cookies + Config-Leaks)
+        </div>
+        <div id="http-scan-output"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Migration-Status (lazy-loaded) -->
   <div class="col-12">
     <div class="card">
@@ -1206,6 +1254,270 @@ async function upgradePkg(pkgName, btn) {
     btn.disabled = false;
     btn.innerHTML = origHtml;
   }
+}
+</script>
+
+<!-- HTTP/TLS Security Scan JS -->
+<script>
+const httpScanBaseUrl = "{% url 'project_http_scan' name %}";
+
+async function runHttpScan(target) {
+  const loading = document.getElementById('http-scan-loading');
+  const output  = document.getElementById('http-scan-output');
+
+  // Highlight active button
+  document.querySelectorAll('[id^="http-scan-btn"]').forEach(b => b.classList.remove('active'));
+  const activeBtn = document.getElementById(
+    target === 'internal' ? 'http-scan-btn-internal' : null
+  );
+  // Mark all matching buttons
+  document.querySelectorAll('[id^="http-scan-btn"]').forEach(b => {
+    if ((target === 'internal' && b.id === 'http-scan-btn-internal') ||
+        b.textContent.trim().includes(target)) {
+      b.classList.add('active');
+    }
+  });
+
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+
+  const url = httpScanBaseUrl + '?target=' + encodeURIComponent(target);
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    loading.classList.add('d-none');
+    if (d.error && !d.headers.length && !d.cookies.length) {
+      output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      return;
+    }
+    output.innerHTML = renderHttpScanResult(d);
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Verbindungsfehler: ${e.message}</div>`;
+  }
+}
+
+function severityBadge(s) {
+  const map = {
+    critical: 'danger',
+    high:     'danger',
+    medium:   'warning',
+    low:      'secondary',
+    info:     'info',
+    ok:       'success',
+    warning:  'warning',
+  };
+  const icons = {
+    critical: 'exclamation-octagon-fill',
+    high:     'exclamation-triangle-fill',
+    medium:   'exclamation-circle',
+    low:      'info-circle',
+    info:     'info-circle',
+    ok:       'check-circle-fill',
+    warning:  'exclamation-circle',
+  };
+  const labels = {
+    critical: 'Kritisch',
+    high:     'Hoch',
+    medium:   'Mittel',
+    low:      'Niedrig',
+    info:     'Info',
+    ok:       'OK',
+    warning:  'Warnung',
+  };
+  const cls = map[s] || 'secondary';
+  const icon = icons[s] || 'info-circle';
+  const label = labels[s] || s;
+  return `<span class="badge bg-${cls} text-${cls === 'warning' ? 'dark' : 'white'}"><i class="bi bi-${icon} me-1"></i>${label}</span>`;
+}
+
+function renderSummaryBar(summary) {
+  const items = [
+    {key: 'critical', label: 'Kritisch', cls: 'danger'},
+    {key: 'high',     label: 'Hoch',     cls: 'danger'},
+    {key: 'medium',   label: 'Mittel',   cls: 'warning'},
+    {key: 'low',      label: 'Niedrig',  cls: 'secondary'},
+    {key: 'info',     label: 'Info',     cls: 'info'},
+    {key: 'ok',       label: 'OK',       cls: 'success'},
+  ];
+  let html = '<div class="d-flex flex-wrap gap-2 mb-3">';
+  let allOk = true;
+  for (const item of items) {
+    const cnt = summary[item.key] || 0;
+    if (cnt > 0 && item.key !== 'ok') allOk = false;
+    if (cnt > 0) {
+      html += `<span class="badge bg-${item.cls} text-${item.cls === 'warning' ? 'dark' : 'white'} fs-6 px-2 py-1">
+        ${item.label}: ${cnt}
+      </span>`;
+    }
+  }
+  if (allOk) {
+    html += '<span class="badge bg-success fs-6 px-2 py-1"><i class="bi bi-shield-check me-1"></i>Alles OK</span>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderHttpScanResult(d) {
+  let html = '';
+
+  // Error banner (non-fatal)
+  if (d.error) {
+    html += `<div class="alert alert-warning small py-2 mb-3"><i class="bi bi-exclamation-circle me-1"></i>${d.error}</div>`;
+  }
+
+  // Summary
+  html += renderSummaryBar(d.summary || {});
+
+  // Target info
+  html += `<div class="text-muted small mb-3">
+    <i class="bi bi-bullseye me-1"></i>Ziel: <code>${d.target_url}</code>
+    ${d.http_status ? `&nbsp;· Status: <strong>${d.http_status}</strong>` : ''}
+  </div>`;
+
+  // ── TLS ────────────────────────────────────────────────────────────────
+  if (d.tls) {
+    const t = d.tls;
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-lock me-1"></i>TLS / Zertifikat</h6>';
+    if (t.error && !t.reachable) {
+      html += `<div class="alert alert-danger small py-2">${t.error}</div>`;
+    } else {
+      html += '<table class="table table-sm table-dark mb-3">';
+      html += `<tr><th class="text-muted w-25">TLS Version</th><td>`;
+      if (t.tls_version) {
+        const old = ['TLSv1', 'TLSv1.1', 'SSLv2', 'SSLv3'].includes(t.tls_version);
+        html += `<span class="${old ? 'text-danger' : 'text-success'}">${t.tls_version}</span>`;
+        if (old) html += ' <span class="badge bg-danger ms-1">Veraltet!</span>';
+      } else {
+        html += '<span class="text-muted">—</span>';
+      }
+      html += '</td></tr>';
+      html += `<tr><th class="text-muted">Cipher</th><td><code>${t.cipher || '—'}</code></td></tr>`;
+      html += `<tr><th class="text-muted">Zertifikat</th><td>`;
+      if (t.cert_valid) {
+        html += `<span class="text-success"><i class="bi bi-check-circle me-1"></i>Gültig</span>`;
+        if (t.cert_days_left !== null) {
+          const daysClass = t.cert_days_left < 14 ? 'text-danger' : t.cert_days_left < 30 ? 'text-warning' : 'text-success';
+          html += ` <span class="${daysClass} ms-1">(noch ${t.cert_days_left} Tage, läuft ab: ${t.cert_expiry})</span>`;
+        }
+      } else {
+        html += `<span class="text-danger"><i class="bi bi-x-circle me-1"></i>Ungültig</span>`;
+        if (t.error) html += ` <span class="text-muted small">${t.error}</span>`;
+      }
+      html += '</td></tr>';
+      if (t.cert_subject) html += `<tr><th class="text-muted">Subject</th><td><code>${t.cert_subject}</code></td></tr>`;
+      if (t.cert_issuer)  html += `<tr><th class="text-muted">Aussteller</th><td><code>${t.cert_issuer}</code></td></tr>`;
+      html += '</table>';
+    }
+  }
+
+  // ── HTTP → HTTPS Redirect ──────────────────────────────────────────────
+  if (d.http_redirect) {
+    const rr = d.http_redirect;
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-arrow-right-circle me-1"></i>HTTP → HTTPS Weiterleitung</h6>';
+    if (!rr.available) {
+      html += `<div class="alert alert-secondary small py-2">Port 80 nicht erreichbar (${rr.error || 'keine Verbindung'})</div>`;
+    } else if (rr.redirects_to_https) {
+      html += `<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950">
+        <i class="bi bi-check-circle me-1"></i>HTTP leitet korrekt zu HTTPS weiter (${rr.status} → ${rr.location})
+      </div>`;
+    } else {
+      html += `<div class="alert alert-danger small py-2">
+        <i class="bi bi-exclamation-triangle me-1"></i>
+        HTTP (Port 80) leitet <strong>nicht</strong> zu HTTPS weiter!
+        Status: ${rr.status}${rr.location ? ' Location: ' + rr.location : ''}
+      </div>`;
+    }
+  }
+
+  // ── Security Headers ───────────────────────────────────────────────────
+  if (d.headers && d.headers.length) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-layout-text-window me-1"></i>HTTP Security Headers</h6>';
+    html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    for (const h of d.headers) {
+      const rowClass = h.severity === 'ok' ? '' :
+                       h.severity === 'low' ? 'text-muted' :
+                       h.severity === 'medium' ? 'table-warning' :
+                       ['high','critical'].includes(h.severity) ? 'table-danger' : '';
+      html += `<tr class="${rowClass}">
+        <td class="font-monospace small text-nowrap">${h.header}</td>
+        <td class="text-nowrap">${severityBadge(h.severity)}</td>
+        <td class="small">`;
+      if (h.value && h.status !== 'missing') {
+        html += `<code class="d-block text-truncate" style="max-width:380px" title="${h.value}">${h.value}</code>`;
+      }
+      if (h.msg && h.status !== 'ok') {
+        html += `<span class="text-muted">${h.msg}</span>`;
+      }
+      html += '</td></tr>';
+    }
+    html += '</tbody></table></div>';
+  }
+
+  // ── Cookies ────────────────────────────────────────────────────────────
+  if (d.cookies && d.cookies.length) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-cookie me-1"></i>Cookie-Sicherheit</h6>';
+    for (const ck of d.cookies) {
+      const hasIssues = ck.issues && ck.issues.length > 0;
+      html += `<div class="card mb-2 ${hasIssues ? 'border-warning' : 'border-success'} bg-transparent">
+        <div class="card-body py-2 small">
+          <strong class="font-monospace">${ck.name}</strong>
+          <span class="ms-2">`;
+      // Flags
+      const flagHtml = (flag, present) =>
+        `<span class="badge ${present ? 'bg-success' : 'bg-danger'} me-1">${flag}: ${present ? '✓' : '✗'}</span>`;
+      html += flagHtml('Secure', ck.flags.secure);
+      html += flagHtml('HttpOnly', ck.flags.httponly);
+      html += ck.flags.samesite
+        ? `<span class="badge bg-success me-1">SameSite: ${ck.flags.samesite}</span>`
+        : `<span class="badge bg-danger me-1">SameSite: ✗</span>`;
+      html += '</span>';
+      if (hasIssues) {
+        html += '<ul class="mt-1 mb-0 ps-3">';
+        for (const issue of ck.issues) {
+          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg}</li>`;
+        }
+        html += '</ul>';
+      }
+      html += '</div></div>';
+    }
+  }
+
+  // ── Config Leaks ───────────────────────────────────────────────────────
+  if (d.config_leaks && d.config_leaks.length) {
+    const realLeaks = d.config_leaks.filter(l => l.severity !== 'info');
+    const infoLeaks = d.config_leaks.filter(l => l.severity === 'info');
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-file-earmark-lock me-1"></i>Konfigurationslecks / Exponierte Dateien</h6>';
+    if (realLeaks.length) {
+      html += '<div class="list-group mb-2">';
+      for (const l of realLeaks) {
+        const cls = l.severity === 'critical' ? 'list-group-item-danger' : 'list-group-item-warning';
+        html += `<div class="list-group-item list-group-item-dark ${cls} small py-2">
+          ${severityBadge(l.severity)}
+          <strong class="font-monospace ms-1">${l.path}</strong>
+          <span class="text-muted ms-1">(${l.label}, HTTP ${l.status})</span>
+          ${l.note ? `<div class="mt-1 text-danger"><i class="bi bi-exclamation-triangle me-1"></i>${l.note}</div>` : ''}
+        </div>`;
+      }
+      html += '</div>';
+    }
+    if (infoLeaks.length) {
+      html += '<div class="text-muted small">';
+      for (const l of infoLeaks) {
+        html += `<span class="badge bg-secondary me-1">${l.path} (${l.status})</span>`;
+      }
+      html += '</div>';
+    }
+    if (!realLeaks.length && !infoLeaks.length) {
+      html += '<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Konfigurationslecks gefunden.</div>';
+    }
+  } else if (d.config_leaks !== undefined) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-file-earmark-lock me-1"></i>Konfigurationslecks</h6>';
+    html += '<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Konfigurationslecks gefunden.</div>';
+  }
+
+  return html;
 }
 </script>
 

@@ -7,6 +7,11 @@ import json
 import subprocess
 import glob
 import shlex
+import ssl
+import socket
+import urllib.request
+import urllib.error
+import datetime
 from pathlib import Path
 from django.conf import settings
 
@@ -1637,3 +1642,390 @@ def run_pip_upgrade(name, package_name):
         return {'ok': False, 'output': 'Timeout nach 180 Sekunden'}
     except Exception as e:
         return {'ok': False, 'output': str(e)}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HTTP / TLS Security Scan
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
+    """
+    Fetch a URL and return (status_code, headers_dict, body_bytes, final_url, error).
+    headers_dict keys are lowercased.
+    """
+    ctx = ssl.create_default_context() if verify_ssl else ssl._create_unverified_context()
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+    opener.addheaders = [('User-Agent', 'DjangoMultiDeploySecurityScanner/1.0')]
+    if not follow_redirects:
+        class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        opener.add_handler(NoRedirectHandler())
+    try:
+        with opener.open(url, timeout=timeout) as resp:
+            hdrs = {k.lower(): v for k, v in resp.headers.items()}
+            body = resp.read(4096)
+            return resp.status, hdrs, body, resp.url, None
+    except urllib.error.HTTPError as e:
+        hdrs = {k.lower(): v for k, v in e.headers.items()} if e.headers else {}
+        return e.code, hdrs, b'', url, None
+    except urllib.error.URLError as e:
+        return None, {}, b'', url, str(e.reason)
+    except Exception as e:
+        return None, {}, b'', url, str(e)
+
+
+def _check_tls(hostname, port=443):
+    """Return TLS info dict for hostname:port."""
+    result = {
+        'reachable': False,
+        'tls_version': None,
+        'cipher': None,
+        'cert_valid': False,
+        'cert_expiry': None,
+        'cert_days_left': None,
+        'cert_subject': None,
+        'cert_issuer': None,
+        'error': None,
+    }
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((hostname, port), timeout=10) as sock:
+            with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+                result['reachable'] = True
+                result['tls_version'] = ssock.version()
+                cipher = ssock.cipher()
+                result['cipher'] = cipher[0] if cipher else None
+                cert = ssock.getpeercert()
+                # Subject
+                subj = dict(x[0] for x in cert.get('subject', []))
+                result['cert_subject'] = subj.get('commonName', '')
+                issuer = dict(x[0] for x in cert.get('issuer', []))
+                result['cert_issuer'] = issuer.get('organizationName', issuer.get('commonName', ''))
+                # Expiry
+                not_after = cert.get('notAfter', '')
+                if not_after:
+                    exp = datetime.datetime.strptime(not_after, '%b %d %H:%M:%S %Y %Z')
+                    result['cert_expiry'] = exp.strftime('%Y-%m-%d')
+                    result['cert_days_left'] = (exp - datetime.datetime.utcnow()).days
+                result['cert_valid'] = True
+    except ssl.SSLCertVerificationError as e:
+        result['reachable'] = True
+        result['cert_valid'] = False
+        result['error'] = f'Zertifikat ungültig: {e}'
+    except ConnectionRefusedError:
+        result['error'] = 'Verbindung abgelehnt'
+    except socket.timeout:
+        result['error'] = 'Timeout'
+    except Exception as e:
+        result['error'] = str(e)
+    return result
+
+
+def _check_config_leaks(base_url, timeout=8):
+    """Check for common configuration / sensitive file leaks."""
+    PATHS = [
+        ('/.env',              'Env-Datei (.env)'),
+        ('/.env.local',        '.env.local'),
+        ('/.env.production',   '.env.production'),
+        ('/.git/HEAD',         'Git-Repository (.git/HEAD)'),
+        ('/.git/config',       'Git-Konfiguration (.git/config)'),
+        ('/backup.zip',        'Backup-Archiv (backup.zip)'),
+        ('/backup.tar.gz',     'Backup-Archiv (backup.tar.gz)'),
+        ('/db.sqlite3',        'SQLite-Datenbank (db.sqlite3)'),
+        ('/phpinfo.php',       'phpinfo.php'),
+        ('/wp-login.php',      'WordPress-Login (wp-login.php)'),
+        ('/admin/login/',      'Django-Admin erreichbar'),
+        ('/djadmin/',          'Django-Admin (djadmin/) erreichbar'),
+        ('/robots.txt',        'robots.txt (Info)'),
+    ]
+    leaks = []
+    for path, label in PATHS:
+        url = base_url.rstrip('/') + path
+        status, hdrs, body, _, err = _http_get(url, timeout=timeout, verify_ssl=False)
+        if err:
+            continue
+        if status in (200, 301, 302):
+            severity = 'critical'
+            note = ''
+            if path in ('/robots.txt', '/admin/login/', '/djadmin/'):
+                severity = 'info'
+            elif path.startswith('/.git'):
+                severity = 'critical'
+                note = 'Git-History enthält möglicherweise Secrets und Code-History!'
+            elif path == '/.env':
+                severity = 'critical'
+                note = 'Env-Datei öffentlich zugänglich — Secrets exponiert!'
+            leaks.append({
+                'path': path,
+                'label': label,
+                'status': status,
+                'severity': severity,
+                'note': note,
+            })
+    return leaks
+
+
+def _check_security_headers(headers):
+    """Analyse response headers and return list of findings."""
+    findings = []
+
+    def check(name, severity, present_ok, absent_msg, value_check_fn=None, ok_msg=None):
+        val = headers.get(name.lower())
+        if val is None:
+            findings.append({'header': name, 'severity': severity, 'status': 'missing',
+                             'value': None, 'msg': absent_msg})
+        else:
+            if value_check_fn:
+                warn = value_check_fn(val)
+                if warn:
+                    findings.append({'header': name, 'severity': 'warning', 'status': 'weak',
+                                     'value': val, 'msg': warn})
+                else:
+                    findings.append({'header': name, 'severity': 'ok', 'status': 'ok',
+                                     'value': val, 'msg': ok_msg or 'OK'})
+            else:
+                findings.append({'header': name, 'severity': 'ok', 'status': 'ok',
+                                 'value': val, 'msg': ok_msg or 'OK'})
+
+    # Strict-Transport-Security
+    check('Strict-Transport-Security', 'high',
+          present_ok=True,
+          absent_msg='HSTS fehlt — Browser kann unverschlüsselt verbinden.',
+          value_check_fn=lambda v: (
+              'max-age zu kurz (empfohlen ≥ 31536000)'
+              if 'max-age' in v.lower() and any(
+                  int(p.split('=')[1]) < 31536000
+                  for p in v.lower().split(';')
+                  if 'max-age=' in p and p.split('=')[1].strip().isdigit()
+              ) else None
+          ))
+
+    # Content-Security-Policy
+    def csp_check(v):
+        warnings = []
+        vl = v.lower()
+        if 'unsafe-inline' in vl:
+            warnings.append("'unsafe-inline' erlaubt XSS")
+        if 'unsafe-eval' in vl:
+            warnings.append("'unsafe-eval' erlaubt Code-Injection")
+        if not warnings:
+            return None
+        return '; '.join(warnings)
+
+    check('Content-Security-Policy', 'high',
+          present_ok=True,
+          absent_msg='CSP fehlt — kein Schutz gegen XSS und Dateninjektionen.',
+          value_check_fn=csp_check)
+
+    # X-Frame-Options
+    check('X-Frame-Options', 'medium',
+          present_ok=True,
+          absent_msg='X-Frame-Options fehlt — Clickjacking möglich.',
+          value_check_fn=lambda v: (
+              None if v.upper() in ('DENY', 'SAMEORIGIN') else
+              f'Wert "{v}" unbekannt. Empfohlen: DENY oder SAMEORIGIN.'
+          ))
+
+    # X-Content-Type-Options
+    check('X-Content-Type-Options', 'medium',
+          present_ok=True,
+          absent_msg='X-Content-Type-Options fehlt — MIME-Sniffing möglich.',
+          value_check_fn=lambda v: (
+              None if v.lower() == 'nosniff' else f'Wert "{v}" — sollte "nosniff" sein.'
+          ))
+
+    # Referrer-Policy
+    check('Referrer-Policy', 'low',
+          present_ok=True,
+          absent_msg='Referrer-Policy fehlt — URLs können an externe Seiten gesendet werden.')
+
+    # Permissions-Policy
+    check('Permissions-Policy', 'low',
+          present_ok=True,
+          absent_msg='Permissions-Policy fehlt — Browser-Features nicht eingeschränkt.')
+
+    # X-XSS-Protection (deprecated but informative)
+    xss = headers.get('x-xss-protection')
+    if xss and xss.strip() == '0':
+        findings.append({'header': 'X-XSS-Protection', 'severity': 'info', 'status': 'ok',
+                         'value': xss, 'msg': 'Auf 0 gesetzt (browser-seitig deaktiviert, CSP bevorzugt)'})
+
+    # Server header (version leak)
+    server = headers.get('server')
+    if server:
+        import re
+        if re.search(r'[\d.]', server):
+            findings.append({'header': 'Server', 'severity': 'low', 'status': 'weak',
+                             'value': server,
+                             'msg': 'Server-Header enthält Versionsinfos — per nginx: server_tokens off;'})
+        else:
+            findings.append({'header': 'Server', 'severity': 'ok', 'status': 'ok',
+                             'value': server, 'msg': 'Kein Versions-Leak.'})
+
+    # X-Powered-By
+    powered = headers.get('x-powered-by')
+    if powered:
+        findings.append({'header': 'X-Powered-By', 'severity': 'low', 'status': 'weak',
+                         'value': powered,
+                         'msg': 'X-Powered-By gibt Technologie-Infos preis — sollte entfernt werden.'})
+
+    return findings
+
+
+def _check_cookies(headers):
+    """Parse Set-Cookie headers and check security flags."""
+    # urllib gives us a single 'set-cookie' header (comma-joined for multiple)
+    raw = headers.get('set-cookie', '')
+    if not raw:
+        return []
+    findings = []
+    # Split multiple cookies (naive but sufficient for most cases)
+    cookies = [c.strip() for c in raw.split('\n') if c.strip()]
+    if not cookies:
+        cookies = [raw]
+    for cookie in cookies:
+        parts = [p.strip().lower() for p in cookie.split(';')]
+        name = cookie.split('=')[0].strip()
+        flags = {
+            'secure': any(p == 'secure' for p in parts),
+            'httponly': any(p == 'httponly' for p in parts),
+            'samesite': next((p.split('=')[1] for p in parts if p.startswith('samesite=')), None),
+        }
+        issues = []
+        if not flags['secure']:
+            issues.append({'flag': 'Secure', 'severity': 'high',
+                          'msg': 'Secure-Flag fehlt — Cookie wird auch über HTTP gesendet.'})
+        if not flags['httponly']:
+            issues.append({'flag': 'HttpOnly', 'severity': 'medium',
+                          'msg': 'HttpOnly-Flag fehlt — Cookie per JavaScript auslesbar (XSS-Risiko).'})
+        if not flags['samesite']:
+            issues.append({'flag': 'SameSite', 'severity': 'medium',
+                          'msg': 'SameSite-Flag fehlt — CSRF-Risiko erhöht.'})
+        elif flags['samesite'] == 'none' and not flags['secure']:
+            issues.append({'flag': 'SameSite=None', 'severity': 'high',
+                          'msg': 'SameSite=None ohne Secure-Flag ist ungültig.'})
+        findings.append({'name': name, 'issues': issues, 'flags': flags})
+    return findings
+
+
+def _check_http_redirect(hostname, port=80):
+    """Check if HTTP (port 80) redirects to HTTPS."""
+    url = f'http://{hostname}:{port}/'
+    try:
+        status, hdrs, _, _, err = _http_get(url, timeout=8, verify_ssl=False, follow_redirects=False)
+        if err:
+            return {'available': False, 'redirects_to_https': False, 'error': err}
+        location = hdrs.get('location', '')
+        redirects = status in (301, 302, 307, 308) and location.startswith('https://')
+        return {
+            'available': True,
+            'status': status,
+            'redirects_to_https': redirects,
+            'location': location,
+            'error': None,
+        }
+    except Exception as e:
+        return {'available': False, 'redirects_to_https': False, 'error': str(e)}
+
+
+def run_http_security_scan(target_url, hostname=None, check_tls=True):
+    """
+    Comprehensive HTTP security scan for a target URL.
+
+    Returns a dict with:
+      - tls: TLS/certificate info (if check_tls and HTTPS)
+      - http_redirect: HTTP→HTTPS redirect check
+      - headers: security header findings
+      - cookies: cookie flag analysis
+      - config_leaks: sensitive file exposure
+      - summary: {'critical': int, 'high': int, 'medium': int, 'low': int, 'ok': int}
+      - error: str or None (fatal error preventing scan)
+    """
+    result = {
+        'target_url': target_url,
+        'tls': None,
+        'http_redirect': None,
+        'headers': [],
+        'cookies': [],
+        'config_leaks': [],
+        'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0, 'ok': 0},
+        'error': None,
+    }
+
+    is_https = target_url.startswith('https://')
+
+    # 1. TLS check
+    if check_tls and is_https and hostname:
+        result['tls'] = _check_tls(hostname, port=443)
+
+    # 2. HTTP → HTTPS redirect check
+    if hostname and is_https:
+        result['http_redirect'] = _check_http_redirect(hostname, port=80)
+
+    # 3. Fetch the target URL for headers + cookies
+    status, hdrs, body, final_url, err = _http_get(
+        target_url, timeout=12, verify_ssl=False, follow_redirects=True
+    )
+    if err or status is None:
+        result['error'] = f'Verbindungsfehler: {err or "keine Antwort"}'
+        return result
+
+    result['http_status'] = status
+    result['final_url'] = final_url
+
+    # 4. Security headers
+    result['headers'] = _check_security_headers(hdrs)
+
+    # 5. Cookies
+    result['cookies'] = _check_cookies(hdrs)
+
+    # 6. Config / file leaks
+    base_url = target_url.rstrip('/')
+    # Use root base
+    from urllib.parse import urlparse
+    parsed = urlparse(base_url)
+    scan_base = f'{parsed.scheme}://{parsed.netloc}'
+    result['config_leaks'] = _check_config_leaks(scan_base, timeout=6)
+
+    # 7. Summary
+    sev_count = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0, 'ok': 0, 'warning': 0}
+
+    for h in result['headers']:
+        s = h.get('severity', 'info')
+        sev_count[s] = sev_count.get(s, 0) + 1
+
+    for ck in result['cookies']:
+        for issue in ck.get('issues', []):
+            s = issue.get('severity', 'medium')
+            sev_count[s] = sev_count.get(s, 0) + 1
+
+    for leak in result['config_leaks']:
+        s = leak.get('severity', 'high')
+        if s == 'critical':
+            sev_count['critical'] += 1
+        elif s == 'info':
+            sev_count['info'] += 1
+        else:
+            sev_count['high'] += 1
+
+    if result['tls']:
+        tls = result['tls']
+        if not tls.get('cert_valid'):
+            sev_count['critical'] += 1
+        elif tls.get('cert_days_left') is not None and tls['cert_days_left'] < 30:
+            sev_count['high'] += 1
+        elif tls.get('cert_days_left') is not None and tls['cert_days_left'] < 14:
+            sev_count['critical'] += 1
+        ver = tls.get('tls_version', '')
+        if ver in ('TLSv1', 'TLSv1.1', 'SSLv3', 'SSLv2'):
+            sev_count['high'] += 1
+
+    if result['http_redirect'] and result['http_redirect'].get('available'):
+        if not result['http_redirect'].get('redirects_to_https'):
+            sev_count['high'] += 1
+
+    # merge warning into medium for display
+    sev_count['medium'] = sev_count.get('medium', 0) + sev_count.pop('warning', 0)
+    result['summary'] = sev_count
+    return result
