@@ -1708,7 +1708,17 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
     """
     import http.client
 
-    ctx = ssl.create_default_context() if verify_ssl else ssl._create_unverified_context()
+    if verify_ssl:
+        ctx = ssl.create_default_context()
+    else:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        # Allow broader cipher compatibility — needed for self-signed certs with older key sizes
+        try:
+            ctx.set_ciphers('DEFAULT:@SECLEVEL=1')
+        except ssl.SSLError:
+            pass
 
     # Custom connection classes that force IPv4 at TCP level but keep original
     # hostname for SNI (TLS) and Host header — required for nginx virtual hosting.
