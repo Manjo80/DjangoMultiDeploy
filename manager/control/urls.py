@@ -84,4 +84,8 @@ urlpatterns = [
     path('manager/action/', views.manager_action, name='manager_action'),
     path('manager/update/', views.manager_update, name='manager_update'),
     path('manager/security-scan/', views.manager_security_scan, name='manager_security_scan'),
+    path('manager/http-scan/', views.manager_http_scan, name='manager_http_scan'),
+
+    # HTTP/TLS security scan per project
+    path('project/<str:name>/http-scan/', views.project_http_scan, name='project_http_scan'),
 ]

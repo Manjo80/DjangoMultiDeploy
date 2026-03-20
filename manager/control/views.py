@@ -43,6 +43,7 @@ from .utils import (
     sync_env_to_conf,
     get_ufw_port_rules, ufw_toggle_port,
     run_migration_status, run_pip_outdated, run_pip_upgrade,
+    run_http_security_scan,
 )
 
 
@@ -1648,6 +1649,78 @@ def manager_security_scan(request):
         'pip_audit':    pip_results,
         'deploy_check': deploy_issues,
     })
+
+
+@login_required
+def project_http_scan(request, name):
+    """
+    HTTP/TLS security scan for a project.
+    GET params:
+      target=internal|<hostname>   (default: internal)
+    """
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+
+    conf = get_project(name)
+    if not conf:
+        return JsonResponse({'error': 'Projekt nicht gefunden'}, status=404)
+
+    target = request.GET.get('target', 'internal')
+
+    if target == 'internal':
+        port = conf.get('GUNICORN_PORT', '')
+        if not port:
+            return JsonResponse({'error': 'Kein Gunicorn-Port konfiguriert'}, status=400)
+        url = f'http://127.0.0.1:{port}/'
+        result = run_http_security_scan(url, hostname=None, check_tls=False)
+    else:
+        # target is a hostname
+        hostname = target
+        # Prefer HTTPS
+        url = f'https://{hostname}/'
+        result = run_http_security_scan(url, hostname=hostname, check_tls=True)
+
+    return JsonResponse(result)
+
+
+@login_required
+def manager_http_scan(request):
+    """HTTP/TLS security scan for the manager itself."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+
+    target = request.GET.get('target', 'internal')
+
+    if target == 'internal':
+        manager_port = getattr(settings, 'MANAGER_PORT', None)
+        if not manager_port:
+            # Try to read from env/conf
+            mgr_conf_path = '/etc/django-servers.d/djmanager.conf'
+            if os.path.exists(mgr_conf_path):
+                import re as _re
+                try:
+                    with open(mgr_conf_path) as f:
+                        for line in f:
+                            m = _re.match(r'GUNICORN_PORT=(\d+)', line.strip())
+                            if m:
+                                manager_port = m.group(1)
+                                break
+                except OSError:
+                    pass
+        if not manager_port:
+            # Fallback: use the request host
+            host = request.get_host().split(':')[0]
+            url = f'http://{host}/'
+            result = run_http_security_scan(url, hostname=None, check_tls=False)
+        else:
+            url = f'http://127.0.0.1:{manager_port}/'
+            result = run_http_security_scan(url, hostname=None, check_tls=False)
+    else:
+        hostname = target
+        url = f'https://{hostname}/'
+        result = run_http_security_scan(url, hostname=hostname, check_tls=True)
+
+    return JsonResponse(result)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
