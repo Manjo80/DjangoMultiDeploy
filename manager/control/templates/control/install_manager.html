@@ -1,0 +1,124 @@
+{% extends "control/base.html" %}
+{% block title %}Installationen verwalten — DjangoMultiDeploy{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2><i class="bi bi-list-task me-2"></i>Installationen verwalten</h2>
+  <div class="d-flex gap-2">
+    <a href="{% url 'install_manager' %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-clockwise me-1"></i> Aktualisieren
+    </a>
+    <a href="{% url 'install_form' %}" class="btn btn-success btn-sm">
+      <i class="bi bi-plus-circle me-1"></i> Neue Installation
+    </a>
+  </div>
+</div>
+
+{% if not installs %}
+<div class="alert alert-secondary">
+  <i class="bi bi-info-circle me-2"></i>
+  Keine Installationsprotokolle vorhanden.
+</div>
+{% else %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead>
+        <tr>
+          <th>Projekt</th>
+          <th>Run-ID</th>
+          <th>Status</th>
+          <th>Zuletzt aktiv</th>
+          <th class="text-end">Aktionen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inst in installs %}
+        <tr id="row-{{ inst.run_id }}">
+          <td><strong>{{ inst.project }}</strong></td>
+          <td><code class="text-muted small">{{ inst.run_id }}</code></td>
+          <td>
+            {% if inst.status == 'laeuft' %}
+              <span class="badge bg-success">
+                <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true"></span>
+                Läuft
+              </span>
+            {% elif inst.status == 'wartet' %}
+              <span class="badge bg-warning text-dark">
+                <i class="bi bi-hourglass-split me-1"></i> Wartet auf GitHub-Key
+              </span>
+            {% elif inst.status == 'fertig' %}
+              <span class="badge bg-secondary">
+                <i class="bi bi-check-lg me-1"></i> Abgeschlossen
+              </span>
+            {% elif inst.status == 'fehler' %}
+              <span class="badge bg-danger">
+                <i class="bi bi-x-lg me-1"></i> Fehler / Abgebrochen
+              </span>
+            {% else %}
+              <span class="badge bg-secondary">
+                <i class="bi bi-question-circle me-1"></i> Unbekannt
+              </span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ inst.started }}</td>
+          <td class="text-end">
+            <div class="d-flex gap-2 justify-content-end">
+              {% if inst.status == 'laeuft' or inst.status == 'wartet' %}
+              <a href="{% url 'install_progress' inst.project inst.run_id %}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-play-circle me-1"></i> Weiter
+              </a>
+              {% endif %}
+              <a href="{% url 'install_stream' inst.log_name %}?offset=0"
+                 class="btn btn-sm btn-outline-secondary" target="_blank" title="Log anzeigen">
+                <i class="bi bi-file-text"></i>
+              </a>
+              <button class="btn btn-sm btn-outline-danger"
+                      onclick="killInstall('{{ inst.project }}', '{{ inst.run_id }}')"
+                      title="Installation abbrechen und Log löschen">
+                <i class="bi bi-trash"></i>
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="text-muted small mt-2">
+  <i class="bi bi-info-circle me-1"></i>
+  "Löschen" bricht den Prozess ab (falls noch aktiv) und entfernt das Log. Abgeschlossene Projekte bleiben im System erhalten.
+</p>
+{% endif %}
+
+<script>
+const csrfToken = '{{ csrf_token }}';
+
+async function killInstall(project, runId) {
+  if (!confirm(`Installation von "${project}" (${runId}) wirklich abbrechen und Log löschen?`)) return;
+
+  const url = `/control/install/kill/${project}/${runId}/`;
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': csrfToken },
+    });
+    if (r.ok) {
+      const row = document.getElementById(`row-${runId}`);
+      if (row) row.remove();
+      const tbody = document.querySelector('tbody');
+      if (tbody && !tbody.querySelector('tr')) {
+        location.reload();
+      }
+    } else {
+      alert('Fehler beim Abbrechen der Installation.');
+    }
+  } catch (e) {
+    alert('Verbindungsfehler.');
+  }
+}
+</script>
+{% endblock %}
