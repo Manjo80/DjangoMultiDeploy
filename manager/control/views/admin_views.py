@@ -10,6 +10,7 @@ from pathlib import Path
 
 from django.shortcuts import render, redirect
 from django.http import JsonResponse, Http404
+from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 from django.conf import settings
 
@@ -471,7 +472,6 @@ def _patch_update_script_rsync_fallback(script_path):
 @login_required
 def manager_security_scan(request):
     """Run pip-audit + manage.py check --deploy on the manager itself."""
-    from django.contrib.auth.decorators import login_required  # noqa
     if not request.user.is_staff:
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     pip_results   = run_manager_pip_audit()
@@ -534,5 +534,3 @@ def manager_http_scan(request):
     return JsonResponse(result)
 
 
-# keep login_required importable inside this module
-from django.contrib.auth.decorators import login_required  # noqa: E402
