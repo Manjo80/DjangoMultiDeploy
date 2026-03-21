@@ -1,0 +1,81 @@
+/* ── DjangoMultiDeploy Manager — Global Styles ─────────────────────────────── */
+
+/* Base */
+body { background: #0d1117; color: #e6edf3; }
+h1,h2,h3,h4,h5,h6,p,span,td,th,li,label,
+.form-label, .form-check-label, summary { color: #e6edf3; }
+.form-text { color: #8b949e !important; font-size: 0.8rem; }
+.text-muted, .text-muted * { color: #8b949e !important; }
+.border-bottom { border-color: #30363d !important; }
+
+/* Navbar */
+.navbar { background: #161b22 !important; border-bottom: 1px solid #30363d; }
+.navbar-brand { color: #58a6ff !important; font-weight: 700; }
+
+/* Cards */
+.card { background: #161b22; border: 1px solid #30363d; }
+.card-header { background: #21262d; border-bottom: 1px solid #30363d; color: #e6edf3; }
+.card-footer { background: #161b22; border-top: 1px solid #30363d; }
+details summary { color: #8b949e !important; }
+.alert-secondary { background: #21262d; border-color: #30363d; color: #e6edf3; }
+
+/* Status badges */
+.badge-active   { background: #238636; color: #fff; }
+.badge-inactive { background: #6e7681; color: #fff; }
+.badge-failed   { background: #da3633; color: #fff; }
+.badge-unknown  { background: #9e6a03; color: #fff; }
+
+/* Log / terminal output */
+pre.log-output {
+  background: #010409; border: 1px solid #30363d; color: #58a6ff;
+  font-size: 0.78rem; max-height: 600px; overflow-y: auto;
+  padding: 1rem; border-radius: 6px;
+}
+.terminal-box {
+  background: #010409; border: 1px solid #30363d; color: #3fb950;
+  font-family: monospace; font-size: 0.80rem;
+  height: 500px; overflow-y: auto; padding: 1rem; border-radius: 6px;
+}
+
+/* Form controls */
+.form-control, .form-select {
+  background: #0d1117; border-color: #30363d; color: #e6edf3;
+}
+.form-control:focus, .form-select:focus {
+  background: #0d1117; border-color: #58a6ff; color: #e6edf3;
+  box-shadow: 0 0 0 0.2rem rgba(88,166,255,0.2);
+}
+.form-select option { background: #161b22; color: #e6edf3; }
+
+/* Buttons */
+.btn-primary   { background: #238636; border-color: #238636; color: #fff !important; }
+.btn-primary:hover { background: #2ea043; border-color: #2ea043; color: #fff !important; }
+.btn-success   { background: #238636; border-color: #238636; color: #fff !important; }
+.btn-success:hover { background: #2ea043; border-color: #2ea043; color: #fff !important; }
+.btn-danger    { background: #da3633; border-color: #da3633; color: #fff !important; }
+.btn-danger:hover  { background: #b91c1a; border-color: #b91c1a; color: #fff !important; }
+.btn-outline-primary   { border-color: #58a6ff; color: #58a6ff !important; }
+.btn-outline-primary:hover   { background: #58a6ff; color: #0d1117 !important; }
+.btn-outline-secondary { border-color: #8b949e; color: #8b949e !important; }
+.btn-outline-secondary:hover { background: #8b949e; color: #0d1117 !important; }
+.btn-outline-success   { border-color: #3fb950; color: #3fb950 !important; }
+.btn-outline-success:hover   { background: #3fb950; color: #0d1117 !important; }
+.btn-outline-danger    { border-color: #f85149; color: #f85149 !important; }
+.btn-outline-danger:hover    { background: #f85149; color: #fff !important; }
+.btn-outline-warning   { border-color: #d29922; color: #d29922 !important; }
+.btn-outline-warning:hover   { background: #d29922; color: #0d1117 !important; }
+
+/* Tables */
+.table         { color: #e6edf3; }
+.table-dark    { --bs-table-bg: #0d1117; }
+
+/* Links */
+a              { color: #58a6ff; }
+a:hover        { color: #79c0ff; }
+.text-muted    { color: #8b949e !important; }
+
+/* Dropdown */
+.dropdown-menu { background: #161b22; border: 1px solid #30363d; }
+.dropdown-item { color: #e6edf3; }
+.dropdown-item:hover { background: #21262d; color: #58a6ff; }
+.dropdown-divider { border-color: #30363d; }
