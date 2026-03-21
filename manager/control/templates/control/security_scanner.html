@@ -213,14 +213,21 @@ async function runPortScan() {
   }
 
   const mode = document.querySelector('input[name="portmode"]:checked').value;
-  const from = document.getElementById('port-from').value;
-  const to   = document.getElementById('port-to').value;
+  let fromVal = parseInt(document.getElementById('port-from').value, 10);
+  let toVal   = parseInt(document.getElementById('port-to').value, 10);
+  if (isNaN(fromVal) || fromVal < 1)     fromVal = 1;
+  if (isNaN(toVal)   || toVal  < 1)     toVal   = 1024;
+  if (fromVal > 65535) fromVal = 65535;
+  if (toVal   > 65535) toVal   = 65535;
+  // Update inputs to reflect sanitised values
+  document.getElementById('port-from').value = fromVal;
+  document.getElementById('port-to').value   = toVal;
 
   loading.classList.remove('d-none');
   output.innerHTML = '';
 
   let url = portScanUrl + '?target=' + encodeURIComponent(target) + '&mode=' + mode;
-  if (mode === 'range') url += '&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+  if (mode === 'range') url += '&from=' + fromVal + '&to=' + toVal;
 
   try {
     const r = await fetch(url);

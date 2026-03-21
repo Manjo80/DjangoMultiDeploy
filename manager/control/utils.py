@@ -1871,19 +1871,16 @@ def _check_config_leaks(base_url, timeout=8):
         '/phpinfo.php', '/wp-login.php',
     }
 
-    leaks = []
-    for path, label in PATHS:
+    def _probe_path(path, label):
         url = base_url.rstrip('/') + path
         status, hdrs, body, _, err = _http_get(url, timeout=timeout, verify_ssl=False)
         if err:
-            continue
-        # For sensitive file paths, only a 200 counts as an actual leak;
-        # redirects (301/302/307/308) most likely mean an auth wall, not exposure.
+            return None
         if path in _REDIRECT_FALSE_POSITIVE:
             if status != 200:
-                continue
+                return None
         elif status not in (200, 301, 302, 307, 308):
-            continue
+            return None
         severity = 'critical'
         note = ''
         if path in ('/robots.txt', '/admin/login/', '/djadmin/'):
@@ -1894,13 +1891,24 @@ def _check_config_leaks(base_url, timeout=8):
         elif path == '/.env':
             severity = 'critical'
             note = 'Env-Datei öffentlich zugänglich — Secrets exponiert!'
-        leaks.append({
+        return {
             'path': path,
             'label': label,
             'status': status,
             'severity': severity,
             'note': note,
-        })
+        }
+
+    import concurrent.futures
+    path_order = {path: i for i, (path, _) in enumerate(PATHS)}
+    leaks = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(PATHS)) as ex:
+        futures = {ex.submit(_probe_path, path, label): path for path, label in PATHS}
+        for fut in concurrent.futures.as_completed(futures):
+            item = fut.result()
+            if item:
+                leaks.append(item)
+    leaks.sort(key=lambda x: path_order.get(x['path'], 999))
     return leaks
 
 
