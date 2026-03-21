@@ -1,6 +1,7 @@
 """
 DjangoMultiDeploy Manager — Security scanner views.
-Contains: security_scanner_view, security_scanner_run, port_scan_run
+Contains: security_scanner_view, security_scanner_run, port_scan_run,
+          scan_log_view, clear_scan_log
 """
 import ipaddress
 import logging
@@ -10,8 +11,9 @@ from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
 
 from ..utils import run_http_security_scan, get_public_ip, run_port_scan
+from ..utils.scan_log import get_log_entries, clear_log
 
-logger = logging.getLogger('djmanager.views.scanner')
+logger = logging.getLogger('djmanager.scanner')
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -86,6 +88,7 @@ def security_scanner_run(request):
         check_tls = False
 
     hostname = target if target else None
+    logger.info('HTTP-Scan angefordert von %s für %s', request.user, url)
     result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
     return JsonResponse(result)
 
@@ -117,5 +120,30 @@ def port_scan_run(request):
     except ValueError:
         return JsonResponse({'error': 'Ungültiger Port-Bereich'}, status=400)
 
+    logger.info('Port-Scan angefordert von %s für %s (Modus=%s)', request.user, target, mode)
     result = run_port_scan(target, mode=mode, port_start=port_from, port_end=port_to)
     return JsonResponse(result)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Scan-Log (in-memory, kein Neustart nötig)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def scan_log_view(request):
+    """Return the in-memory scan log as JSON (staff only)."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    return JsonResponse({'entries': get_log_entries()})
+
+
+@login_required
+def clear_scan_log(request):
+    """Clear the in-memory scan log (POST, staff only)."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST erforderlich'}, status=405)
+    clear_log()
+    logger.info('Scan-Log geleert von %s', request.user)
+    return JsonResponse({'ok': True})

@@ -137,12 +137,35 @@
 </div>
 <div id="http-scan-output"></div>
 
+<!-- Scan-Log Panel -->
+<div class="card mt-4" id="scan-log-card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-journal-text me-2"></i>Scan-Log <span class="text-muted small">(In-Memory, kein Neustart)</span></span>
+    <div class="d-flex gap-2">
+      <button class="btn btn-outline-secondary btn-sm" onclick="loadScanLog()">
+        <i class="bi bi-arrow-clockwise me-1"></i>Aktualisieren
+      </button>
+      <button class="btn btn-outline-danger btn-sm" onclick="clearScanLog()">
+        <i class="bi bi-trash me-1"></i>Log leeren
+      </button>
+    </div>
+  </div>
+  <div class="card-body p-0">
+    <div id="scan-log-output" class="font-monospace small"
+         style="max-height:320px;overflow-y:auto;background:#0d1117;padding:.75rem;">
+      <span class="text-muted">— Log noch nicht geladen. Klicke „Aktualisieren" oder starte einen Scan. —</span>
+    </div>
+  </div>
+</div>
+
 </div><!-- /col -->
 </div><!-- /row -->
 
 <script>
 const httpScanUrl  = "{% url 'security_scanner_run' %}";
 const portScanUrl  = "{% url 'port_scan_run' %}";
+const scanLogUrl   = "{% url 'scan_log' %}";
+const clearLogUrl  = "{% url 'clear_scan_log' %}";
 
 function setTarget(host) {
   document.getElementById('scan-target').value = host;
@@ -191,9 +214,11 @@ async function runCustomHttpScan() {
     loading.classList.add('d-none');
     if (d.error && !d.headers.length && !d.cookies.length) {
       output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      loadScanLog();
       return;
     }
     output.innerHTML = '<div class="card"><div class="card-header"><i class="bi bi-globe me-1"></i>HTTP / TLS Scan Ergebnis</div><div class="card-body">' + renderHttpScanResult(d) + '</div></div>';
+    loadScanLog();
   } catch(e) {
     loading.classList.add('d-none');
     output.innerHTML = `<div class="alert alert-danger small">Verbindungsfehler: ${e.message}</div>`;
@@ -235,9 +260,11 @@ async function runPortScan() {
     loading.classList.add('d-none');
     if (d.error) {
       output.innerHTML = `<div class="alert alert-danger small py-2"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      loadScanLog();
       return;
     }
     output.innerHTML = renderPortScanResult(d);
+    loadScanLog();
   } catch(e) {
     loading.classList.add('d-none');
     output.innerHTML = `<div class="alert alert-danger small">Verbindungsfehler: ${e.message}</div>`;
@@ -335,6 +362,48 @@ function renderSummaryBar(summary) {
   if (allOk) html += '<span class="badge bg-success fs-6 px-2 py-1"><i class="bi bi-shield-check me-1"></i>Alles OK</span>';
   html += '</div>';
   return html;
+}
+
+// ── Scan-Log ────────────────────────────────────────────────────────────────
+
+const _levelCls = {DEBUG:'secondary', INFO:'info', WARNING:'warning', ERROR:'danger', CRITICAL:'danger'};
+
+async function loadScanLog() {
+  const box = document.getElementById('scan-log-output');
+  try {
+    const r = await fetch(scanLogUrl);
+    const d = await r.json();
+    if (!d.entries || d.entries.length === 0) {
+      box.innerHTML = '<span class="text-muted">— Log ist leer —</span>';
+      return;
+    }
+    // Show newest at top
+    const rows = [...d.entries].reverse().map(e => {
+      const cls = _levelCls[e.level] || 'secondary';
+      return `<div><span class="text-muted">${e.ts}</span> `
+           + `<span class="badge bg-${cls} text-${cls==='warning'?'dark':'white'} me-1">${e.level}</span>`
+           + `<span>${escHtml(e.msg)}</span></div>`;
+    });
+    box.innerHTML = rows.join('');
+  } catch(e) {
+    box.innerHTML = `<span class="text-danger">Fehler beim Laden: ${e.message}</span>`;
+  }
+}
+
+async function clearScanLog() {
+  if (!confirm('Scan-Log wirklich leeren?')) return;
+  const csrfToken = document.cookie.split(';')
+    .map(c => c.trim()).find(c => c.startsWith('csrftoken='))?.split('=')[1] || '';
+  try {
+    await fetch(clearLogUrl, {method:'POST', headers:{'X-CSRFToken': csrfToken}});
+    await loadScanLog();
+  } catch(e) {
+    alert('Fehler beim Leeren: ' + e.message);
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function renderHttpScanResult(d) {
