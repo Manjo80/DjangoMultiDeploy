@@ -2,6 +2,7 @@
 DjangoMultiDeploy Manager — Models
 """
 import json
+import logging
 import secrets
 
 from django.contrib.auth.models import User
@@ -46,8 +47,8 @@ class UserProfile(models.Model):
             return []
 
     def generate_backup_codes(self, count=8):
-        """Generate fresh backup codes, store them, and return the plain list."""
-        codes = [secrets.token_hex(4).upper() for _ in range(count)]
+        """Generate fresh backup codes (64-bit / 16 hex chars each), store and return them."""
+        codes = [secrets.token_hex(8).upper() for _ in range(count)]
         self.totp_backup_codes = json.dumps(codes)
         return codes
 
@@ -114,7 +115,6 @@ class AuditLog(models.Model):
 
     @classmethod
     def log(cls, request, action, project='', details='', success=True):
-        import logging
         ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
         if ip and ',' in ip:
             ip = ip.split(',')[0].strip()
@@ -130,7 +130,7 @@ class AuditLog(models.Model):
                 success=success,
             )
         except Exception as e:
-            logging.getLogger(__name__).error('AuditLog.log failed: %s', e, exc_info=True)
+            logging.getLogger('djmanager.models').error('AuditLog.log failed: %s', e, exc_info=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

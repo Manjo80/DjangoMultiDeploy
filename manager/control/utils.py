@@ -179,8 +179,8 @@ def run_management_command(name, raw_cmd):
     if not cmd_clean:
         return False, 'Kein Kommando angegeben'
 
-    # Security: block shell metacharacters
-    if _re.search(r'[;&|`$<>]', cmd_clean):
+    # Security: block shell metacharacters and control characters
+    if _re.search(r'[;&|`$<>()\r\n]', cmd_clean):
         return False, 'Ungültige Zeichen im Kommando (keine Shell-Sonderzeichen erlaubt)'
 
     full_cmd = (
@@ -1746,14 +1746,18 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
             sni_host = self.host  # original hostname for SNI / nginx vhost routing
             connect_ip, _ = _resolve_connect_ip(self.host, self.port or 443)
             if connect_ip:
-                self.host = connect_ip  # TCP connect to IPv4 / loopback
-            # TCP connection (HTTPConnection.connect sets self.sock)
-            http.client.HTTPConnection.connect(self)
-            # TLS wrapping with the ORIGINAL hostname as SNI so nginx routes
-            # to the correct virtual host even when connecting via 127.0.0.1
-            self.sock = self._context.wrap_socket(
-                self.sock, server_hostname=sni_host
-            )
+                original_host = self.host
+                self.host = connect_ip
+                # TCP-only connect (HTTPConnection, no SSL)
+                http.client.HTTPConnection.connect(self)
+                # Restore original hostname so SSL uses correct SNI
+                self.host = original_host
+                server_hostname = self._tunnel_host if self._tunnel_host else self.host
+                self.sock = self._context.wrap_socket(
+                    self.sock, server_hostname=server_hostname
+                )
+            else:
+                super().connect()
 
     class _V4HTTPHandler(urllib.request.HTTPHandler):
         def http_open(self, req):
