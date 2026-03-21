@@ -2619,10 +2619,22 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # Alle Interface-IPs (ohne IPv6-only)
   _ALL_MGR_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^$|^::' | paste -sd, -)"
 
+  # Optionaler externer Hostname/Domain (z.B. deploy.famhub.eu)
+  # Kann als Umgebungsvariable MANAGER_DOMAIN übergeben oder interaktiv eingegeben werden
+  if [ -z "${MANAGER_DOMAIN:-}" ]; then
+    _read -p "Externer Hostname/Domain für den Manager (leer lassen falls keiner, z.B. deploy.famhub.eu): " _MANAGER_DOMAIN
+  else
+    _MANAGER_DOMAIN="${MANAGER_DOMAIN}"
+    echo "🌐 Manager-Domain (aus Env):  ${_MANAGER_DOMAIN}"
+  fi
+  # Leerzeichen entfernen, mehrere Domains kommasepariert erlaubt
+  _MANAGER_DOMAIN="$(echo "${_MANAGER_DOMAIN:-}" | tr ' ' ',' | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
+
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
   echo "🔌 Manager-Gunicorn:     ${_MGR_DEFAULT_IP}:$_MANAGER_PORT"
   echo "🔒 nginx HTTPS:          https://${_MGR_DEFAULT_IP}:443/"
   echo "👤 Manager-User:         $_MANAGER_USER"
+  [ -n "${_MANAGER_DOMAIN:-}" ] && echo "🌐 Manager-Domain:       ${_MANAGER_DOMAIN}"
   echo
   # Manager-Dateien werden vom Installer aus dem Repo geladen
   # (script liegt neben /manager/ Verzeichnis im Repo)
@@ -2672,8 +2684,9 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   # .env für Manager
   _MANAGER_SECRET="$(openssl rand -hex 32)"
 
-  # ALLOWED_HOSTS: alle lokalen IPs + Loopback (kein Hostname — port-basierter Zugriff via nginx)
+  # ALLOWED_HOSTS: alle lokalen IPs + Loopback + optionaler externer Hostname
   _MGR_ALLOWED_HOSTS="${_ALL_MGR_IPS},${_MGR_DEFAULT_IP},localhost"
+  [ -n "${_MANAGER_DOMAIN:-}" ] && _MGR_ALLOWED_HOSTS="${_MGR_ALLOWED_HOSTS},${_MANAGER_DOMAIN}"
   _MGR_ALLOWED_HOSTS="$(echo "$_MGR_ALLOWED_HOSTS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
   # CSRF_TRUSTED_ORIGINS: http + https für alle IPs, Standard-Ports (80/443)
@@ -2688,6 +2701,13 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
     fi
     _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},http://${_ip_h}:80,https://${_ip_h}:443"
   done
+  # Externen Hostname/Domain zu CSRF_TRUSTED_ORIGINS hinzufügen
+  if [ -n "${_MANAGER_DOMAIN:-}" ]; then
+    for _d in $(echo "$_MANAGER_DOMAIN" | tr ',' ' '); do
+      [ -z "$_d" ] && continue
+      _MGR_CSRF_ORIGINS="${_MGR_CSRF_ORIGINS},https://${_d},http://${_d}"
+    done
+  fi
   _MGR_CSRF_ORIGINS="$(echo "$_MGR_CSRF_ORIGINS" | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
   # .env zeilenweise mit printf schreiben
@@ -2698,6 +2718,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
     printf 'CSRF_TRUSTED_ORIGINS=%s\n'  "${_MGR_CSRF_ORIGINS}"
     printf 'USE_X_FORWARDED_HOST=False\n'
     printf 'MANAGER_PORT=%s\n'          "${_MANAGER_PORT}"
+    printf 'MANAGER_DOMAIN=%s\n'        "${_MANAGER_DOMAIN:-}"
     printf 'INSTALL_SCRIPT=%s\n'        "${_SCRIPT_DIR}/Installv2.sh"
     printf 'REGISTRY_DIR=/etc/django-servers.d\n'
   } > "$_MANAGER_DIR/.env"
@@ -2788,13 +2809,18 @@ if [ -f "\$_ENV_FILE" ]; then
   _CUR_CSRF="\$(grep '^CSRF_TRUSTED_ORIGINS=' "\$_ENV_FILE" | cut -d= -f2-)"
   _MGR_PORT_UP="\$(grep '^MANAGER_PORT=' "\$_ENV_FILE" | cut -d= -f2- | tr -d '\"')"
   _MGR_PORT_UP="\${_MGR_PORT_UP:-8888}"
+  # Gespeicherten MANAGER_DOMAIN aus .env lesen
+  _MGR_DOMAIN_UP="\$(grep '^MANAGER_DOMAIN=' "\$_ENV_FILE" | cut -d= -f2- | tr -d '\"')"
   # Hostnamen des Servers ermitteln
   _UPD_SHORT="\$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
   _UPD_FQDN="\$(hostname -f 2>/dev/null || echo '')"
   _ALL_IPS="\$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^\$|^::' | paste -sd, -)"
   _NEEDS_FIX=0
-  # Prüfen ob Port-Variante bereits vorhanden
+  # Prüfen ob Port-Variante oder MANAGER_DOMAIN fehlt
   echo "\$_CUR_CSRF" | grep -q ":\${_MGR_PORT_UP}" || _NEEDS_FIX=1
+  if [ -n "\${_MGR_DOMAIN_UP:-}" ]; then
+    echo "\$_CUR_CSRF" | grep -qF "https://\$(echo "\$_MGR_DOMAIN_UP" | cut -d, -f1)" || _NEEDS_FIX=1
+  fi
   if [ "\$_NEEDS_FIX" = "1" ]; then
     echo "  🔧 Ergänze CSRF_TRUSTED_ORIGINS (Port :\${_MGR_PORT_UP})..."
     _NEW_CSRF="\$_CUR_CSRF"
@@ -2806,6 +2832,14 @@ if [ -f "\$_ENV_FILE" ]; then
       echo "\$_NEW_CSRF" | grep -qF "http://\${_h}" || \
         _NEW_CSRF="\${_NEW_CSRF},http://\${_h}"
     done
+    # MANAGER_DOMAIN zu CSRF_TRUSTED_ORIGINS hinzufügen (falls gesetzt)
+    if [ -n "\${_MGR_DOMAIN_UP:-}" ]; then
+      for _d in \$(echo "\$_MGR_DOMAIN_UP" | tr ',' ' '); do
+        [ -z "\$_d" ] && continue
+        echo "\$_NEW_CSRF" | grep -qF "https://\${_d}" || _NEW_CSRF="\${_NEW_CSRF},https://\${_d}"
+        echo "\$_NEW_CSRF" | grep -qF "http://\${_d}"  || _NEW_CSRF="\${_NEW_CSRF},http://\${_d}"
+      done
+    fi
     # ALLOWED_HOSTS ebenfalls vervollständigen
     _CUR_AH="\$(grep '^ALLOWED_HOSTS=' "\$_ENV_FILE" | cut -d= -f2-)"
     _NEW_AH="\$_CUR_AH"
@@ -2813,6 +2847,13 @@ if [ -f "\$_ENV_FILE" ]; then
       [ -z "\$_h" ] && continue
       echo "\$_NEW_AH" | grep -qF "\$_h" || _NEW_AH="\${_NEW_AH},\${_h}"
     done
+    # MANAGER_DOMAIN zu ALLOWED_HOSTS hinzufügen (falls gesetzt)
+    if [ -n "\${_MGR_DOMAIN_UP:-}" ]; then
+      for _d in \$(echo "\$_MGR_DOMAIN_UP" | tr ',' ' '); do
+        [ -z "\$_d" ] && continue
+        echo "\$_NEW_AH" | grep -qF "\${_d}" || _NEW_AH="\${_NEW_AH},\${_d}"
+      done
+    fi
     sed -i "s|^CSRF_TRUSTED_ORIGINS=.*|CSRF_TRUSTED_ORIGINS=\${_NEW_CSRF}|" "\$_ENV_FILE"
     sed -i "s|^ALLOWED_HOSTS=.*|ALLOWED_HOSTS=\${_NEW_AH}|" "\$_ENV_FILE"
     echo "  ✅ CSRF_TRUSTED_ORIGINS und ALLOWED_HOSTS aktualisiert"
