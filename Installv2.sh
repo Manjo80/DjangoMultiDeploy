@@ -2922,18 +2922,46 @@ MANSERVEOF
   # Self-Signed SSL-Zertifikat bereitstellen (geteilt mit Webapps)
   _generate_selfsigned_cert
 
-  cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
-# HTTP → HTTPS Redirect (Port 80)
+  # nginx server_name: Wenn MANAGER_DOMAIN gesetzt, nur diese Domain annehmen.
+  # Andernfalls catch-all (kompatibel mit IP-only-Setups).
+  if [ -n "${_MANAGER_DOMAIN:-}" ]; then
+    # Domainliste: Kommas → Leerzeichen für nginx server_name
+    _MGR_SERVER_NAMES="$(echo "$_MANAGER_DOMAIN" | tr ',' ' ')"
+    _MGR_80_LISTEN="listen 80;"
+    _MGR_443_LISTEN="listen 443 ssl;"
+    _MGR_CATCHALL_BLOCK="
+# Unbekannte Domains auf Port 80/443 abweisen (kein default_server mehr)
 server {
     listen 80 default_server;
     server_name _;
+    return 444;
+}
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_certificate     ${_SSL_CERT};
+    ssl_certificate_key ${_SSL_KEY};
+    return 444;
+}"
+  else
+    _MGR_SERVER_NAMES="_"
+    _MGR_80_LISTEN="listen 80 default_server;"
+    _MGR_443_LISTEN="listen 443 ssl default_server;"
+    _MGR_CATCHALL_BLOCK=""
+  fi
+
+  cat > /etc/nginx/sites-available/djmanager <<MGNGINXEOF
+# HTTP → HTTPS Redirect (Port 80)
+server {
+    ${_MGR_80_LISTEN}
+    server_name ${_MGR_SERVER_NAMES};
     return 301 https://\$host\$request_uri;
 }
 
 # Manager HTTPS (Port 443, Self-Signed SSL)
 server {
-    listen 443 ssl default_server;
-    server_name _;
+    ${_MGR_443_LISTEN}
+    server_name ${_MGR_SERVER_NAMES};
     client_max_body_size 10M;
 
     ssl_certificate     ${_SSL_CERT};
@@ -2970,6 +2998,7 @@ server {
         proxy_read_timeout 300s;
     }
 }
+${_MGR_CATCHALL_BLOCK}
 MGNGINXEOF
 
   ln -sf /etc/nginx/sites-available/djmanager /etc/nginx/sites-enabled/djmanager
