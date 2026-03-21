@@ -5,3 +5,4 @@ psutil>=5.9
 pyotp>=2.9
 qrcode[pil]>=7.4
 pip-audit>=2.7
+whitenoise>=6.0

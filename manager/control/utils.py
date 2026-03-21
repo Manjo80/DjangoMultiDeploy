@@ -1745,11 +1745,18 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
         def connect(self):
             connect_ip, _ = _resolve_connect_ip(self.host, self.port or 443)
             if connect_ip:
-                # Preserve original hostname for SNI (getattr for Python compat)
-                if not getattr(self, '_server_hostname', None):
-                    self._server_hostname = self.host
+                original_host = self.host
                 self.host = connect_ip
-            super().connect()
+                # TCP-only connect (HTTPConnection, no SSL)
+                http.client.HTTPConnection.connect(self)
+                # Restore original hostname so SSL uses correct SNI
+                self.host = original_host
+                server_hostname = self._tunnel_host if self._tunnel_host else self.host
+                self.sock = self._context.wrap_socket(
+                    self.sock, server_hostname=server_hostname
+                )
+            else:
+                super().connect()
 
     class _V4HTTPHandler(urllib.request.HTTPHandler):
         def http_open(self, req):
