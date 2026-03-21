@@ -1449,6 +1449,26 @@ function renderHttpScanResult(d) {
     html += '</tbody></table></div>';
   }
 
+  // ── CORS ───────────────────────────────────────────────────────────────
+  if (d.cors && d.cors.length) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-arrow-left-right me-1"></i>CORS-Konfiguration</h6>';
+    html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    for (const c of d.cors) {
+      const rowClass = ['critical','high'].includes(c.severity) ? 'table-danger' :
+                       c.severity === 'medium' ? 'table-warning' : '';
+      html += `<tr class="${rowClass}">
+        <td class="font-monospace small text-nowrap">${c.header}</td>
+        <td>${severityBadge(c.severity)}</td>
+        <td class="small">
+          ${c.value ? `<code class="d-block text-truncate" style="max-width:380px">${c.value}</code>` : ''}
+          ${c.msg && c.severity !== 'ok' ? `<span class="text-muted">${c.msg}</span>` : ''}
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
+
   // ── Cookies ────────────────────────────────────────────────────────────
   if (d.cookies && d.cookies.length) {
     html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-cookie me-1"></i>Cookie-Sicherheit</h6>';

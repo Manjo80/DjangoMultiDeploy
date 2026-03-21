@@ -1,0 +1,501 @@
+{% extends "control/base.html" %}
+{% block title %}Security Scanner — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-xl-10">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-shield-shaded me-2"></i>Security Scanner</h4>
+  <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
+</div>
+
+<p class="text-muted small">
+  Scanne beliebige Webserver, Hostnamen oder IP-Adressen auf Sicherheitsprobleme —
+  unabhängig davon ob sie im Manager registriert sind.
+</p>
+
+<!-- Server Public IP Info -->
+{% if pub_ipv4 or pub_ipv6 %}
+<div class="card mb-3">
+  <div class="card-header">
+    <i class="bi bi-globe2 me-2"></i>Öffentliche IP dieses Servers
+  </div>
+  <div class="card-body py-2 small">
+    <div class="d-flex flex-wrap gap-3">
+      {% if pub_ipv4 %}
+      <div>
+        <span class="text-muted">IPv4:</span>
+        <code class="ms-1">{{ pub_ipv4 }}</code>
+        <button class="btn btn-xs btn-outline-secondary ms-2" style="font-size:.7rem;padding:1px 6px"
+                onclick="setTarget('{{ pub_ipv4 }}')">
+          <i class="bi bi-crosshair me-1"></i>Als Ziel setzen
+        </button>
+      </div>
+      {% endif %}
+      {% if pub_ipv6 %}
+      <div>
+        <span class="text-muted">IPv6:</span>
+        <code class="ms-1">{{ pub_ipv6 }}</code>
+        <button class="btn btn-xs btn-outline-secondary ms-2" style="font-size:.7rem;padding:1px 6px"
+                onclick="setTarget('{{ pub_ipv6 }}')">
+          <i class="bi bi-crosshair me-1"></i>Als Ziel setzen
+        </button>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Scan Form -->
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-search me-2"></i>Scan-Ziel</div>
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label small text-muted">Hostname oder IP-Adresse</label>
+        <input type="text" id="scan-target" class="form-control form-control-sm font-monospace"
+               placeholder="z.B. example.com oder 192.168.1.1"
+               oninput="updatePortDefault()">
+        <div class="form-text">Hostname, IPv4 oder IPv6-Adresse</div>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small text-muted">Port</label>
+        <input type="number" id="scan-port" class="form-control form-control-sm font-monospace"
+               value="443" min="1" max="65535">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small text-muted">Protokoll</label>
+        <select id="scan-tls" class="form-select form-select-sm">
+          <option value="">Auto</option>
+          <option value="1">HTTPS / TLS</option>
+          <option value="0">HTTP (kein TLS)</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-warning btn-sm w-100" onclick="runCustomHttpScan()">
+          <i class="bi bi-globe me-1"></i>HTTP-Scan
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Port Scan -->
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-ethernet me-2"></i>Port-Scan</span>
+    <span class="badge bg-secondary small">TCP</span>
+  </div>
+  <div class="card-body">
+    <p class="text-muted small mb-3">
+      Scannt TCP-Ports auf dem Ziel-Host (aus dem Feld oben).
+      Findet gefährlich offene Dienste wie Redis, MongoDB, RDP, MySQL etc.
+    </p>
+    <div class="row g-3 align-items-end mb-3">
+      <div class="col-auto">
+        <div class="btn-group btn-group-sm" role="group">
+          <input type="radio" class="btn-check" name="portmode" id="pm-common" value="common" checked>
+          <label class="btn btn-outline-info" for="pm-common">
+            <i class="bi bi-list-check me-1"></i>Bekannte Ports
+          </label>
+          <input type="radio" class="btn-check" name="portmode" id="pm-range" value="range">
+          <label class="btn btn-outline-info" for="pm-range">
+            <i class="bi bi-ui-radios me-1"></i>Port-Bereich
+          </label>
+        </div>
+      </div>
+      <div id="range-inputs" class="col-auto d-none">
+        <div class="d-flex gap-2 align-items-center">
+          <input type="number" id="port-from" class="form-control form-control-sm font-monospace" style="width:90px"
+                 value="1" min="1" max="65535" placeholder="von">
+          <span class="text-muted">–</span>
+          <input type="number" id="port-to" class="form-control form-control-sm font-monospace" style="width:90px"
+                 value="1024" min="1" max="65535" placeholder="bis">
+          <span class="text-muted small">(max. 10 000)</span>
+        </div>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-info btn-sm" onclick="runPortScan()">
+          <i class="bi bi-radar me-1"></i>Port-Scan starten
+        </button>
+      </div>
+    </div>
+
+    <div id="port-scan-loading" class="d-none text-muted small mb-2">
+      <span class="spinner-border spinner-border-sm me-1"></span>
+      Scanne Ports… (kann je nach Bereich bis zu 30 Sek dauern)
+    </div>
+    <div id="port-scan-output"></div>
+  </div>
+</div>
+
+<!-- HTTP/TLS Scan Results -->
+<div id="http-scan-loading" class="d-none text-muted small mb-2">
+  <span class="spinner-border spinner-border-sm me-1"></span>
+  Scanne… (TLS + Headers + Cookies + CORS + Konfigurationslecks)
+</div>
+<div id="http-scan-output"></div>
+
+</div><!-- /col -->
+</div><!-- /row -->
+
+<script>
+const httpScanUrl  = "{% url 'security_scanner_run' %}";
+const portScanUrl  = "{% url 'port_scan_run' %}";
+
+function setTarget(host) {
+  document.getElementById('scan-target').value = host;
+  updatePortDefault();
+}
+
+function updatePortDefault() {
+  // If port is still default (80 or 443) update based on target
+  const t = document.getElementById('scan-target').value.trim();
+  // no-op for now, just keep port as typed
+}
+
+// Toggle range inputs based on port mode radio
+document.querySelectorAll('input[name="portmode"]').forEach(r => {
+  r.addEventListener('change', () => {
+    const ri = document.getElementById('range-inputs');
+    ri.classList.toggle('d-none', r.value !== 'range' || !r.checked);
+    if (r.value === 'range' && r.checked) ri.classList.remove('d-none');
+  });
+});
+
+// ── HTTP/TLS Scan ───────────────────────────────────────────────────────────
+
+async function runCustomHttpScan() {
+  const target  = document.getElementById('scan-target').value.trim();
+  const port    = document.getElementById('scan-port').value.trim();
+  const tls     = document.getElementById('scan-tls').value;
+  const loading = document.getElementById('http-scan-loading');
+  const output  = document.getElementById('http-scan-output');
+
+  if (!target) {
+    output.innerHTML = '<div class="alert alert-warning small py-2">Bitte erst einen Hostnamen oder eine IP-Adresse eingeben.</div>';
+    return;
+  }
+
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+
+  let url = httpScanUrl + '?target=' + encodeURIComponent(target);
+  if (port) url += '&port=' + encodeURIComponent(port);
+  if (tls)  url += '&tls='  + encodeURIComponent(tls);
+
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    loading.classList.add('d-none');
+    if (d.error && !d.headers.length && !d.cookies.length) {
+      output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      return;
+    }
+    output.innerHTML = '<div class="card"><div class="card-header"><i class="bi bi-globe me-1"></i>HTTP / TLS Scan Ergebnis</div><div class="card-body">' + renderHttpScanResult(d) + '</div></div>';
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Verbindungsfehler: ${e.message}</div>`;
+  }
+}
+
+// ── Port Scan ───────────────────────────────────────────────────────────────
+
+async function runPortScan() {
+  const target  = document.getElementById('scan-target').value.trim();
+  const loading = document.getElementById('port-scan-loading');
+  const output  = document.getElementById('port-scan-output');
+
+  if (!target) {
+    output.innerHTML = '<div class="alert alert-warning small py-2">Bitte erst einen Hostnamen oder eine IP-Adresse eingeben.</div>';
+    return;
+  }
+
+  const mode = document.querySelector('input[name="portmode"]:checked').value;
+  const from = document.getElementById('port-from').value;
+  const to   = document.getElementById('port-to').value;
+
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+
+  let url = portScanUrl + '?target=' + encodeURIComponent(target) + '&mode=' + mode;
+  if (mode === 'range') url += '&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    loading.classList.add('d-none');
+    if (d.error) {
+      output.innerHTML = `<div class="alert alert-danger small py-2"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      return;
+    }
+    output.innerHTML = renderPortScanResult(d);
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Verbindungsfehler: ${e.message}</div>`;
+  }
+}
+
+function renderPortScanResult(d) {
+  const sevOrder = ['critical','high','medium','low','info'];
+  const sevLabel = {critical:'Kritisch',high:'Hoch',medium:'Mittel',low:'Niedrig',info:'Info'};
+  const sevCls   = {critical:'danger', high:'danger', medium:'warning', low:'secondary', info:'info'};
+
+  let html = `<div class="card"><div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-radar me-1"></i>Port-Scan: <code>${d.host}</code></span>
+    <span class="text-muted small">${d.scanned} Ports geprüft</span>
+  </div><div class="card-body">`;
+
+  if (!d.open_ports || d.open_ports.length === 0) {
+    html += '<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine offenen TCP-Ports gefunden.</div>';
+  } else {
+    // Summary by severity
+    const counts = {};
+    for (const p of d.open_ports) {
+      counts[p.severity] = (counts[p.severity] || 0) + 1;
+    }
+    html += '<div class="d-flex flex-wrap gap-2 mb-3">';
+    for (const s of sevOrder) {
+      if (counts[s]) {
+        const cls = sevCls[s];
+        html += `<span class="badge bg-${cls} text-${cls==='warning'?'dark':'white'} fs-6 px-2 py-1">
+          ${sevLabel[s]}: ${counts[s]} Port${counts[s]>1?'s':''}
+        </span>`;
+      }
+    }
+    html += '</div>';
+
+    html += '<div class="table-responsive"><table class="table table-sm table-dark mb-0">';
+    html += '<thead><tr><th>Port</th><th>Dienst</th><th>Risiko</th><th>Hinweis</th></tr></thead><tbody>';
+    for (const p of d.open_ports) {
+      const cls = sevCls[p.severity] || 'secondary';
+      const rowCls = ['critical','high'].includes(p.severity) ? 'table-danger' :
+                     p.severity === 'medium' ? 'table-warning' : '';
+      html += `<tr class="${rowCls}">
+        <td class="font-monospace"><strong>${p.port}</strong></td>
+        <td>${p.service || '—'}</td>
+        <td><span class="badge bg-${cls} text-${cls==='warning'?'dark':'white'}">${sevLabel[p.severity]||p.severity}</span></td>
+        <td class="small text-muted">${p.note || ''}</td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
+
+    // Dangerous port warning
+    const dangerous = d.open_ports.filter(p => p.severity === 'critical');
+    if (dangerous.length) {
+      html += `<div class="alert alert-danger small mt-3 py-2">
+        <i class="bi bi-exclamation-octagon-fill me-1"></i>
+        <strong>${dangerous.length} kritische Port${dangerous.length>1?'s':''} offen!</strong>
+        Sofortiger Handlungsbedarf — diese Dienste sollten nicht öffentlich erreichbar sein.
+        Firewall-Regeln prüfen (UFW, iptables oder Cloudflare-Firewall).
+      </div>`;
+    }
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+// ── Shared HTTP scan rendering (identical logic to project_detail) ──────────
+
+function severityBadge(s) {
+  const map   = {critical:'danger',high:'danger',medium:'warning',low:'secondary',info:'info',ok:'success',warning:'warning'};
+  const icons = {critical:'exclamation-octagon-fill',high:'exclamation-triangle-fill',medium:'exclamation-circle',low:'info-circle',info:'info-circle',ok:'check-circle-fill',warning:'exclamation-circle'};
+  const labels= {critical:'Kritisch',high:'Hoch',medium:'Mittel',low:'Niedrig',info:'Info',ok:'OK',warning:'Warnung'};
+  const cls   = map[s] || 'secondary';
+  return `<span class="badge bg-${cls} text-${cls==='warning'?'dark':'white'}"><i class="bi bi-${icons[s]||'info-circle'} me-1"></i>${labels[s]||s}</span>`;
+}
+
+function renderSummaryBar(summary) {
+  const items = [
+    {key:'critical',label:'Kritisch',cls:'danger'},
+    {key:'high',    label:'Hoch',    cls:'danger'},
+    {key:'medium',  label:'Mittel',  cls:'warning'},
+    {key:'low',     label:'Niedrig', cls:'secondary'},
+    {key:'info',    label:'Info',    cls:'info'},
+    {key:'ok',      label:'OK',      cls:'success'},
+  ];
+  let html = '<div class="d-flex flex-wrap gap-2 mb-3">';
+  let allOk = true;
+  for (const item of items) {
+    const cnt = summary[item.key] || 0;
+    if (cnt > 0 && item.key !== 'ok') allOk = false;
+    if (cnt > 0) {
+      html += `<span class="badge bg-${item.cls} text-${item.cls==='warning'?'dark':'white'} fs-6 px-2 py-1">${item.label}: ${cnt}</span>`;
+    }
+  }
+  if (allOk) html += '<span class="badge bg-success fs-6 px-2 py-1"><i class="bi bi-shield-check me-1"></i>Alles OK</span>';
+  html += '</div>';
+  return html;
+}
+
+function renderHttpScanResult(d) {
+  let html = '';
+  if (d.error) {
+    html += `<div class="alert alert-warning small py-2 mb-3"><i class="bi bi-exclamation-circle me-1"></i>${d.error}</div>`;
+  }
+  html += renderSummaryBar(d.summary || {});
+  html += `<div class="text-muted small mb-3">
+    <i class="bi bi-bullseye me-1"></i>Ziel: <code>${d.target_url}</code>
+    ${d.http_status ? `&nbsp;· Status: <strong>${d.http_status}</strong>` : ''}
+  </div>`;
+
+  // TLS
+  if (d.tls) {
+    const t = d.tls;
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-lock me-1"></i>TLS / Zertifikat</h6>';
+    if (t.error && !t.reachable) {
+      html += `<div class="alert alert-danger small py-2">${t.error}</div>`;
+    } else {
+      html += '<table class="table table-sm table-dark mb-3">';
+      html += `<tr><th class="text-muted w-25">TLS Version</th><td>`;
+      if (t.tls_version) {
+        const old = ['TLSv1','TLSv1.1','SSLv2','SSLv3'].includes(t.tls_version);
+        html += `<span class="${old?'text-danger':'text-success'}">${t.tls_version}</span>`;
+        if (old) html += ' <span class="badge bg-danger ms-1">Veraltet!</span>';
+      } else { html += '<span class="text-muted">—</span>'; }
+      html += '</td></tr>';
+      html += `<tr><th class="text-muted">Cipher</th><td><code>${t.cipher || '—'}</code></td></tr>`;
+      html += `<tr><th class="text-muted">Zertifikat</th><td>`;
+      if (t.cert_valid) {
+        html += `<span class="text-success"><i class="bi bi-check-circle me-1"></i>Gültig</span>`;
+        if (t.cert_days_left !== null) {
+          const dc = t.cert_days_left < 14 ? 'text-danger' : t.cert_days_left < 30 ? 'text-warning' : 'text-success';
+          html += ` <span class="${dc} ms-1">(noch ${t.cert_days_left} Tage, läuft ab: ${t.cert_expiry})</span>`;
+        }
+      } else {
+        html += `<span class="text-danger"><i class="bi bi-x-circle me-1"></i>Ungültig</span>`;
+        if (t.error) html += ` <span class="text-muted small">${t.error}</span>`;
+      }
+      html += '</td></tr>';
+      if (t.cert_subject) html += `<tr><th class="text-muted">Subject</th><td><code>${t.cert_subject}</code></td></tr>`;
+      if (t.cert_issuer)  html += `<tr><th class="text-muted">Aussteller</th><td><code>${t.cert_issuer}</code></td></tr>`;
+      html += '</table>';
+    }
+  }
+
+  // HTTP → HTTPS Redirect
+  if (d.http_redirect) {
+    const rr = d.http_redirect;
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-arrow-right-circle me-1"></i>HTTP → HTTPS Weiterleitung</h6>';
+    if (!rr.available) {
+      html += `<div class="alert alert-secondary small py-2">Port 80 nicht erreichbar (${rr.error || 'keine Verbindung'})</div>`;
+    } else if (rr.redirects_to_https) {
+      html += `<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950">
+        <i class="bi bi-check-circle me-1"></i>HTTP leitet korrekt zu HTTPS weiter (${rr.status} → ${rr.location})
+      </div>`;
+    } else {
+      html += `<div class="alert alert-danger small py-2">
+        <i class="bi bi-exclamation-triangle me-1"></i>
+        HTTP (Port 80) leitet <strong>nicht</strong> zu HTTPS weiter!
+        Status: ${rr.status}${rr.location ? ' Location: ' + rr.location : ''}
+      </div>`;
+    }
+  }
+
+  // Security Headers
+  if (d.headers && d.headers.length) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-layout-text-window me-1"></i>HTTP Security Headers</h6>';
+    html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    for (const h of d.headers) {
+      const rowClass = h.severity === 'ok' ? '' :
+                       h.severity === 'low' ? 'text-muted' :
+                       h.severity === 'medium' ? 'table-warning' :
+                       ['high','critical'].includes(h.severity) ? 'table-danger' : '';
+      html += `<tr class="${rowClass}">
+        <td class="font-monospace small text-nowrap">${h.header}</td>
+        <td class="text-nowrap">${severityBadge(h.severity)}</td>
+        <td class="small">`;
+      if (h.value && h.status !== 'missing') {
+        html += `<code class="d-block text-truncate" style="max-width:420px" title="${h.value}">${h.value}</code>`;
+      }
+      if (h.msg && h.status !== 'ok') html += `<span class="text-muted">${h.msg}</span>`;
+      html += '</td></tr>';
+    }
+    html += '</tbody></table></div>';
+  }
+
+  // CORS
+  if (d.cors && d.cors.length) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-arrow-left-right me-1"></i>CORS-Konfiguration</h6>';
+    html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    for (const c of d.cors) {
+      const rowClass = ['critical','high'].includes(c.severity) ? 'table-danger' :
+                       c.severity === 'medium' ? 'table-warning' : '';
+      html += `<tr class="${rowClass}">
+        <td class="font-monospace small text-nowrap">${c.header}</td>
+        <td>${severityBadge(c.severity)}</td>
+        <td class="small">
+          ${c.value ? `<code class="d-block text-truncate" style="max-width:420px">${c.value}</code>` : ''}
+          ${c.msg && c.severity !== 'ok' ? `<span class="text-muted">${c.msg}</span>` : ''}
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
+
+  // Cookies
+  if (d.cookies && d.cookies.length) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-cookie me-1"></i>Cookie-Sicherheit</h6>';
+    for (const ck of d.cookies) {
+      const hasIssues = ck.issues && ck.issues.length > 0;
+      html += `<div class="card mb-2 ${hasIssues ? 'border-warning' : 'border-success'} bg-transparent">
+        <div class="card-body py-2 small">
+          <strong class="font-monospace">${ck.name}</strong>
+          <span class="ms-2">`;
+      const flagHtml = (flag, present) =>
+        `<span class="badge ${present ? 'bg-success' : 'bg-danger'} me-1">${flag}: ${present ? '✓' : '✗'}</span>`;
+      html += flagHtml('Secure', ck.flags.secure);
+      html += flagHtml('HttpOnly', ck.flags.httponly);
+      html += ck.flags.samesite
+        ? `<span class="badge bg-success me-1">SameSite: ${ck.flags.samesite}</span>`
+        : `<span class="badge bg-danger me-1">SameSite: ✗</span>`;
+      html += '</span>';
+      if (hasIssues) {
+        html += '<ul class="mt-1 mb-0 ps-3">';
+        for (const issue of ck.issues) {
+          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg}</li>`;
+        }
+        html += '</ul>';
+      }
+      html += '</div></div>';
+    }
+  }
+
+  // Config Leaks
+  if (d.config_leaks !== undefined) {
+    html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-file-earmark-lock me-1"></i>Konfigurationslecks / Exponierte Dateien</h6>';
+    const realLeaks = (d.config_leaks || []).filter(l => l.severity !== 'info');
+    const infoLeaks = (d.config_leaks || []).filter(l => l.severity === 'info');
+    if (realLeaks.length) {
+      html += '<div class="list-group mb-2">';
+      for (const l of realLeaks) {
+        const cls = l.severity === 'critical' ? 'list-group-item-danger' : 'list-group-item-warning';
+        html += `<div class="list-group-item list-group-item-dark ${cls} small py-2">
+          ${severityBadge(l.severity)}
+          <strong class="font-monospace ms-1">${l.path}</strong>
+          <span class="text-muted ms-1">(${l.label}, HTTP ${l.status})</span>
+          ${l.note ? `<div class="mt-1 text-danger"><i class="bi bi-exclamation-triangle me-1"></i>${l.note}</div>` : ''}
+        </div>`;
+      }
+      html += '</div>';
+    }
+    if (infoLeaks.length) {
+      html += '<div class="text-muted small mb-1">';
+      for (const l of infoLeaks) {
+        html += `<span class="badge bg-secondary me-1">${l.path} (${l.status})</span>`;
+      }
+      html += '</div>';
+    }
+    if (!realLeaks.length && !infoLeaks.length) {
+      html += '<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Konfigurationslecks gefunden.</div>';
+    }
+  }
+
+  return html;
+}
+</script>
+{% endblock %}
