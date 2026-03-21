@@ -319,9 +319,8 @@ def two_factor_setup(request):
                 })
 
         elif action == 'disable':
-            if not _get_role(request.user) == UserProfile.ROLE_ADMIN and \
-               request.user != request.user:  # only self or admin
-                pass
+            # Nur der eigene Account darf 2FA deaktivieren; Admins können es
+            # für beliebige Nutzer über die Benutzerverwaltung zurücksetzen.
             profile.totp_enabled = False
             profile.totp_secret = ''
             profile.totp_backup_codes = ''
@@ -1361,6 +1360,7 @@ def ssh_key_download(request, project):
 
 
 @require_POST
+@login_required
 def ssh_key_confirm(request, project):
     confirm_file = f'/tmp/djmanager_installs/{project}_github_confirm'
     os.makedirs('/tmp/djmanager_installs', exist_ok=True)
@@ -1453,7 +1453,7 @@ def deploy_key_delete(request, key_id):
 
 
 @require_POST
-@login_required
+@operator_required
 def project_assign_key(request, project):
     if not _check_project_access(request.user, project):
         return render(request, 'control/403.html', status=403)

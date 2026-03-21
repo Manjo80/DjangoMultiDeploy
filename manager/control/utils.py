@@ -179,8 +179,8 @@ def run_management_command(name, raw_cmd):
     if not cmd_clean:
         return False, 'Kein Kommando angegeben'
 
-    # Security: block shell metacharacters
-    if _re.search(r'[;&|`$<>]', cmd_clean):
+    # Security: block shell metacharacters and control characters
+    if _re.search(r'[;&|`$<>()\r\n]', cmd_clean):
         return False, 'Ungültige Zeichen im Kommando (keine Shell-Sonderzeichen erlaubt)'
 
     full_cmd = (
