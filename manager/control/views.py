@@ -1734,16 +1734,16 @@ def project_http_scan(request, name):
             url_host = f'[{hostname}]' if isinstance(addr, ipaddress.IPv6Address) else hostname
         except ValueError:
             url_host = hostname
+        # For external hostname scans always use standard ports (443/80).
+        # NGINX_PORT is the internal nginx listener port — the external port
+        # is always the standard HTTPS (443) or HTTP (80) port, since a reverse
+        # proxy (or the same nginx) handles TLS termination on 443 externally.
         nginx_port = str(conf.get('NGINX_PORT', '443')).strip()
-        if nginx_port == '443':
-            url = f'https://{url_host}/'
-            check_tls = True
-        elif nginx_port == '80':
+        if nginx_port == '80':
             url = f'http://{url_host}/'
             check_tls = False
         else:
-            # DjangoMultiDeploy konfiguriert nginx immer mit SSL auf custom Ports
-            url = f'https://{url_host}:{nginx_port}/'
+            url = f'https://{url_host}/'
             check_tls = True
         result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
 
@@ -1794,17 +1794,15 @@ def manager_http_scan(request):
             url_host = f'[{hostname}]' if isinstance(addr, ipaddress.IPv6Address) else hostname
         except ValueError:
             url_host = hostname
-        # Use configured nginx port (like project scans) — not always 443
+        # For external hostname scans always use standard ports (443/80).
+        # NGINX_PORT is the internal listener port — the external port is always
+        # standard HTTPS (443) or HTTP (80).
         nginx_port = str(manager_nginx_port or '443').strip()
-        if nginx_port == '443':
-            url = f'https://{url_host}/'
-            check_tls = True
-        elif nginx_port == '80':
+        if nginx_port == '80':
             url = f'http://{url_host}/'
             check_tls = False
         else:
-            # DjangoMultiDeploy konfiguriert nginx immer mit SSL auf custom Ports
-            url = f'https://{url_host}:{nginx_port}/'
+            url = f'https://{url_host}/'
             check_tls = True
         result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
 

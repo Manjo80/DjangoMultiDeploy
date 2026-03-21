@@ -429,7 +429,7 @@
                     Prüft Response-Header (HSTS, CSP, X-Frame-Options…), TLS-Version &amp;
                     Zertifikat, Cookie-Flags sowie typische Konfigurationslecks (<code>.env</code>,
                     <code>.git</code>, Backups). Intern = direkter Gunicorn-Zugriff (kein TLS).
-                    Extern = über nginx (Port {{ conf.NGINX_PORT|default:"443" }}).
+                    Extern = über HTTPS (Port 443) via nginx.
                   </div>
                 </div>
                 <hr class="my-2">
@@ -468,7 +468,7 @@
           </div>
           <div class="form-text">
             <i class="bi bi-info-circle me-1"></i>
-            Intern = direkter Gunicorn-Zugriff (kein TLS). Extern = über nginx (Port {{ conf.NGINX_PORT|default:"443" }}).
+            Intern = direkter Gunicorn-Zugriff (kein TLS). Extern = über HTTPS (Port 443) via nginx.
           </div>
         </div>
 
