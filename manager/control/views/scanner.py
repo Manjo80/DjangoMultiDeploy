@@ -5,6 +5,7 @@ Contains: security_scanner_view, security_scanner_run, port_scan_run,
 """
 import ipaddress
 import logging
+import concurrent.futures
 
 from django.shortcuts import render
 from django.http import JsonResponse
@@ -12,6 +13,8 @@ from django.contrib.auth.decorators import login_required
 
 from ..utils import run_http_security_scan, get_public_ip, run_port_scan
 from ..utils.scan_log import get_log_entries, clear_log
+
+_SCAN_TIMEOUT = 90  # seconds — Gunicorn worker timeout is 120s
 
 logger = logging.getLogger('djmanager.scanner')
 
@@ -89,7 +92,13 @@ def security_scanner_run(request):
 
     hostname = target if target else None
     logger.info('HTTP-Scan angefordert von %s für %s', request.user, url)
-    result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(run_http_security_scan, url, hostname=hostname, check_tls=check_tls)
+        try:
+            result = fut.result(timeout=_SCAN_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            logger.warning('HTTP-Scan Timeout nach %ds: %s (User: %s)', _SCAN_TIMEOUT, url, request.user)
+            return JsonResponse({'error': f'Scan-Timeout: Die Verbindung hat nach {_SCAN_TIMEOUT}s nicht geantwortet.'})
     return JsonResponse(result)
 
 
@@ -121,7 +130,13 @@ def port_scan_run(request):
         return JsonResponse({'error': 'Ungültiger Port-Bereich'}, status=400)
 
     logger.info('Port-Scan angefordert von %s für %s (Modus=%s)', request.user, target, mode)
-    result = run_port_scan(target, mode=mode, port_start=port_from, port_end=port_to)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(run_port_scan, target, mode=mode, port_start=port_from, port_end=port_to)
+        try:
+            result = fut.result(timeout=_SCAN_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            logger.warning('Port-Scan Timeout nach %ds: %s (User: %s)', _SCAN_TIMEOUT, target, request.user)
+            return JsonResponse({'error': f'Port-Scan Timeout nach {_SCAN_TIMEOUT}s.'})
     return JsonResponse(result)
 
 

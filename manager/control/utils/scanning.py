@@ -8,6 +8,7 @@ import ipaddress
 import datetime
 import logging
 import subprocess
+import concurrent.futures
 import urllib.request
 import urllib.error
 
@@ -15,6 +16,18 @@ import urllib.error
 from . import scan_log as _scan_log  # noqa: F401
 
 logger = logging.getLogger('djmanager.scanner')
+
+_DNS_TIMEOUT = 5  # seconds for DNS resolution
+
+
+def _getaddrinfo(host, port, *args, timeout=_DNS_TIMEOUT):
+    """socket.getaddrinfo with a timeout (the stdlib call has none)."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(socket.getaddrinfo, host, port, *args)
+        try:
+            return fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise socket.gaierror(f'DNS-Timeout nach {timeout}s für {host}')
 
 
 def _get_local_ips():
@@ -34,7 +47,7 @@ def _get_local_ips():
     if not ips:
         try:
             hostname = socket.gethostname()
-            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            for info in _getaddrinfo(hostname, None, socket.AF_INET):
                 ip = info[4][0]
                 if ip and not ip.startswith('127.'):
                     ips.add(ip)
@@ -51,7 +64,7 @@ def _resolve_connect_ip(hostname, port):
     Returns (connect_ip, original_ipv4) or (None, None) on failure.
     """
     try:
-        infos = socket.getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
+        infos = _getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
         if not infos:
             return None, None
         ipv4 = infos[0][4][0]
@@ -715,7 +728,7 @@ def run_port_scan(host, mode='common', port_start=1, port_end=1024, timeout=1.0,
     logger.info('Port-Scan gestartet: %s (Modus=%s)', host, mode)
 
     try:
-        resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        resolved = _getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         addr_family = resolved[0][0]
         ip_addr = resolved[0][4][0]
     except socket.gaierror as e:
