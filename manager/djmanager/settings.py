@@ -89,9 +89,6 @@ CSRF_COOKIE_AGE = 31449600  # 1 Jahr
 
 # ── Security headers (relevant even behind reverse proxy) ─────────────────────
 
-SECURE_CONTENT_TYPE_NOSNIFF = True
-X_FRAME_OPTIONS = 'DENY'
-
 # ── Password validation ───────────────────────────────────────────────────────
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -109,8 +106,9 @@ CSRF_COOKIE_SECURE     = os.getenv('CSRF_COOKIE_SECURE',     'False') == 'True'
 SECURE_HSTS_SECONDS    = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv('SECURE_HSTS_INCLUDE_SUBDOMAINS', 'False') == 'True'
 SECURE_HSTS_PRELOAD    = os.getenv('SECURE_HSTS_PRELOAD',    'False') == 'True'
-SECURE_CONTENT_TYPE_NOSNIFF = os.getenv('SECURE_CONTENT_TYPE_NOSNIFF', 'False') == 'True'
-X_FRAME_OPTIONS        = os.getenv('X_FRAME_OPTIONS', 'SAMEORIGIN')
+# Standardmäßig aktiviert; kann per .env überschrieben werden (z.B. für Tests)
+SECURE_CONTENT_TYPE_NOSNIFF = os.getenv('SECURE_CONTENT_TYPE_NOSNIFF', 'True') == 'True'
+X_FRAME_OPTIONS        = os.getenv('X_FRAME_OPTIONS', 'DENY')
 
 # W008: SSL-Redirect übernimmt nginx — Django soll es nicht zusätzlich tun
 # W021: HSTS Preload-List-Eintrag ist ein manueller Schritt, nicht automatisch
