@@ -208,11 +208,14 @@ async function runCustomHttpScan() {
   if (port) url += '&port=' + encodeURIComponent(port);
   if (tls)  url += '&tls='  + encodeURIComponent(tls);
 
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 100000); // 100s client-side timeout
   try {
-    const r = await fetch(url);
+    const r = await fetch(url, {signal: ctrl.signal});
+    clearTimeout(timer);
     const d = await r.json();
     loading.classList.add('d-none');
-    if (d.error && !d.headers.length && !d.cookies.length) {
+    if (d.error && !d.headers?.length && !d.cookies?.length) {
       output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
       loadScanLog();
       return;
@@ -220,8 +223,10 @@ async function runCustomHttpScan() {
     output.innerHTML = '<div class="card"><div class="card-header"><i class="bi bi-globe me-1"></i>HTTP / TLS Scan Ergebnis</div><div class="card-body">' + renderHttpScanResult(d) + '</div></div>';
     loadScanLog();
   } catch(e) {
+    clearTimeout(timer);
     loading.classList.add('d-none');
-    output.innerHTML = `<div class="alert alert-danger small">Verbindungsfehler: ${e.message}</div>`;
+    const msg = e.name === 'AbortError' ? 'Scan-Timeout: Keine Antwort nach 100 Sekunden.' : `Verbindungsfehler: ${e.message}`;
+    output.innerHTML = `<div class="alert alert-danger small">${msg}</div>`;
   }
 }
 
@@ -254,8 +259,11 @@ async function runPortScan() {
   let url = portScanUrl + '?target=' + encodeURIComponent(target) + '&mode=' + mode;
   if (mode === 'range') url += '&from=' + fromVal + '&to=' + toVal;
 
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 100000); // 100s client-side timeout
   try {
-    const r = await fetch(url);
+    const r = await fetch(url, {signal: ctrl.signal});
+    clearTimeout(timer);
     const d = await r.json();
     loading.classList.add('d-none');
     if (d.error) {
@@ -266,8 +274,10 @@ async function runPortScan() {
     output.innerHTML = renderPortScanResult(d);
     loadScanLog();
   } catch(e) {
+    clearTimeout(timer);
     loading.classList.add('d-none');
-    output.innerHTML = `<div class="alert alert-danger small">Verbindungsfehler: ${e.message}</div>`;
+    const msg = e.name === 'AbortError' ? 'Port-Scan Timeout: Keine Antwort nach 100 Sekunden.' : `Verbindungsfehler: ${e.message}`;
+    output.innerHTML = `<div class="alert alert-danger small">${msg}</div>`;
   }
 }
 
