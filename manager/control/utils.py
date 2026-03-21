@@ -1743,13 +1743,17 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
 
     class _V4TLSConn(http.client.HTTPSConnection):
         def connect(self):
+            sni_host = self.host  # original hostname for SNI / nginx vhost routing
             connect_ip, _ = _resolve_connect_ip(self.host, self.port or 443)
             if connect_ip:
-                # Preserve original hostname for SNI (getattr for Python compat)
-                if not getattr(self, '_server_hostname', None):
-                    self._server_hostname = self.host
-                self.host = connect_ip
-            super().connect()
+                self.host = connect_ip  # TCP connect to IPv4 / loopback
+            # TCP connection (HTTPConnection.connect sets self.sock)
+            http.client.HTTPConnection.connect(self)
+            # TLS wrapping with the ORIGINAL hostname as SNI so nginx routes
+            # to the correct virtual host even when connecting via 127.0.0.1
+            self.sock = self._context.wrap_socket(
+                self.sock, server_hostname=sni_host
+            )
 
     class _V4HTTPHandler(urllib.request.HTTPHandler):
         def http_open(self, req):
