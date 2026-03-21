@@ -2815,11 +2815,15 @@ if [ -f "\$_ENV_FILE" ]; then
   _UPD_SHORT="\$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
   _UPD_FQDN="\$(hostname -f 2>/dev/null || echo '')"
   _ALL_IPS="\$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^\$|^::' | paste -sd, -)"
+  # ALLOWED_HOSTS vorab lesen — wird sowohl für _NEEDS_FIX-Check als auch Update benötigt
+  _CUR_AH="\$(grep '^ALLOWED_HOSTS=' "\$_ENV_FILE" | cut -d= -f2-)"
   _NEEDS_FIX=0
-  # Prüfen ob Port-Variante oder MANAGER_DOMAIN fehlt
+  # Prüfen ob Port-Variante, MANAGER_DOMAIN in CSRF_TRUSTED_ORIGINS oder ALLOWED_HOSTS fehlt
   echo "\$_CUR_CSRF" | grep -q ":\${_MGR_PORT_UP}" || _NEEDS_FIX=1
   if [ -n "\${_MGR_DOMAIN_UP:-}" ]; then
     echo "\$_CUR_CSRF" | grep -qF "https://\$(echo "\$_MGR_DOMAIN_UP" | cut -d, -f1)" || _NEEDS_FIX=1
+    # Auch prüfen ob MANAGER_DOMAIN in ALLOWED_HOSTS fehlt — verhindert DisallowedHost-Fehler
+    echo "\$_CUR_AH" | grep -qF "\$(echo "\$_MGR_DOMAIN_UP" | cut -d, -f1)" || _NEEDS_FIX=1
   fi
   if [ "\$_NEEDS_FIX" = "1" ]; then
     echo "  🔧 Ergänze CSRF_TRUSTED_ORIGINS (Port :\${_MGR_PORT_UP})..."
@@ -2840,8 +2844,7 @@ if [ -f "\$_ENV_FILE" ]; then
         echo "\$_NEW_CSRF" | grep -qF "http://\${_d}"  || _NEW_CSRF="\${_NEW_CSRF},http://\${_d}"
       done
     fi
-    # ALLOWED_HOSTS ebenfalls vervollständigen
-    _CUR_AH="\$(grep '^ALLOWED_HOSTS=' "\$_ENV_FILE" | cut -d= -f2-)"
+    # ALLOWED_HOSTS vervollständigen
     _NEW_AH="\$_CUR_AH"
     for _h in \$(echo "\$_ALL_IPS" | tr ',' ' ') "\$_UPD_SHORT" "\$_UPD_FQDN"; do
       [ -z "\$_h" ] && continue
