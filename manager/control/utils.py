@@ -1743,6 +1743,7 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
 
     class _V4TLSConn(http.client.HTTPSConnection):
         def connect(self):
+            sni_host = self.host  # original hostname for SNI / nginx vhost routing
             connect_ip, _ = _resolve_connect_ip(self.host, self.port or 443)
             if connect_ip:
                 original_host = self.host
