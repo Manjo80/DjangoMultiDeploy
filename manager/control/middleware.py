@@ -4,6 +4,7 @@ DjangoMultiDeploy Manager — Security Middleware
   - IPWhitelistMiddleware: block IPs not in whitelist (if configured)
 """
 import ipaddress
+import threading
 
 from django.shortcuts import redirect
 from django.http import HttpResponseForbidden
@@ -49,9 +50,11 @@ class TwoFactorMiddleware:
 # IP Whitelist Middleware
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Simple in-process cache so we don't hit DB on every request
+# In-process cache to avoid DB hit on every request.
+# Lock makes the cache thread-safe under multi-threaded Gunicorn workers.
 _whitelist_cache = None
 _whitelist_cache_ts = 0
+_whitelist_lock = threading.Lock()
 _CACHE_TTL = 60  # seconds
 
 
@@ -59,21 +62,23 @@ def _get_whitelist():
     global _whitelist_cache, _whitelist_cache_ts
     import time
     now = time.time()
-    if _whitelist_cache is None or now - _whitelist_cache_ts > _CACHE_TTL:
-        try:
-            from .models import SecuritySettings
-            ips = SecuritySettings.get().get_ip_whitelist()
-        except Exception:
-            ips = []
-        _whitelist_cache = ips
-        _whitelist_cache_ts = now
-    return _whitelist_cache
+    with _whitelist_lock:
+        if _whitelist_cache is None or now - _whitelist_cache_ts > _CACHE_TTL:
+            try:
+                from .models import SecuritySettings
+                ips = SecuritySettings.get().get_ip_whitelist()
+            except Exception:
+                ips = []
+            _whitelist_cache = ips
+            _whitelist_cache_ts = now
+        return _whitelist_cache
 
 
 def invalidate_whitelist_cache():
     """Call this after saving SecuritySettings."""
     global _whitelist_cache
-    _whitelist_cache = None
+    with _whitelist_lock:
+        _whitelist_cache = None
 
 
 def _ip_in_whitelist(client_ip, whitelist):
