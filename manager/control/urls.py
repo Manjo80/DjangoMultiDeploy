@@ -88,4 +88,9 @@ urlpatterns = [
 
     # HTTP/TLS security scan per project
     path('project/<str:name>/http-scan/', views.project_http_scan, name='project_http_scan'),
+
+    # Standalone Security Scanner (custom hostname + port scan)
+    path('security-scanner/', views.security_scanner_view, name='security_scanner'),
+    path('security-scanner/http-scan/', views.security_scanner_run, name='security_scanner_run'),
+    path('security-scanner/port-scan/', views.port_scan_run, name='port_scan_run'),
 ]

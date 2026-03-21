@@ -2008,6 +2008,70 @@ def _check_security_headers(headers):
                          'value': powered,
                          'msg': 'X-Powered-By gibt Technologie-Infos preis — sollte entfernt werden.'})
 
+    # Cross-Origin-Opener-Policy (COOP)
+    coop = headers.get('cross-origin-opener-policy')
+    if coop is None:
+        findings.append({'header': 'Cross-Origin-Opener-Policy', 'severity': 'low', 'status': 'missing',
+                         'value': None,
+                         'msg': 'COOP fehlt — Schutz gegen Spectre/Cross-Origin-Leaks empfohlen. Empfohlen: same-origin'})
+    else:
+        findings.append({'header': 'Cross-Origin-Opener-Policy', 'severity': 'ok', 'status': 'ok',
+                         'value': coop, 'msg': 'OK'})
+
+    # Cross-Origin-Embedder-Policy (COEP)
+    coep = headers.get('cross-origin-embedder-policy')
+    if coep is None:
+        findings.append({'header': 'Cross-Origin-Embedder-Policy', 'severity': 'low', 'status': 'missing',
+                         'value': None,
+                         'msg': 'COEP fehlt — für SharedArrayBuffer / high-res timers nötig. Empfohlen: require-corp'})
+    else:
+        findings.append({'header': 'Cross-Origin-Embedder-Policy', 'severity': 'ok', 'status': 'ok',
+                         'value': coep, 'msg': 'OK'})
+
+    # Cross-Origin-Resource-Policy (CORP)
+    corp = headers.get('cross-origin-resource-policy')
+    if corp is None:
+        findings.append({'header': 'Cross-Origin-Resource-Policy', 'severity': 'low', 'status': 'missing',
+                         'value': None,
+                         'msg': 'CORP fehlt — Ressourcen können Cross-Origin eingebettet werden. Empfohlen: same-origin'})
+    else:
+        findings.append({'header': 'Cross-Origin-Resource-Policy', 'severity': 'ok', 'status': 'ok',
+                         'value': corp, 'msg': 'OK'})
+
+    return findings
+
+
+def _check_cors(headers):
+    """Check CORS configuration for misconfigurations."""
+    findings = []
+    acao = headers.get('access-control-allow-origin')
+    acac = headers.get('access-control-allow-credentials')
+    if acao:
+        if acao.strip() == '*':
+            if acac and acac.lower() == 'true':
+                findings.append({
+                    'header': 'Access-Control-Allow-Origin + Credentials',
+                    'severity': 'critical',
+                    'status': 'weak',
+                    'value': f'Origin: {acao}, Credentials: {acac}',
+                    'msg': 'CORS-Wildcard (*) mit Credentials=true ist gefährlich — ermöglicht Cross-Origin-Datenklau!',
+                })
+            else:
+                findings.append({
+                    'header': 'Access-Control-Allow-Origin',
+                    'severity': 'medium',
+                    'status': 'weak',
+                    'value': acao,
+                    'msg': 'CORS-Wildcard (*) erlaubt jeder Website Zugriff auf API-Antworten. Prüfen ob gewollt.',
+                })
+        else:
+            findings.append({
+                'header': 'Access-Control-Allow-Origin',
+                'severity': 'ok',
+                'status': 'ok',
+                'value': acao,
+                'msg': f'CORS auf bestimmte Origin eingeschränkt: {acao}',
+            })
     return findings
 
 
@@ -2091,6 +2155,7 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
         'tls': None,
         'http_redirect': None,
         'headers': [],
+        'cors': [],
         'cookies': [],
         'config_leaks': [],
         'summary': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0, 'ok': 0},
@@ -2128,10 +2193,13 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
     # 4. Security headers
     result['headers'] = _check_security_headers(hdrs)
 
-    # 5. Cookies
+    # 5. CORS
+    result['cors'] = _check_cors(hdrs)
+
+    # 6. Cookies
     result['cookies'] = _check_cookies(hdrs)
 
-    # 6. Config / file leaks
+    # 7. Config / file leaks
     base_url = target_url.rstrip('/')
     # Use root base
     from urllib.parse import urlparse
@@ -2139,11 +2207,15 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
     scan_base = f'{parsed.scheme}://{parsed.netloc}'
     result['config_leaks'] = _check_config_leaks(scan_base, timeout=6)
 
-    # 7. Summary
+    # 8. Summary
     sev_count = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0, 'ok': 0, 'warning': 0}
 
     for h in result['headers']:
         s = h.get('severity', 'info')
+        sev_count[s] = sev_count.get(s, 0) + 1
+
+    for c in result['cors']:
+        s = c.get('severity', 'info')
         sev_count[s] = sev_count.get(s, 0) + 1
 
     for ck in result['cookies']:
@@ -2179,4 +2251,174 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
     # merge warning into medium for display
     sev_count['medium'] = sev_count.get('medium', 0) + sev_count.pop('warning', 0)
     result['summary'] = sev_count
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Public IP detection
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_public_ip():
+    """Detect the server's public IP address. Returns (ipv4, ipv6) tuple, either may be None."""
+    ipv4 = None
+    ipv6 = None
+    services_v4 = [
+        'https://api4.ipify.org',
+        'https://ipv4.icanhazip.com',
+        'https://checkip.amazonaws.com',
+    ]
+    services_v6 = [
+        'https://api6.ipify.org',
+        'https://ipv6.icanhazip.com',
+    ]
+    for url in services_v4:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'DjManager/1.0'})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                ip = resp.read().decode().strip()
+                if ip:
+                    ipv4 = ip
+                    break
+        except Exception:
+            continue
+    for url in services_v6:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'DjManager/1.0'})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                ip = resp.read().decode().strip()
+                if ip:
+                    ipv6 = ip
+                    break
+        except Exception:
+            continue
+    return ipv4, ipv6
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Port scanner
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Well-known ports with service names and risk notes
+_PORT_INFO = {
+    21:    ('FTP',            'high',   'FTP überträgt Zugangsdaten im Klartext'),
+    22:    ('SSH',            'info',   'SSH-Zugang — Brute-Force-Schutz empfohlen (fail2ban)'),
+    23:    ('Telnet',         'critical','Telnet überträgt alles unverschlüsselt — sofort deaktivieren!'),
+    25:    ('SMTP',           'medium', 'SMTP-Port offen — prüfen ob Relay erlaubt'),
+    53:    ('DNS',            'medium', 'DNS-Port offen — öffentlicher Resolver? Zone-Transfer prüfen'),
+    80:    ('HTTP',           'info',   'HTTP offen — sollte auf HTTPS umleiten'),
+    110:   ('POP3',           'high',   'POP3 überträgt Passwörter im Klartext'),
+    111:   ('rpcbind',        'high',   'rpcbind/portmapper offen — NFS-Angriffsfläche'),
+    135:   ('MSRPC',          'high',   'Microsoft RPC — typisch für Windows-Systeme'),
+    137:   ('NetBIOS-NS',     'high',   'NetBIOS Name Service — sollte nicht öffentlich sein'),
+    139:   ('NetBIOS-SMB',    'high',   'NetBIOS/SMB — sollte nicht öffentlich sein'),
+    143:   ('IMAP',           'medium', 'IMAP offen — prüfen ob TLS erzwungen wird'),
+    443:   ('HTTPS',          'info',   'HTTPS offen'),
+    445:   ('SMB',            'critical','SMB/Windows-Shares öffentlich — extrem gefährlich (EternalBlue)!'),
+    465:   ('SMTPS',          'info',   'SMTP über SSL/TLS'),
+    587:   ('SMTP/STARTTLS',  'info',   'SMTP Submission Port'),
+    631:   ('IPP',            'medium', 'Drucker-Port (IPP) — sollte nicht öffentlich sein'),
+    993:   ('IMAPS',          'info',   'IMAP über SSL/TLS'),
+    995:   ('POP3S',          'info',   'POP3 über SSL/TLS'),
+    1433:  ('MSSQL',          'critical','Microsoft SQL Server — Datenbank nicht öffentlich!'),
+    1521:  ('Oracle DB',      'critical','Oracle Datenbank — nicht öffentlich!'),
+    2049:  ('NFS',            'critical','NFS-Dateifreigabe öffentlich — sehr gefährlich!'),
+    2181:  ('ZooKeeper',      'critical','ZooKeeper offen — ermöglicht Cluster-Übernahme'),
+    3000:  ('Node.js/Dev',    'high',   'Entwicklungsserver offen — nicht für Produktion'),
+    3306:  ('MySQL',          'critical','MySQL-Datenbank öffentlich — Brute-Force-Gefahr!'),
+    3389:  ('RDP',            'critical','Remote Desktop offen — extrem hohes Angriffsrisiko!'),
+    4443:  ('HTTPS-alt',      'info',   'Alternativer HTTPS-Port'),
+    5000:  ('Flask/Dev',      'high',   'Entwicklungsserver offen — nicht für Produktion'),
+    5432:  ('PostgreSQL',     'critical','PostgreSQL-Datenbank öffentlich — Brute-Force-Gefahr!'),
+    5900:  ('VNC',            'critical','VNC Remote Desktop offen — extrem gefährlich!'),
+    5985:  ('WinRM HTTP',     'high',   'Windows Remote Management offen'),
+    6379:  ('Redis',          'critical','Redis ohne Auth öffentlich — Datenklau und RCE möglich!'),
+    6443:  ('Kubernetes API', 'high',   'Kubernetes API-Server offen'),
+    8000:  ('HTTP-Dev',       'high',   'Entwicklungsserver offen — nicht für Produktion'),
+    8080:  ('HTTP-Proxy/Alt', 'medium', 'Alternativer HTTP-Port — TLS prüfen'),
+    8443:  ('HTTPS-alt',      'info',   'Alternativer HTTPS-Port'),
+    8888:  ('Jupyter',        'critical','Jupyter Notebook offen — führt beliebigen Code aus!'),
+    9000:  ('PHP-FPM/misc',   'high',   'PHP-FPM oder sonstiger Dienst'),
+    9090:  ('Prometheus',     'high',   'Prometheus-Metriken öffentlich — Daten-Leak'),
+    9200:  ('Elasticsearch',  'critical','Elasticsearch offen — alle Daten ungeschützt lesbar!'),
+    9300:  ('ES Transport',   'critical','Elasticsearch Cluster-Port offen'),
+    11211: ('Memcached',      'critical','Memcached offen — DDoS-Amplification und Datenleck!'),
+    27017: ('MongoDB',        'critical','MongoDB offen — alle Daten ungeschützt lesbar!'),
+    27018: ('MongoDB',        'critical','MongoDB-shard offen'),
+}
+
+
+def run_port_scan(host, mode='common', port_start=1, port_end=1024, timeout=1.0, max_workers=50):
+    """
+    Scan TCP ports on host.
+
+    mode:
+      'common'  — scan the predefined list of well-known/risky ports
+      'range'   — scan port_start..port_end (max 10000 ports)
+
+    Returns dict:
+      {
+        'host': str,
+        'mode': str,
+        'open_ports': [{'port': int, 'service': str, 'severity': str, 'note': str}, ...],
+        'scanned': int,
+        'error': str or None,
+      }
+    """
+    import concurrent.futures
+
+    result = {
+        'host': host,
+        'mode': mode,
+        'open_ports': [],
+        'scanned': 0,
+        'error': None,
+    }
+
+    # Resolve host once
+    try:
+        resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        # Pick first address
+        addr_family = resolved[0][0]
+        ip_addr = resolved[0][4][0]
+    except socket.gaierror as e:
+        result['error'] = f'DNS-Auflösung fehlgeschlagen: {e}'
+        return result
+
+    if mode == 'common':
+        ports_to_scan = sorted(_PORT_INFO.keys())
+    else:
+        # Range scan — cap at 10000 ports for safety
+        port_start = max(1, int(port_start))
+        port_end   = min(65535, int(port_end))
+        if port_end - port_start > 10000:
+            port_end = port_start + 10000
+        ports_to_scan = list(range(port_start, port_end + 1))
+
+    result['scanned'] = len(ports_to_scan)
+
+    def _probe(port):
+        try:
+            with socket.socket(addr_family, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                r = s.connect_ex((ip_addr, port))
+                return port, r == 0
+        except Exception:
+            return port, False
+
+    open_ports = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_probe, p): p for p in ports_to_scan}
+        for fut in concurrent.futures.as_completed(futures):
+            port, is_open = fut.result()
+            if is_open:
+                info = _PORT_INFO.get(port, ('Unknown', 'info', ''))
+                open_ports.append({
+                    'port':     port,
+                    'service':  info[0],
+                    'severity': info[1],
+                    'note':     info[2],
+                })
+
+    open_ports.sort(key=lambda x: x['port'])
+    result['open_ports'] = open_ports
     return result

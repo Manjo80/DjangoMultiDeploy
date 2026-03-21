@@ -99,6 +99,8 @@
             <li><a class="dropdown-item" href="{% url 'security_settings' %}"><i class="bi bi-gear me-2"></i>Sicherheitseinstellungen</a></li>
             <li><a class="dropdown-item" href="{% url 'manager_settings' %}"><i class="bi bi-hdd-network me-2"></i>Allowed Hosts</a></li>
             <li><a class="dropdown-item" href="{% url 'firewall' %}"><i class="bi bi-shield-fill me-2"></i>Firewall</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="{% url 'security_scanner' %}"><i class="bi bi-radar me-2"></i>Security Scanner</a></li>
           </ul>
         </div>
         {% endif %}
