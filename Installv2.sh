@@ -2862,6 +2862,75 @@ if [ -f "\$_ENV_FILE" ]; then
   fi
 fi
 
+# nginx-Konfiguration des Managers neu generieren
+# (hält server_name und Catch-All-Block an MANAGER_DOMAIN aus .env aktuell)
+# Wichtig: Ohne das würde ein alter catch-all (server_name _) Anfragen für fremde
+# Domains (z.B. gps2.famhub.eu) an Django weiterleiten → DisallowedHost-Fehler.
+_ENV_FILE_NG="\$MANAGER_DIR/.env"
+if [ -f "/etc/nginx/sites-available/djmanager" ] && [ -f "\$_ENV_FILE_NG" ]; then
+  echo "  🔧 Aktualisiere nginx-Konfiguration..."
+  _NG_DOMAIN="\$(grep '^MANAGER_DOMAIN=' "\$_ENV_FILE_NG" | cut -d= -f2- | tr -d '\"')"
+  _NG_PORT="\$(grep '^MANAGER_PORT='    "\$_ENV_FILE_NG" | cut -d= -f2- | tr -d '\"')"
+  _NG_PORT="\${_NG_PORT:-8888}"
+  _NG_IP="\$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print \$7;exit}')"
+  [ -z "\${_NG_IP:-}" ] && _NG_IP="\$(hostname -I 2>/dev/null | awk '{print \$1}')"
+  _NG_SN="\$(echo "\${_NG_DOMAIN:-_}" | tr ',' ' ')"
+  {
+    printf '# HTTP → HTTPS Redirect (Port 80)\nserver {\n'
+    if [ -n "\${_NG_DOMAIN:-}" ]; then
+      printf '    listen 80;\n'
+    else
+      printf '    listen 80 default_server;\n'
+    fi
+    printf '    server_name %s;\n' "\${_NG_SN}"
+    printf '    return 301 https://\$host\$request_uri;\n}\n\n'
+    printf '# Manager HTTPS (Port 443, Self-Signed SSL)\nserver {\n'
+    if [ -n "\${_NG_DOMAIN:-}" ]; then
+      printf '    listen 443 ssl;\n'
+    else
+      printf '    listen 443 ssl default_server;\n'
+    fi
+    printf '    server_name %s;\n'            "\${_NG_SN}"
+    printf '    client_max_body_size 10M;\n'
+    printf '    ssl_certificate     ${_SSL_CERT};\n'
+    printf '    ssl_certificate_key ${_SSL_KEY};\n'
+    printf '    ssl_protocols       TLSv1.2 TLSv1.3;\n'
+    printf '    ssl_ciphers         HIGH:!aNULL:!MD5;\n'
+    printf '    ssl_session_cache   shared:SSL:10m;\n'
+    printf '    add_header X-Frame-Options "SAMEORIGIN" always;\n'
+    printf '    add_header X-Content-Type-Options "nosniff" always;\n'
+    printf '    add_header X-XSS-Protection "1; mode=block" always;\n'
+    printf '    add_header Strict-Transport-Security "max-age=31536000" always;\n'
+    printf '    access_log /var/log/nginx/djmanager.access.log;\n'
+    printf '    error_log  /var/log/nginx/djmanager.error.log;\n'
+    printf '    location /static/ {\n        alias %s/staticfiles/;\n        expires 1h;\n        access_log off;\n    }\n' "\$MANAGER_DIR"
+    printf '    location / {\n'
+    printf '        proxy_pass http://%s:%s;\n' "\${_NG_IP}" "\${_NG_PORT}"
+    printf '        proxy_set_header Host \$http_host;\n'
+    printf '        proxy_set_header X-Real-IP \$remote_addr;\n'
+    printf '        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;\n'
+    printf '        proxy_set_header X-Forwarded-Proto https;\n'
+    printf '        proxy_connect_timeout 30s;\n'
+    printf '        proxy_read_timeout 300s;\n'
+    printf '    }\n}\n'
+    if [ -n "\${_NG_DOMAIN:-}" ]; then
+      printf '# Unbekannte Domains abweisen (verhindert DisallowedHost an Django)\n'
+      printf 'server {\n    listen 80 default_server;\n    server_name _;\n    return 444;\n}\n'
+      printf 'server {\n    listen 443 ssl default_server;\n    server_name _;\n'
+      printf '    ssl_certificate     ${_SSL_CERT};\n'
+      printf '    ssl_certificate_key ${_SSL_KEY};\n'
+      printf '    return 444;\n}\n'
+    fi
+  } > /etc/nginx/sites-available/djmanager
+  if nginx -t 2>/dev/null; then
+    systemctl reload nginx
+    echo "  ✅ nginx-Konfiguration aktualisiert (server_name: \${_NG_SN})"
+  else
+    echo "  ⚠️  nginx-Konfiguration ungültig — bitte manuell prüfen: nginx -t"
+    nginx -t
+  fi
+fi
+
 # Migrationen
 echo "📊 Erstelle und führe Migrationen aus..."
 "\$MANAGER_DIR/venv/bin/python" "\$MANAGER_DIR/manage.py" makemigrations control --no-input
