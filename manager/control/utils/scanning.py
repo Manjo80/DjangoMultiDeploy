@@ -6,9 +6,15 @@ import ssl
 import socket
 import ipaddress
 import datetime
+import logging
 import subprocess
 import urllib.request
 import urllib.error
+
+# Import scan_log to register the in-memory log handler on first import.
+from . import scan_log as _scan_log  # noqa: F401
+
+logger = logging.getLogger('djmanager.scanner')
 
 
 def _get_local_ips():
@@ -137,8 +143,10 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
                 hdrs['set-cookie'] = '\n'.join(sc_all)
         return e.code, hdrs, b'', url, None
     except urllib.error.URLError as e:
+        logger.debug('HTTP GET URLError %s — %s', url, e.reason)
         return None, {}, b'', url, str(e.reason)
     except Exception as e:
+        logger.debug('HTTP GET Fehler %s — %s', url, e)
         return None, {}, b'', url, str(e)
 
 
@@ -155,6 +163,7 @@ def _check_tls(hostname, port=443):
         'cert_issuer': None,
         'error': None,
     }
+    logger.debug('TLS-Check: %s:%d', hostname, port)
     try:
         ctx = ssl.create_default_context()
         connect_ip, _ = _resolve_connect_ip(hostname, port)
@@ -176,21 +185,30 @@ def _check_tls(hostname, port=443):
                     result['cert_expiry'] = exp.strftime('%Y-%m-%d')
                     result['cert_days_left'] = (exp - datetime.datetime.utcnow()).days
                 result['cert_valid'] = True
+                logger.debug('TLS OK: %s — %s, Zert. gültig bis %s (%d Tage)',
+                             hostname, result['tls_version'], result['cert_expiry'],
+                             result['cert_days_left'] or 0)
     except ssl.SSLCertVerificationError as e:
         result['reachable'] = True
         result['cert_valid'] = False
         result['error'] = f'Zertifikat ungültig: {e}'
+        logger.warning('TLS Zertifikatsfehler %s:%d — %s', hostname, port, e)
     except ssl.SSLError as e:
         result['reachable'] = True
         result['error'] = f'TLS-Fehler: {e.reason or str(e)}'
+        logger.warning('TLS SSL-Fehler %s:%d — %s', hostname, port, e.reason or e)
     except ConnectionRefusedError:
         result['error'] = 'Verbindung abgelehnt'
+        logger.warning('TLS Verbindung abgelehnt: %s:%d', hostname, port)
     except socket.timeout:
         result['error'] = 'Timeout'
+        logger.warning('TLS Timeout: %s:%d', hostname, port)
     except OSError as e:
         result['error'] = str(e)
+        logger.warning('TLS OSError %s:%d — %s', hostname, port, e)
     except Exception as e:
         result['error'] = str(e)
+        logger.warning('TLS unbekannter Fehler %s:%d — %s', hostname, port, e)
     return result
 
 
@@ -254,6 +272,9 @@ def _check_config_leaks(base_url, timeout=8):
             item = fut.result()
             if item:
                 leaks.append(item)
+                if item['severity'] == 'critical':
+                    logger.warning('Kritisches Konfigurationsleck gefunden: %s (HTTP %s)',
+                                   item['path'], item['status'])
     leaks.sort(key=lambda x: path_order.get(x['path'], 999))
     return leaks
 
@@ -489,6 +510,8 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
       - summary: {'critical': int, 'high': int, 'medium': int, 'low': int, 'ok': int}
       - error: str or None (fatal error preventing scan)
     """
+    logger.info('HTTP-Scan gestartet: %s (TLS=%s)', target_url, check_tls)
+
     result = {
         'target_url': target_url,
         'tls': None,
@@ -520,7 +543,9 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
     )
     if err or status is None:
         result['error'] = f'Verbindungsfehler: {err or "keine Antwort"}'
+        logger.warning('HTTP-Scan Verbindungsfehler %s — %s', target_url, err or 'keine Antwort')
         return result
+    logger.debug('HTTP-Scan Verbindung OK: %s — HTTP %s', target_url, status)
 
     result['http_status'] = status
     result['final_url'] = final_url
@@ -576,6 +601,9 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
 
     sev_count['medium'] = sev_count.get('medium', 0) + sev_count.pop('warning', 0)
     result['summary'] = sev_count
+    logger.info('HTTP-Scan abgeschlossen: %s — kritisch=%d hoch=%d mittel=%d',
+                target_url, sev_count.get('critical', 0),
+                sev_count.get('high', 0), sev_count.get('medium', 0))
     return result
 
 
@@ -684,12 +712,15 @@ def run_port_scan(host, mode='common', port_start=1, port_end=1024, timeout=1.0,
         'error': None,
     }
 
+    logger.info('Port-Scan gestartet: %s (Modus=%s)', host, mode)
+
     try:
         resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         addr_family = resolved[0][0]
         ip_addr = resolved[0][4][0]
     except socket.gaierror as e:
         result['error'] = f'DNS-Auflösung fehlgeschlagen: {e}'
+        logger.warning('Port-Scan DNS-Fehler %s — %s', host, e)
         return result
 
     if mode == 'common':
@@ -728,4 +759,11 @@ def run_port_scan(host, mode='common', port_start=1, port_end=1024, timeout=1.0,
 
     open_ports.sort(key=lambda x: x['port'])
     result['open_ports'] = open_ports
+    critical_count = sum(1 for p in open_ports if p['severity'] == 'critical')
+    if critical_count:
+        logger.warning('Port-Scan %s — %d kritische Port(s) offen: %s',
+                       host, critical_count,
+                       ', '.join(str(p['port']) for p in open_ports if p['severity'] == 'critical'))
+    else:
+        logger.info('Port-Scan abgeschlossen: %s — %d offene Port(s)', host, len(open_ports))
     return result

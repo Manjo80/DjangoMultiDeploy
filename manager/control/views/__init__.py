@@ -29,7 +29,7 @@ from .projects import (
     project_migrations, project_pip_outdated, project_pip_upgrade,
     project_clone_form, project_clone_run,
 )
-from .scanner import security_scanner_view, security_scanner_run, port_scan_run
+from .scanner import security_scanner_view, security_scanner_run, port_scan_run, scan_log_view, clear_scan_log
 
 __all__ = [
     # auth
@@ -60,4 +60,5 @@ __all__ = [
     'project_clone_form', 'project_clone_run',
     # scanner
     'security_scanner_view', 'security_scanner_run', 'port_scan_run',
+    'scan_log_view', 'clear_scan_log',
 ]

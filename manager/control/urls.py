@@ -93,4 +93,8 @@ urlpatterns = [
     path('security-scanner/', views.security_scanner_view, name='security_scanner'),
     path('security-scanner/http-scan/', views.security_scanner_run, name='security_scanner_run'),
     path('security-scanner/port-scan/', views.port_scan_run, name='port_scan_run'),
+
+    # In-memory scan log
+    path('security-scanner/log/', views.scan_log_view, name='scan_log'),
+    path('security-scanner/log/clear/', views.clear_scan_log, name='clear_scan_log'),
 ]
