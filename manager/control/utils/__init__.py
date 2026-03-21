@@ -35,6 +35,7 @@ from .deployment import (
 from .deploy_keys import (
     KEYS_DIR,
     GLOBAL_DEPLOY_KEY,
+    _load_key_registry,
     create_deploy_key,
     list_deploy_keys,
     get_deploy_key_pubkey,
@@ -90,7 +91,7 @@ __all__ = [
     'run_update', 'extract_project_zip', 'update_project_from_zip',
     'remove_project', 'start_install', 'run_management_command',
     # deploy_keys
-    'KEYS_DIR', 'GLOBAL_DEPLOY_KEY',
+    'KEYS_DIR', 'GLOBAL_DEPLOY_KEY', '_load_key_registry',
     'create_deploy_key', 'list_deploy_keys', 'get_deploy_key_pubkey',
     'delete_deploy_key', 'assign_project_deploy_key', 'get_project_deploy_key',
     'get_global_deploy_key', 'get_ssh_key',
