@@ -439,7 +439,7 @@ def _check_http_redirect(hostname, port=80):
         return {'available': False, 'redirects_to_https': False, 'error': str(e)}
 
 
-def run_http_security_scan(target_url, hostname=None, check_tls=True):
+def run_http_security_scan(target_url, hostname=None, check_tls=True, local_port=None):
     """
     Comprehensive HTTP security scan for a target URL.
 
@@ -451,6 +451,11 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
       - config_leaks: sensitive file exposure
       - summary: {'critical': int, 'high': int, 'medium': int, 'low': int, 'ok': int}
       - error: str or None (fatal error preventing scan)
+
+    local_port: if set (int/str), HTTP requests go to https://127.0.0.1:{local_port}/
+                instead of target_url (hairpin-NAT bypass for servers that cannot
+                reach their own public domain).  TLS check still uses hostname.
+                HTTP→HTTPS redirect check is skipped when local_port is set.
     """
     logger.info('HTTP-Scan gestartet: %s (TLS=%s)', target_url, check_tls)
 
@@ -477,11 +482,21 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
     if check_tls and is_https and hostname:
         result['tls'] = _check_tls(hostname, port=_tls_port)
 
-    if hostname and is_https:
+    # HTTP redirect check: only when scanning externally (local_port bypass skips it
+    # because port 80 is not the per-project nginx port and would still time out).
+    if hostname and is_https and not local_port:
         result['http_redirect'] = _check_http_redirect(hostname, port=_http_port)
 
+    # Resolve the actual URL to fetch: use local nginx port when provided to avoid
+    # hairpin-NAT timeouts (server cannot reach its own public domain).
+    if local_port:
+        fetch_url = f'https://127.0.0.1:{local_port}/'
+        logger.debug('HTTP-Scan hairpin-NAT bypass: %s → %s', target_url, fetch_url)
+    else:
+        fetch_url = target_url
+
     status, hdrs, body, final_url, err = _http_get(
-        target_url, timeout=12, verify_ssl=False, follow_redirects=True
+        fetch_url, timeout=12, verify_ssl=False, follow_redirects=True
     )
     if err or status is None:
         result['error'] = f'Verbindungsfehler: {err or "keine Antwort"}'
@@ -495,10 +510,13 @@ def run_http_security_scan(target_url, hostname=None, check_tls=True):
     result['cors'] = _check_cors(hdrs)
     result['cookies'] = _check_cookies(hdrs)
 
-    base_url = target_url.rstrip('/')
     from urllib.parse import urlparse
-    parsed = urlparse(base_url)
-    scan_base = f'{parsed.scheme}://{parsed.netloc}'
+    if local_port:
+        scan_base = f'https://127.0.0.1:{local_port}'
+    else:
+        base_url = target_url.rstrip('/')
+        parsed = urlparse(base_url)
+        scan_base = f'{parsed.scheme}://{parsed.netloc}'
     result['config_leaks'] = _check_config_leaks(scan_base, timeout=6)
 
     sev_count = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0, 'ok': 0, 'warning': 0}
