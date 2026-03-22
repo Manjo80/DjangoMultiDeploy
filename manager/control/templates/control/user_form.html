@@ -109,7 +109,7 @@
       {% csrf_token %}
       <input type="hidden" name="action" value="disable_2fa">
       <button class="btn btn-outline-warning btn-sm"
-              onclick="return confirm('2FA für {{ edit_user.username }} zurücksetzen?')">
+              data-confirm="2FA für {{ edit_user.username }} zurücksetzen?">
         <i class="bi bi-shield-x me-1"></i>2FA zurücksetzen
       </button>
     </form>

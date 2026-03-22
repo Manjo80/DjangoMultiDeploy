@@ -29,7 +29,7 @@
       <a href="{% url 'ssh_key_download' project %}" class="btn btn-success">
         <i class="bi bi-download me-1"></i> Herunterladen (id_ed25519_{{ project }})
       </a>
-      <button class="btn btn-outline-secondary" onclick="copyKey()">
+      <button class="btn btn-outline-secondary" id="copy-key-btn">
         <i class="bi bi-clipboard me-1"></i> In Zwischenablage
       </button>
     </div>
@@ -54,5 +54,6 @@ function copyKey() {
     alert('SSH-Key in Zwischenablage kopiert!');
   });
 }
+document.getElementById('copy-key-btn')?.addEventListener('click', copyKey);
 </script>
 {% endblock %}

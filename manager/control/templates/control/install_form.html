@@ -56,21 +56,21 @@
           <div class="d-flex gap-3">
             <div class="form-check">
               <input class="form-check-input" type="radio" name="source_type"
-                     id="src_new" value="new" checked onchange="updateSourceUI()">
+                     id="src_new" value="new" checked>
               <label class="form-check-label" for="src_new">
                 <i class="bi bi-plus-square me-1"></i> Leeres Django-Projekt
               </label>
             </div>
             <div class="form-check">
               <input class="form-check-input" type="radio" name="source_type"
-                     id="src_github" value="github" onchange="updateSourceUI()">
+                     id="src_github" value="github">
               <label class="form-check-label" for="src_github">
                 <i class="bi bi-github me-1"></i> GitHub Repository
               </label>
             </div>
             <div class="form-check">
               <input class="form-check-input" type="radio" name="source_type"
-                     id="src_zip" value="zip" onchange="updateSourceUI()">
+                     id="src_zip" value="zip">
               <label class="form-check-label" for="src_zip">
                 <i class="bi bi-file-zip me-1"></i> ZIP hochladen
               </label>
@@ -109,7 +109,7 @@
             <br>Erkannte Server-IPs:
             {% for ip in server_ips %}<button type="button" class="btn btn-sm py-0 px-1 ms-1"
               style="font-size:0.75rem;background:#21262d;border:1px solid #30363d;color:#58a6ff"
-              onclick="addHost('{{ ip }}')">+ {{ ip }}</button>{% endfor %}
+              data-action="addHost" data-ip="{{ ip }}">+ {{ ip }}</button>{% endfor %}
             {% endif %}
           </div>
         </div>
@@ -290,6 +290,13 @@ function addHost(ip) {
   const cur = f.value.split(',').map(s => s.trim()).filter(Boolean);
   if (!cur.includes(ip)) { cur.push(ip); f.value = cur.join(','); }
 }
+document.querySelectorAll('input[name="source_type"]').forEach(r => {
+  r.addEventListener('change', updateSourceUI);
+});
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-action="addHost"]');
+  if (btn) addHost(btn.dataset.ip);
+});
 function updateSourceUI() {
   const src = document.querySelector('input[name="source_type"]:checked')?.value || 'new';
   document.getElementById('src_github_row').style.display  = src === 'github' ? '' : 'none';

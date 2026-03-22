@@ -16,7 +16,7 @@
     <form method="get" class="row g-2 align-items-end">
       <div class="col-auto">
         <label class="form-label">Log-Typ</label>
-        <select name="type" class="form-select form-select-sm" onchange="this.form.submit()">
+        <select name="type" class="form-select form-select-sm" id="log-type-sel">
           <option value="journal"      {% if log_type == 'journal' %}selected{% endif %}>systemd Journal</option>
           <option value="nginx_access" {% if log_type == 'nginx_access' %}selected{% endif %}>nginx Access</option>
           <option value="nginx_error"  {% if log_type == 'nginx_error' %}selected{% endif %}>nginx Error</option>
@@ -24,7 +24,7 @@
       </div>
       <div class="col-auto">
         <label class="form-label">Zeilen</label>
-        <select name="lines" class="form-select form-select-sm" onchange="this.form.submit()">
+        <select name="lines" class="form-select form-select-sm" id="log-lines-sel">
           <option value="50"  {% if lines == 50  %}selected{% endif %}>50</option>
           <option value="100" {% if lines == 100 %}selected{% endif %}>100</option>
           <option value="200" {% if lines == 200 %}selected{% endif %}>200</option>
@@ -46,5 +46,10 @@
 // Auto-scroll to bottom
 const el = document.getElementById('log-content');
 el.scrollTop = el.scrollHeight;
+
+// Auto-submit form when selects change
+['log-type-sel', 'log-lines-sel'].forEach(id => {
+  document.getElementById(id)?.addEventListener('change', function () { this.form.submit(); });
+});
 </script>
 {% endblock %}

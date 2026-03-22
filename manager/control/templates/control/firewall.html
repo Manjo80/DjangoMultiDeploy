@@ -71,7 +71,7 @@
               <input type="hidden" name="port" value="{{ rule.port }}">
               <input type="hidden" name="proto" value="{{ rule.proto }}">
               <button type="submit" class="btn btn-outline-danger btn-sm"
-                      onclick="return confirm('Port {{ rule.port }}/{{ rule.proto }} sperren?')">
+                      data-confirm="Port {{ rule.port }}/{{ rule.proto }} sperren?">
                 <i class="bi bi-lock-fill"></i> Sperren
               </button>
             </form>
@@ -82,7 +82,7 @@
               <input type="hidden" name="port" value="{{ rule.port }}">
               <input type="hidden" name="proto" value="{{ rule.proto }}">
               <button type="submit" class="btn btn-outline-success btn-sm"
-                      onclick="return confirm('Port {{ rule.port }}/{{ rule.proto }} öffnen?')">
+                      data-confirm="Port {{ rule.port }}/{{ rule.proto }} öffnen?">
                 <i class="bi bi-unlock-fill"></i> Öffnen
               </button>
             </form>

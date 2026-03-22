@@ -78,7 +78,7 @@
                       data-kill-url="{% url 'install_kill' inst.project inst.run_id %}"
                       data-project="{{ inst.project }}"
                       data-run-id="{{ inst.run_id }}"
-                      onclick="killInstall(this)"
+                      data-action="killInstall"
                       title="Installation abbrechen und Log löschen">
                 <i class="bi bi-trash"></i>
               </button>
@@ -99,6 +99,11 @@
 
 <script nonce="{{ csp_nonce }}">
 const csrfToken = '{{ csrf_token }}';
+
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-action="killInstall"]');
+  if (btn) killInstall(btn);
+});
 
 async function killInstall(btn) {
   const project = btn.dataset.project;

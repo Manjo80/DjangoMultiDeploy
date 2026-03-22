@@ -76,7 +76,7 @@
             </a>
             {% if u != request.user %}
             <form method="post" action="{% url 'user_delete' u.pk %}" class="d-inline"
-                  onsubmit="return confirm('Benutzer {{ u.username }} wirklich löschen?')">
+                  data-confirm="Benutzer {{ u.username }} wirklich löschen?">
               {% csrf_token %}
               <button class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
             </form>

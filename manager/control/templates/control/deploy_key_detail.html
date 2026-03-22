@@ -30,7 +30,7 @@
     <pre class="log-output" id="pub-key-box" style="font-size:0.75rem; word-break:break-all; white-space:pre-wrap; max-height:120px;">{{ pub_key }}</pre>
 
     <div class="d-flex flex-wrap gap-2 mt-3">
-      <button class="btn btn-outline-secondary" onclick="copyKey()">
+      <button class="btn btn-outline-secondary" id="copy-key-btn">
         <i class="bi bi-clipboard me-1"></i> Kopieren
       </button>
       <a href="{% url 'deploy_key_detail' key_id %}?download=1" class="btn btn-outline-success">
@@ -57,11 +57,12 @@
 <script nonce="{{ csp_nonce }}">
 function copyKey() {
   const text = document.getElementById('pub-key-box').textContent.trim();
+  const btn = document.getElementById('copy-key-btn');
   navigator.clipboard.writeText(text).then(() => {
-    const btn = event.target.closest('button');
     btn.innerHTML = '<i class="bi bi-check-lg me-1"></i> Kopiert!';
     setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard me-1"></i> Kopieren'; }, 2000);
   });
 }
+document.getElementById('copy-key-btn')?.addEventListener('click', copyKey);
 </script>
 {% endblock %}
