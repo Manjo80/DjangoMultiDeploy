@@ -1284,6 +1284,7 @@ async function runHttpScan(target) {
       output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
       return;
     }
+    window._lastScanData = d;
     output.innerHTML = renderHttpScanResult(d);
   } catch(e) {
     loading.classList.add('d-none');
@@ -1352,6 +1353,32 @@ function renderSummaryBar(summary) {
   return html;
 }
 
+function fixBadge(loc) {
+  if (!loc) return '';
+  const cfg = {webapp:['#0d6efd','Webapp'],nginx:['#fd7e14','Nginx'],proxy:['#6f42c1','Proxy']}[loc]||['#6c757d',loc];
+  return `<span class="badge d-block mt-1" style="background:${cfg[0]};font-size:.65em;opacity:.9"><i class="bi bi-wrench me-1"></i>${cfg[1]}</span>`;
+}
+function snippetHtml(s) {
+  if (!s) return '';
+  const e = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return `<details class="mt-1"><summary class="text-muted small" style="cursor:pointer">&#128196; Fix anzeigen</summary><pre class="mb-0 mt-1 p-2 rounded small" style="background:#0d1117;color:#e6edf3;white-space:pre-wrap;word-break:break-all">${e}</pre></details>`;
+}
+function downloadReport(d) {
+  const now = new Date().toISOString().slice(0,19).replace('T',' ');
+  const sl = {'critical':'KRITISCH','high':'HOCH','medium':'MITTEL','low':'NIEDRIG','warning':'WARNUNG','info':'INFO','ok':'OK'};
+  let md = `# Sicherheits-Scan Report\n\n**Ziel:** ${d.target_url}  \n**Datum:** ${now}  \n**HTTP-Status:** ${d.http_status||'–'}\n\n`;
+  function sec(title, items, fn) { const i=items.filter(x=>x.severity!=='ok'); if(!i.length)return; md+=`---\n\n## ${title}\n\n`; i.forEach(fn); }
+  sec('HTTP Security Headers', d.headers||[], h=>{ md+=`### ${h.header}\n- **Schwere:** ${sl[h.severity]||h.severity}\n- **Fix in:** ${h.fix_location||'–'}\n- **Hinweis:** ${h.msg||'–'}\n${h.fix_snippet?`\`\`\`\n${h.fix_snippet}\n\`\`\`\n`:''}\n`; });
+  sec('CORS-Konfiguration', d.cors||[], c=>{ md+=`### ${c.header}\n- **Schwere:** ${sl[c.severity]||c.severity}\n- **Fix in:** ${c.fix_location||'–'}\n- **Hinweis:** ${c.msg||'–'}\n${c.fix_snippet?`\`\`\`\n${c.fix_snippet}\n\`\`\`\n`:''}\n`; });
+  const ci=(d.cookies||[]).filter(c=>c.issues&&c.issues.length);
+  if(ci.length){md+=`---\n\n## Cookie-Sicherheit\n\n`;ci.forEach(ck=>{md+=`### Cookie: \`${ck.name}\`\n`;ck.issues.forEach(i=>{md+=`- **${i.flag}** (${sl[i.severity]||i.severity}): ${i.msg}\n${i.fix_snippet?`  \`\`\`\n  ${i.fix_snippet}\n  \`\`\`\n`:''}`});md+='\n';});}
+  const rl=(d.config_leaks||[]).filter(l=>l.severity!=='info');
+  if(rl.length){md+=`---\n\n## Konfigurationslecks\n\n`;rl.forEach(l=>{md+=`- **${l.path}** (${l.label}, HTTP ${l.status}) — ${sl[l.severity]||l.severity}${l.note?': '+l.note:''}\n`;});}
+  const blob=new Blob([md],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  const host=(d.target_url||'scan').replace(/https?:\/\//,'').replace(/\//g,'').replace(/[^a-z0-9.-]/gi,'_');
+  a.download=`security-report_${host}_${now.slice(0,10)}.md`;a.click();URL.revokeObjectURL(a.href);
+}
+
 function renderHttpScanResult(d) {
   let html = '';
 
@@ -1362,6 +1389,7 @@ function renderHttpScanResult(d) {
 
   // Summary
   html += renderSummaryBar(d.summary || {});
+  html += `<button class="btn btn-sm btn-outline-secondary mb-3" onclick="downloadReport(window._lastScanData)"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report herunterladen (.md)</button>`;
 
   // Target info
   html += `<div class="text-muted small mb-3">
@@ -1436,7 +1464,7 @@ function renderHttpScanResult(d) {
                        ['high','critical'].includes(h.severity) ? 'table-danger' : '';
       html += `<tr class="${rowClass}">
         <td class="font-monospace small text-nowrap">${h.header}</td>
-        <td class="text-nowrap">${severityBadge(h.severity)}</td>
+        <td class="text-nowrap align-top">${severityBadge(h.severity)}${fixBadge(h.fix_location)}</td>
         <td class="small">`;
       if (h.value && h.status !== 'missing') {
         html += `<code class="d-block text-truncate" style="max-width:380px" title="${h.value}">${h.value}</code>`;
@@ -1444,7 +1472,8 @@ function renderHttpScanResult(d) {
       if (h.msg && h.status !== 'ok') {
         html += `<span class="text-muted">${h.msg}</span>`;
       }
-      html += '</td></tr>';
+      if (h.status !== 'ok') html += snippetHtml(h.fix_snippet);
+      html += `</td></tr>`;
     }
     html += '</tbody></table></div>';
   }
@@ -1459,10 +1488,11 @@ function renderHttpScanResult(d) {
                        c.severity === 'medium' ? 'table-warning' : '';
       html += `<tr class="${rowClass}">
         <td class="font-monospace small text-nowrap">${c.header}</td>
-        <td>${severityBadge(c.severity)}</td>
+        <td class="text-nowrap align-top">${severityBadge(c.severity)}${fixBadge(c.fix_location)}</td>
         <td class="small">
           ${c.value ? `<code class="d-block text-truncate" style="max-width:380px">${c.value}</code>` : ''}
           ${c.msg && c.severity !== 'ok' ? `<span class="text-muted">${c.msg}</span>` : ''}
+          ${c.severity !== 'ok' ? snippetHtml(c.fix_snippet) : ''}
         </td>
       </tr>`;
     }
@@ -1490,7 +1520,7 @@ function renderHttpScanResult(d) {
       if (hasIssues) {
         html += '<ul class="mt-1 mb-0 ps-3">';
         for (const issue of ck.issues) {
-          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg}</li>`;
+          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg} ${fixBadge(issue.fix_location)}${snippetHtml(issue.fix_snippet)}</li>`;
         }
         html += '</ul>';
       }

@@ -452,10 +452,15 @@ function renderSummaryBar(summary) {
   if(allOk)html+='<span class="badge bg-success px-2 py-1"><i class="bi bi-shield-check me-1"></i>Alles OK</span>';
   return html+'</div>';
 }
+function fixBadge(loc){if(!loc)return '';const c={webapp:['#0d6efd','Webapp'],nginx:['#fd7e14','Nginx'],proxy:['#6f42c1','Proxy']}[loc]||['#6c757d',loc];return `<span class="badge d-block mt-1" style="background:${c[0]};font-size:.6em"><i class="bi bi-wrench me-1"></i>${c[1]}</span>`;}
+function snippetHtml(s){if(!s)return '';const e=s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');return `<details class="mt-1"><summary class="text-muted small" style="cursor:pointer">&#128196; Fix</summary><pre class="mb-0 mt-1 p-1 rounded small" style="background:#0d1117;color:#e6edf3;white-space:pre-wrap;word-break:break-all;font-size:.75em">${e}</pre></details>`;}
+function downloadReport(d){const now=new Date().toISOString().slice(0,19).replace('T',' ');const sl={'critical':'KRITISCH','high':'HOCH','medium':'MITTEL','low':'NIEDRIG','warning':'WARNUNG','info':'INFO','ok':'OK'};let md=`# Sicherheits-Scan Report\n\n**Ziel:** ${d.target_url}  \n**Datum:** ${now}  \n**HTTP-Status:** ${d.http_status||'–'}\n\n`;function sec(t,a,fn){const i=a.filter(x=>x.severity!=='ok');if(!i.length)return;md+=`---\n\n## ${t}\n\n`;i.forEach(fn);}sec('HTTP Security Headers',d.headers||[],h=>{md+=`### ${h.header}\n- **Schwere:** ${sl[h.severity]||h.severity}\n- **Fix in:** ${h.fix_location||'–'}\n- **Hinweis:** ${h.msg||'–'}\n${h.fix_snippet?`\`\`\`\n${h.fix_snippet}\n\`\`\`\n`:''}\n`;});sec('CORS',d.cors||[],c=>{md+=`### ${c.header}\n- **Schwere:** ${sl[c.severity]||c.severity}\n- **Fix in:** ${c.fix_location||'–'}\n- **Hinweis:** ${c.msg||'–'}\n${c.fix_snippet?`\`\`\`\n${c.fix_snippet}\n\`\`\`\n`:''}\n`;});const ci=(d.cookies||[]).filter(c=>c.issues&&c.issues.length);if(ci.length){md+=`---\n\n## Cookie-Sicherheit\n\n`;ci.forEach(ck=>{md+=`### Cookie: \`${ck.name}\`\n`;ck.issues.forEach(i=>{md+=`- **${i.flag}** (${sl[i.severity]||i.severity}): ${i.msg}\n${i.fix_snippet?`  \`\`\`\n  ${i.fix_snippet}\n  \`\`\`\n`:''}`});md+='\n';});}const rl=(d.config_leaks||[]).filter(l=>l.severity!=='info');if(rl.length){md+=`---\n\n## Konfigurationslecks\n\n`;rl.forEach(l=>{md+=`- **${l.path}** (${l.label}, HTTP ${l.status}) — ${sl[l.severity]||l.severity}${l.note?': '+l.note:''}\n`;});}const blob=new Blob([md],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);const host=(d.target_url||'scan').replace(/https?:\/\//,'').replace(/\//g,'').replace(/[^a-z0-9.-]/gi,'_');a.download=`security-report_${host}_${now.slice(0,10)}.md`;a.click();URL.revokeObjectURL(a.href);}
+
 function renderHttpScanResult(d) {
   let html='';
   if(d.error)html+=`<div class="alert alert-warning small py-1 mb-2"><i class="bi bi-exclamation-circle me-1"></i>${d.error}</div>`;
   html+=renderSummaryBar(d.summary||{});
+  html+=`<button class="btn btn-sm btn-outline-secondary mb-2" onclick="downloadReport(window._lastScanData)"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report (.md)</button>`;
   html+=`<div class="text-muted small mb-2"><i class="bi bi-bullseye me-1"></i>Ziel: <code>${d.target_url}</code>${d.http_status?` · Status: <strong>${d.http_status}</strong>`:''}</div>`;
   if(d.tls){const t=d.tls;html+='<h6 class="border-top pt-2 mt-1 small"><i class="bi bi-lock me-1"></i>TLS / Zertifikat</h6>';
     if(t.error&&!t.reachable){html+=`<div class="alert alert-danger small py-1">${t.error}</div>`;}
@@ -474,9 +479,10 @@ function renderHttpScanResult(d) {
   if(d.headers&&d.headers.length){html+='<h6 class="border-top pt-2 mt-1 small"><i class="bi bi-layout-text-window me-1"></i>Security Headers</h6>';
     html+='<div class="table-responsive"><table class="table table-sm table-dark mb-2"><thead><tr><th>Header</th><th>Status</th><th>Hinweis</th></tr></thead><tbody>';
     for(const h of d.headers){const rc=h.severity==='ok'?'':h.severity==='low'?'text-muted':h.severity==='medium'?'table-warning':['high','critical'].includes(h.severity)?'table-danger':'';
-      html+=`<tr class="${rc}"><td class="font-monospace small text-nowrap">${h.header}</td><td class="text-nowrap">${severityBadge(h.severity)}</td><td class="small">`;
+      html+=`<tr class="${rc}"><td class="font-monospace small text-nowrap">${h.header}</td><td class="text-nowrap align-top">${severityBadge(h.severity)}${fixBadge(h.fix_location)}</td><td class="small">`;
       if(h.value&&h.status!=='missing')html+=`<code class="d-block text-truncate" style="max-width:280px" title="${h.value}">${h.value}</code>`;
       if(h.msg&&h.status!=='ok')html+=`<span class="text-muted">${h.msg}</span>`;
+      if(h.status!=='ok')html+=snippetHtml(h.fix_snippet);
       html+='</td></tr>';}
     html+='</tbody></table></div>';}
   if(d.cookies&&d.cookies.length){html+='<h6 class="border-top pt-2 mt-1 small"><i class="bi bi-cookie me-1"></i>Cookies</h6>';
@@ -484,7 +490,7 @@ function renderHttpScanResult(d) {
       html+=`<div class="card mb-1 ${hi?'border-warning':'border-success'} bg-transparent"><div class="card-body py-1 small"><strong class="font-monospace">${ck.name}</strong> `;
       const f=(flag,p)=>`<span class="badge ${p?'bg-success':'bg-danger'} me-1">${flag}:${p?'✓':'✗'}</span>`;
       html+=f('Secure',ck.flags.secure)+f('HttpOnly',ck.flags.httponly)+(ck.flags.samesite?`<span class="badge bg-success me-1">SameSite:${ck.flags.samesite}</span>`:'<span class="badge bg-danger me-1">SameSite:✗</span>');
-      if(hi){html+='<ul class="mt-1 mb-0 ps-3">';for(const i of ck.issues)html+=`<li class="text-warning">${severityBadge(i.severity)} ${i.flag}: ${i.msg}</li>`;html+='</ul>';}
+      if(hi){html+='<ul class="mt-1 mb-0 ps-3">';for(const i of ck.issues)html+=`<li class="text-warning">${severityBadge(i.severity)} ${i.flag}: ${i.msg} ${fixBadge(i.fix_location)}${snippetHtml(i.fix_snippet)}</li>`;html+='</ul>';}
       html+='</div></div>';}}
   if(d.config_leaks&&d.config_leaks.length){const rl=d.config_leaks.filter(l=>l.severity!=='info');
     html+='<h6 class="border-top pt-2 mt-1 small"><i class="bi bi-file-earmark-lock me-1"></i>Konfigurationslecks</h6>';
@@ -514,6 +520,7 @@ async function runManagerHttpScan(target) {
       output.innerHTML = `<div class="alert alert-danger small py-1"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
       return;
     }
+    window._lastScanData = d;
     output.innerHTML = renderHttpScanResult(d);
   } catch(e) {
     loading.classList.add('d-none');
