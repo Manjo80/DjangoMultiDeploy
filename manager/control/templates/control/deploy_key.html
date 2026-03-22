@@ -51,7 +51,7 @@
 </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function copyKey() {
   const text = document.getElementById('pub-key-box').textContent.trim();
   navigator.clipboard.writeText(text).then(() => {

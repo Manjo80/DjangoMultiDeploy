@@ -42,7 +42,7 @@
 
 <pre class="log-output" id="log-content">{{ logs }}</pre>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // Auto-scroll to bottom
 const el = document.getElementById('log-content');
 el.scrollTop = el.scrollHeight;

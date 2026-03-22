@@ -49,7 +49,7 @@
 {% endblock %}
 
 {% block extra_js %}
-<script>
+<script nonce="{{ csp_nonce }}">
 const terminal   = document.getElementById('terminal');
 const statusBadge = document.getElementById('status-badge');
 const statusText  = document.getElementById('status-text');

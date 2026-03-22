@@ -1,10 +1,13 @@
 """
 DjangoMultiDeploy Manager — Security Middleware
-  - SecurityHeadersMiddleware: set CSP, Permissions-Policy, COEP, CORP headers
+  - SecurityHeadersMiddleware: set CSP with per-request nonce (no unsafe-inline),
+    Permissions-Policy, COEP, CORP headers
   - TwoFactorMiddleware: redirect 2FA-enabled users to verify page
   - IPWhitelistMiddleware: block IPs not in whitelist (if configured)
 """
+import base64
 import ipaddress
+import secrets
 import threading
 
 from django.shortcuts import redirect
@@ -15,34 +18,55 @@ from django.http import HttpResponseForbidden
 # Security Headers Middleware
 # ──────────────────────────────────────────────────────────────────────────────
 
-_CSP = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "img-src 'self' data: blob:; "
-    "font-src 'self' data: https://cdn.jsdelivr.net; "
-    "frame-ancestors 'none';"
-)
-
-_SECURITY_HEADERS = [
-    ('Content-Security-Policy', _CSP),
+_STATIC_SECURITY_HEADERS = [
     ('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=()'),
     ('Cross-Origin-Embedder-Policy', 'unsafe-none'),
     ('Cross-Origin-Resource-Policy', 'same-origin'),
 ]
 
 
+def _build_csp(nonce: str) -> str:
+    """Build a strict CSP.
+
+    script-src uses a per-request nonce — no 'unsafe-inline', preventing XSS
+    via injected scripts.  style-src keeps 'unsafe-inline' because inline
+    style="" attributes are used throughout the UI and CSS injection does not
+    allow JavaScript execution.
+    """
+    return (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self' data: https://cdn.jsdelivr.net; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none';"
+    )
+
+
 class SecurityHeadersMiddleware:
     """
-    Sets security headers that nginx may not yet have in older installations.
-    Only adds headers that are not already present (nginx takes priority).
+    Generates a cryptographically random nonce per request and sets a strict
+    Content-Security-Policy without 'unsafe-inline'.  The nonce is stored on
+    ``request.csp_nonce`` so templates can reference it via the context
+    processor.  All other security headers are added only when nginx has not
+    already set them.
     """
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
+        nonce = base64.b64encode(secrets.token_bytes(16)).decode('ascii')
+        request.csp_nonce = nonce
+
         response = self.get_response(request)
-        for name, value in _SECURITY_HEADERS:
+
+        # CSP always overrides nginx (nonce must match what was injected into templates)
+        response['Content-Security-Policy'] = _build_csp(nonce)
+
+        for name, value in _STATIC_SECURITY_HEADERS:
             if name not in response:
                 response[name] = value
         return response

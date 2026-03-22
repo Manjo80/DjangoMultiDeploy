@@ -579,7 +579,7 @@
 {% endblock %}
 
 {% block extra_js %}
-<script>
+<script nonce="{{ csp_nonce }}">
 // ── Management Command (AJAX) ──────────────────────────────────────────────
 (function () {
   const form    = document.getElementById('manage-cmd-form');
@@ -633,7 +633,7 @@
 </script>
 
 {% if request.user.is_staff %}
-<script>
+<script nonce="{{ csp_nonce }}">
 // ── Backup delete ──────────────────────────────────────────────────────────
 const backupDeleteUrl = "{% url 'backup_delete' name %}";
 
@@ -904,7 +904,7 @@ async function removeHost(host) {
 </script>
 
 <!-- Favorite Commands JS -->
-<script>
+<script nonce="{{ csp_nonce }}">
 const favCmdUrl = "{% url 'project_favorite_commands' name %}";
 
 async function runFavoriteCommand(cmd, label, btn) {
@@ -1045,7 +1045,7 @@ function showFavMsg(msg, ok) {
 </script>
 
 <!-- Migration Status JS -->
-<script>
+<script nonce="{{ csp_nonce }}">
 const migUrl = "{% url 'project_migrations' name %}";
 let migLoaded = false;
 
@@ -1142,7 +1142,7 @@ async function loadMigrations() {
 </script>
 
 <!-- Outdated Packages JS -->
-<script>
+<script nonce="{{ csp_nonce }}">
 const outdatedUrl   = "{% url 'project_pip_outdated' name %}";
 const pipUpgradeUrl = "{% url 'project_pip_upgrade' name %}";
 let outdatedLoaded  = false;
@@ -1252,7 +1252,7 @@ async function upgradePkg(pkgName, btn) {
 </script>
 
 <!-- HTTP/TLS Security Scan JS -->
-<script>
+<script nonce="{{ csp_nonce }}">
 const httpScanBaseUrl = "{% url 'project_http_scan' name %}";
 
 async function runHttpScan(target) {
@@ -1566,7 +1566,7 @@ function renderHttpScanResult(d) {
 </script>
 
 <!-- Security Scan JS -->
-<script>
+<script nonce="{{ csp_nonce }}">
 // Django security warning codes: source category + hint
 const WARN_META = {
   'W001': { src: 'code',  label: 'Code / settings.py', hint: 'SECURE_PROXY_SSL_HEADER Format veraltet — settings.py aktualisieren.' },

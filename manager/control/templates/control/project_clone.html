@@ -129,7 +129,7 @@
 {% endblock %}
 
 {% block extra_js %}
-<script>
+<script nonce="{{ csp_nonce }}">
 function copyVal(id) {
   const el = document.getElementById(id);
   navigator.clipboard.writeText(el.value).then(() => {

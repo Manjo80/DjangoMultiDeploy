@@ -133,7 +133,7 @@
 </div>
 
 {% block extra_js %}
-<script>
+<script nonce="{{ csp_nonce }}">
 const roleSelect = document.querySelector('select[name="role"]');
 const projSection = document.getElementById('project-assignment-section');
 function toggleProjects() {

@@ -275,7 +275,7 @@
 </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const dbPorts = {'1': ['5432', 'Standard PostgreSQL'], '2': ['3306', 'Standard MySQL/MariaDB'], '3': ['', 'SQLite (kein Port)']};
 document.getElementById('dbtype_sel').addEventListener('change', function() {
   const isLite = this.value === '3';

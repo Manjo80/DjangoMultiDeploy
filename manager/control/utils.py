@@ -1965,11 +1965,27 @@ def _check_security_headers(headers):
     # Content-Security-Policy
     def csp_check(v):
         warnings = []
-        vl = v.lower()
-        if 'unsafe-inline' in vl:
-            warnings.append("'unsafe-inline' erlaubt XSS")
-        if 'unsafe-eval' in vl:
-            warnings.append("'unsafe-eval' erlaubt Code-Injection")
+        directives = {}
+        for part in v.split(';'):
+            part = part.strip()
+            if not part:
+                continue
+            tokens = part.split()
+            if tokens:
+                directives[tokens[0].lower()] = ' '.join(tokens[1:]).lower()
+
+        script_policy = directives.get('script-src', directives.get('default-src', ''))
+        if "'unsafe-inline'" in script_policy:
+            warnings.append("'unsafe-inline' in script-src erlaubt XSS")
+        if "'unsafe-eval'" in script_policy:
+            warnings.append("'unsafe-eval' in script-src erlaubt Code-Injection")
+
+        style_policy = directives.get('style-src', directives.get('default-src', ''))
+        if "'unsafe-inline'" in style_policy and "'unsafe-inline'" not in script_policy:
+            warnings.append(
+                "'unsafe-inline' in style-src (CSS-Injection möglich, kein JS)"
+            )
+
         if not warnings:
             return None
         return '; '.join(warnings)
