@@ -96,7 +96,7 @@
             {% if request.user.is_staff %}
             <button type="button" class="btn-close btn-close-white btn-sm"
                     style="font-size:.6rem"
-                    onclick="removeHost('{{ h }}')" title="Entfernen"></button>
+                    data-action="removeHost" data-arg="{{ h }}" title="Entfernen"></button>
             {% endif %}
           </span>
           {% empty %}
@@ -109,9 +109,8 @@
         <div id="hosts-msg" class="alert alert-sm py-1 d-none mb-2"></div>
         <div class="input-group input-group-sm">
           <input type="text" id="new-host-input" class="form-control bg-dark text-light border-secondary"
-                 placeholder="z.B. meinedomain.de oder 192.168.1.10"
-                 onkeydown="if(event.key==='Enter'){addHost();event.preventDefault()}">
-          <button class="btn btn-outline-primary" onclick="addHost()">
+                 placeholder="z.B. meinedomain.de oder 192.168.1.10">
+          <button class="btn btn-outline-primary" data-action="addHost">
             <i class="bi bi-plus-lg"></i> Hinzufügen
           </button>
         </div>
@@ -150,7 +149,7 @@
           <div class="d-flex gap-2 flex-wrap" id="fav-cmd-buttons">
             {% for fav in favorite_commands %}
             <button class="btn btn-sm btn-outline-secondary"
-                    onclick="runFavoriteCommand('{{ fav.command|escapejs }}', '{{ fav.label|escapejs }}', this)"
+                    data-action="runFavoriteCommand" data-cmd="{{ fav.command|escapejs }}" data-label="{{ fav.label|escapejs }}"
                     title="python manage.py {{ fav.command }}">
               <i class="bi bi-terminal me-1"></i>{{ fav.label }}
             </button>
@@ -175,7 +174,7 @@
                 <strong>{{ fav.label }}</strong> — <code>manage.py {{ fav.command }}</code>
               </span>
               <button class="btn btn-sm btn-outline-danger py-0 px-1"
-                      onclick="deleteFavoriteCommand({{ fav.pk }}, this)" title="Entfernen">
+                      data-action="deleteFavoriteCommand" data-pk="{{ fav.pk }}" title="Entfernen">
                 <i class="bi bi-trash"></i>
               </button>
             </div>
@@ -188,7 +187,7 @@
                    placeholder='Label, z.B. "Migrate"' maxlength="80">
             <input type="text" id="fav-cmd-input" class="form-control bg-dark text-light border-secondary font-monospace"
                    placeholder='Befehl, z.B. "migrate"' maxlength="500">
-            <button class="btn btn-outline-warning" onclick="addFavoriteCommand()">
+            <button class="btn btn-outline-warning" data-action="addFavoriteCommand">
               <i class="bi bi-plus-lg"></i>
             </button>
           </div>
@@ -294,7 +293,7 @@
           </small>
           <div class="input-group input-group-sm">
             <input type="file" id="zip-upload-input" class="form-control bg-dark text-light border-secondary" accept=".zip">
-            <button class="btn btn-outline-warning" onclick="uploadZip()" id="zip-upload-btn">
+            <button class="btn btn-outline-warning" data-action="uploadZip" id="zip-upload-btn">
               <i class="bi bi-upload me-1"></i> Hochladen &amp; Aktualisieren
             </button>
           </div>
@@ -375,7 +374,7 @@
               {% if request.user.is_staff %}
               <td class="text-end pe-2">
                 <button class="btn btn-sm btn-outline-danger py-0 px-1"
-                        onclick="deleteBackup('{{ b.name }}', this)" title="Löschen">
+                        data-action="deleteBackup" data-name="{{ b.name }}" title="Löschen">
                   <i class="bi bi-trash"></i>
                 </button>
               </td>
@@ -396,7 +395,7 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-shield-exclamation me-1"></i>Sicherheitsscan</span>
-        <button id="scan-btn" class="btn btn-sm btn-outline-warning" onclick="runSecurityScan()">
+        <button id="scan-btn" class="btn btn-sm btn-outline-warning" data-action="runSecurityScan">
           <i class="bi bi-shield-lock me-1"></i>pip-audit + Deploy
         </button>
       </div>
@@ -456,12 +455,12 @@
           <label class="form-label small text-muted">Scan-Ziel auswählen:</label>
           <div class="d-flex flex-wrap gap-2 align-items-center">
             <button class="btn btn-sm btn-outline-secondary active" id="http-scan-btn-internal"
-                    onclick="runHttpScan('internal')">
+                    data-action="runHttpScan" data-host="internal">
               <i class="bi bi-hdd-network me-1"></i>Intern (Gunicorn Port {{ conf.GUNICORN_PORT }})
             </button>
             {% for h in extern_scan_hosts %}
             <button class="btn btn-sm btn-outline-info" id="http-scan-btn-{{ forloop.counter }}"
-                    onclick="runHttpScan('{{ h }}')">
+                    data-action="runHttpScan" data-host="{{ h }}">
               <i class="bi bi-globe me-1"></i>{{ h }}
             </button>
             {% endfor %}
@@ -487,7 +486,7 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-database-check me-1"></i>Migration-Status</span>
-        <button id="mig-btn" class="btn btn-sm btn-outline-info" onclick="loadMigrations()">
+        <button id="mig-btn" class="btn btn-sm btn-outline-info" data-action="loadMigrations">
           <i class="bi bi-arrow-clockwise me-1"></i>Migrations laden
         </button>
       </div>
@@ -505,7 +504,7 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-box-arrow-up me-1"></i>Veraltete Pakete (pip outdated)</span>
-        <button id="outdated-btn" class="btn btn-sm btn-outline-warning" onclick="loadOutdated()">
+        <button id="outdated-btn" class="btn btn-sm btn-outline-warning" data-action="loadOutdated">
           <i class="bi bi-arrow-clockwise me-1"></i>Pakete prüfen
         </button>
       </div>
@@ -523,7 +522,7 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-bar-chart-line me-1"></i> Zugriffsstatistiken</span>
-        <button id="stats-load-btn" class="btn btn-sm btn-outline-info" onclick="loadStats()">
+        <button id="stats-load-btn" class="btn btn-sm btn-outline-info" data-action="loadStats">
           <i class="bi bi-arrow-clockwise me-1"></i> Statistiken laden
         </button>
       </div>
@@ -683,7 +682,7 @@ function renderBackups(backups) {
       <td class="text-nowrap text-muted small">${b.mtime_str || ''}</td>
       <td class="text-end pe-2">
         <button class="btn btn-sm btn-outline-danger py-0 px-1"
-                onclick="deleteBackup('${b.name}', this)" title="Löschen">
+                data-action="deleteBackup" data-name="${b.name.replace(/"/g,'&quot;')}" title="Löschen">
           <i class="bi bi-trash"></i>
         </button>
       </td>
@@ -872,7 +871,7 @@ function renderHosts(hosts) {
     const span = document.createElement('span');
     span.className = 'badge bg-dark border border-secondary font-monospace d-inline-flex align-items-center gap-1';
     span.innerHTML = `${h} <button type="button" class="btn-close btn-close-white btn-sm"
-      style="font-size:.6rem" onclick="removeHost('${h}')" title="Entfernen"></button>`;
+      style="font-size:.6rem" data-action="removeHost" data-arg="${h}" title="Entfernen"></button>`;
     container.appendChild(span);
   });
 }
@@ -999,7 +998,7 @@ function renderFavList(commands) {
         <strong>${c.label}</strong> — <code>manage.py ${c.command}</code>
       </span>
       <button class="btn btn-sm btn-outline-danger py-0 px-1"
-              onclick="deleteFavoriteCommand(${c.id}, this)" title="Entfernen">
+              data-action="deleteFavoriteCommand" data-pk="${c.id}" title="Entfernen">
         <i class="bi bi-trash"></i>
       </button>
     </div>`).join('');
@@ -1027,7 +1026,7 @@ function renderFavButtons(commands) {
   }
   section.innerHTML = commands.map(c =>
     `<button class="btn btn-sm btn-outline-secondary"
-             onclick="runFavoriteCommand('${c.command.replace(/'/g,"\\'")}', '${c.label.replace(/'/g,"\\'")}', this)"
+             data-action="runFavoriteCommand" data-cmd="${c.command.replace(/"/g,'&quot;')}" data-label="${c.label.replace(/"/g,'&quot;')}"
              title="python manage.py ${c.command}">
        <i class="bi bi-terminal me-1"></i>${c.label}
      </button>`
@@ -1184,7 +1183,7 @@ async function loadOutdated() {
           <td class="font-monospace text-warning">${p.latest}</td>
           <td class="text-end">
             <button class="btn btn-sm btn-outline-success py-0 px-2"
-                    onclick="upgradePkg('${p.name}', this)"
+                    data-action="upgradePkg" data-pkg="${p.name}"
                     title="pip install --upgrade ${p.name}">
               <i class="bi bi-arrow-up-circle me-1"></i>Update
             </button>
@@ -1389,7 +1388,7 @@ function renderHttpScanResult(d) {
 
   // Summary
   html += renderSummaryBar(d.summary || {});
-  html += `<button class="btn btn-sm btn-outline-secondary mb-3" onclick="downloadReport(window._lastScanData)"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report herunterladen (.md)</button>`;
+  html += `<button class="btn btn-sm btn-outline-secondary mb-3" data-action="downloadReport"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report herunterladen (.md)</button>`;
 
   // Target info
   html += `<div class="text-muted small mb-3">
@@ -1659,10 +1658,7 @@ async function runSecurityScan() {
       if (d.deploy_check.raw) {
         const rawId = 'deploy-check-raw';
         html += `<details class="mt-2"><summary class="text-muted small" style="cursor:pointer">Vollständige Ausgabe anzeigen
-          <button class="btn btn-sm btn-outline-secondary py-0 ms-2" onclick="event.preventDefault();(function(){
-            navigator.clipboard.writeText(document.getElementById('${rawId}').innerText)
-              .then(()=>{this.textContent='✓ Kopiert';setTimeout(()=>{this.textContent='Kopieren'},1500)})
-              .catch(()=>{});}).call(this)" style="font-size:.75rem">Kopieren</button>
+          <button class="btn btn-sm btn-outline-secondary py-0 ms-2" data-action="copyToClipboard" data-target="${rawId}" style="font-size:.75rem">Kopieren</button>
         </summary>
         <pre class="log-output mt-2" id="${rawId}">${d.deploy_check.raw}</pre></details>`;
       }
@@ -1677,6 +1673,46 @@ async function runSecurityScan() {
   btn.disabled = false;
   btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Erneut scannen';
 }
+</script>
+
+<script nonce="{{ csp_nonce }}">
+// ── CSP-compliant event delegation dispatcher ──────────────────────────────
+// Replaces all inline onclick="..." attributes (blocked by nonce-based CSP).
+document.addEventListener('click', function (e) {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  switch (action) {
+    case 'removeHost':            removeHost(el.dataset.arg); break;
+    case 'addHost':               addHost(); break;
+    case 'runFavoriteCommand':    runFavoriteCommand(el.dataset.cmd, el.dataset.label, el); break;
+    case 'deleteFavoriteCommand': deleteFavoriteCommand(parseInt(el.dataset.pk, 10), el); break;
+    case 'addFavoriteCommand':    addFavoriteCommand(); break;
+    case 'uploadZip':             uploadZip(); break;
+    case 'deleteBackup':          deleteBackup(el.dataset.name, el); break;
+    case 'runSecurityScan':       runSecurityScan(); break;
+    case 'runHttpScan':           runHttpScan(el.dataset.host); break;
+    case 'loadMigrations':        loadMigrations(); break;
+    case 'loadOutdated':          loadOutdated(); break;
+    case 'loadStats':             loadStats(); break;
+    case 'upgradePkg':            upgradePkg(el.dataset.pkg, el); break;
+    case 'downloadReport':        downloadReport(window._lastScanData); break;
+    case 'copyToClipboard': {
+      e.preventDefault();
+      const target = document.getElementById(el.dataset.target);
+      if (!target) break;
+      navigator.clipboard.writeText(target.innerText)
+        .then(() => { el.textContent = '✓ Kopiert'; setTimeout(() => { el.textContent = 'Kopieren'; }, 1500); })
+        .catch(() => {});
+      break;
+    }
+  }
+});
+
+// Keyboard: Enter in host-input triggers addHost
+document.getElementById('new-host-input')?.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') { e.preventDefault(); addHost(); }
+});
 </script>
 {% endif %}
 {% endblock %}

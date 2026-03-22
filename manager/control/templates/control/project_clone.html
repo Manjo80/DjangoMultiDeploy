@@ -47,7 +47,7 @@
               <input type="text" name="db_pass" id="db-pass"
                      class="form-control bg-dark text-light border-secondary font-monospace"
                      value="{{ db_pass }}" required>
-              <button type="button" class="btn btn-outline-secondary" onclick="copyVal('db-pass')">
+              <button type="button" class="btn btn-outline-secondary" data-action="copyVal" data-target="db-pass">
                 <i class="bi bi-clipboard"></i>
               </button>
             </div>
@@ -59,7 +59,7 @@
               <input type="text" name="app_pass" id="app-pass"
                      class="form-control bg-dark text-light border-secondary font-monospace"
                      value="{{ app_pass }}" required>
-              <button type="button" class="btn btn-outline-secondary" onclick="copyVal('app-pass')">
+              <button type="button" class="btn btn-outline-secondary" data-action="copyVal" data-target="app-pass">
                 <i class="bi bi-clipboard"></i>
               </button>
             </div>
@@ -71,7 +71,7 @@
               <input type="text" name="admin_pass" id="admin-pass"
                      class="form-control bg-dark text-light border-secondary font-monospace"
                      value="{{ admin_pass }}" required>
-              <button type="button" class="btn btn-outline-secondary" onclick="copyVal('admin-pass')">
+              <button type="button" class="btn btn-outline-secondary" data-action="copyVal" data-target="admin-pass">
                 <i class="bi bi-clipboard"></i>
               </button>
             </div>
@@ -138,5 +138,9 @@ function copyVal(id) {
     setTimeout(() => el.style.borderColor = '', 1500);
   });
 }
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-action="copyVal"]');
+  if (btn) copyVal(btn.dataset.target);
+});
 </script>
 {% endblock %}

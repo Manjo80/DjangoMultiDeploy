@@ -74,7 +74,7 @@
       {% csrf_token %}
       <input type="hidden" name="action" value="disable">
       <button type="submit" class="btn btn-danger btn-sm"
-              onclick="return confirm('2FA wirklich deaktivieren?')">
+              data-confirm="2FA wirklich deaktivieren?">
         <i class="bi bi-x-circle me-1"></i>2FA deaktivieren
       </button>
     </form>

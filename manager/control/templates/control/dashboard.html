@@ -191,15 +191,15 @@
           </a>
           {% if user.is_staff %}
           <button class="btn btn-sm btn-outline-success" title="Service neu starten"
-                  onclick="managerAction('restart', this)">
+                  data-action="managerAction" data-cmd="restart">
             <i class="bi bi-arrow-clockwise"></i>
           </button>
           <button class="btn btn-sm btn-outline-info" title="Update (git pull + Neustart)"
-                  onclick="runManagerUpdate(this)">
+                  data-action="runManagerUpdate">
             <i class="bi bi-arrow-repeat"></i>
           </button>
           <button class="btn btn-sm btn-outline-warning" title="Sicherheitsscan (pip-audit + Deploy-Check)"
-                  onclick="runManagerScan(this)">
+                  data-action="runManagerScan">
             <i class="bi bi-shield-check"></i>
           </button>
           <button class="btn btn-sm btn-outline-info" title="HTTP/TLS-Sicherheitsscan"
@@ -213,12 +213,12 @@
           <div class="d-flex flex-wrap gap-1 align-items-center mb-1">
             <small class="text-muted me-1">HTTP-Scan:</small>
             <button class="btn btn-sm btn-outline-secondary active" id="mgr-http-btn-internal"
-                    onclick="runManagerHttpScan('internal')">
+                    data-action="runManagerHttpScan" data-host="internal">
               <i class="bi bi-hdd-network me-1"></i>Intern (Port {{ manager_info.GUNICORN_PORT }})
             </button>
             {% for h in manager_allowed_hosts %}
             <button class="btn btn-sm btn-outline-info" id="mgr-http-btn-{{ forloop.counter }}"
-                    onclick="runManagerHttpScan('{{ h }}')">
+                    data-action="runManagerHttpScan" data-host="{{ h }}">
               <i class="bi bi-globe me-1"></i>{{ h }}
             </button>
             {% endfor %}
@@ -302,22 +302,22 @@
           </a>
           {% if user.is_staff %}
           <button class="btn btn-sm btn-outline-success" title="Service neu starten"
-                  onclick="quickAction('{{ p.PROJECTNAME }}', 'restart', this)">
+                  data-action="quickAction" data-project="{{ p.PROJECTNAME }}" data-cmd="restart">
             <i class="bi bi-arrow-clockwise"></i>
           </button>
           {% if p.status == 'active' %}
           <button class="btn btn-sm btn-outline-warning" title="Stoppen"
-                  onclick="quickAction('{{ p.PROJECTNAME }}', 'stop', this)">
+                  data-action="quickAction" data-project="{{ p.PROJECTNAME }}" data-cmd="stop">
             <i class="bi bi-stop-fill"></i>
           </button>
           {% else %}
           <button class="btn btn-sm btn-outline-success" title="Starten"
-                  onclick="quickAction('{{ p.PROJECTNAME }}', 'start', this)">
+                  data-action="quickAction" data-project="{{ p.PROJECTNAME }}" data-cmd="start">
             <i class="bi bi-play-fill"></i>
           </button>
           {% endif %}
           <button class="btn btn-sm btn-outline-info" title="Git Pull + Update"
-                  onclick="runUpdate('{{ p.PROJECTNAME }}', this)">
+                  data-action="runUpdate" data-project="{{ p.PROJECTNAME }}">
             <i class="bi bi-arrow-repeat"></i>
           </button>
           {% endif %}
@@ -326,7 +326,7 @@
         <div class="d-flex gap-1 flex-wrap mt-1 pt-1 border-top border-secondary">
           {% for fav in p.favorite_commands %}
           <button class="btn btn-sm btn-outline-secondary"
-                  onclick="runFavCmd('{{ p.PROJECTNAME }}', '{{ fav.command|escapejs }}', '{{ fav.label|escapejs }}', this)"
+                  data-action="runFavCmd" data-project="{{ p.PROJECTNAME }}" data-cmd="{{ fav.command|escapejs }}" data-label="{{ fav.label|escapejs }}"
                   title="python manage.py {{ fav.command }}">
             <i class="bi bi-terminal me-1"></i>{{ fav.label }}
           </button>
@@ -460,7 +460,7 @@ function renderHttpScanResult(d) {
   let html='';
   if(d.error)html+=`<div class="alert alert-warning small py-1 mb-2"><i class="bi bi-exclamation-circle me-1"></i>${d.error}</div>`;
   html+=renderSummaryBar(d.summary||{});
-  html+=`<button class="btn btn-sm btn-outline-secondary mb-2" onclick="downloadReport(window._lastScanData)"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report (.md)</button>`;
+  html+=`<button class="btn btn-sm btn-outline-secondary mb-2" data-action="downloadReport"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report (.md)</button>`;
   html+=`<div class="text-muted small mb-2"><i class="bi bi-bullseye me-1"></i>Ziel: <code>${d.target_url}</code>${d.http_status?` · Status: <strong>${d.http_status}</strong>`:''}</div>`;
   if(d.tls){const t=d.tls;html+='<h6 class="border-top pt-2 mt-1 small"><i class="bi bi-lock me-1"></i>TLS / Zertifikat</h6>';
     if(t.error&&!t.reachable){html+=`<div class="alert alert-danger small py-1">${t.error}</div>`;}
@@ -556,10 +556,7 @@ async function runManagerScan(btn) {
       if (d.deploy_check.raw) {
         const rawId = 'mgr-deploy-raw';
         html += `<div class="d-flex justify-content-end mb-1">
-          <button class="btn btn-sm btn-outline-secondary py-0" onclick="(function(){
-            navigator.clipboard.writeText(document.getElementById('${rawId}').innerText)
-              .then(()=>{this.textContent='✓ Kopiert';setTimeout(()=>{this.textContent='Kopieren'},1500)})
-              .catch(()=>{});}).call(this)" style="font-size:.75rem">Kopieren</button>
+          <button class="btn btn-sm btn-outline-secondary py-0" data-action="copyToClipboard" data-target="${rawId}" style="font-size:.75rem">Kopieren</button>
         </div>`;
         html += `<pre class="log-output" id="${rawId}">${d.deploy_check.raw}</pre>`;
       }
@@ -612,6 +609,30 @@ async function runManagerUpdate(btn) {
     setTimeout(() => location.reload(), 5000);
   }
 }
+
+// ── CSP-compliant event delegation dispatcher ──────────────────────────────
+document.addEventListener('click', function (e) {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  switch (el.dataset.action) {
+    case 'managerAction':    managerAction(el.dataset.cmd, el); break;
+    case 'runManagerUpdate': runManagerUpdate(el); break;
+    case 'runManagerScan':   runManagerScan(el); break;
+    case 'runManagerHttpScan': runManagerHttpScan(el.dataset.host); break;
+    case 'quickAction':      quickAction(el.dataset.project, el.dataset.cmd, el); break;
+    case 'runUpdate':        runUpdate(el.dataset.project, el); break;
+    case 'runFavCmd':        runFavCmd(el.dataset.project, el.dataset.cmd, el.dataset.label, el); break;
+    case 'downloadReport':   downloadReport(window._lastScanData); break;
+    case 'copyToClipboard': {
+      const target = document.getElementById(el.dataset.target);
+      if (!target) break;
+      navigator.clipboard.writeText(target.innerText)
+        .then(() => { el.textContent = '✓ Kopiert'; setTimeout(() => { el.textContent = 'Kopieren'; }, 1500); })
+        .catch(() => {});
+      break;
+    }
+  }
+});
 </script>
 {% endblock %}
 {% endblock %}

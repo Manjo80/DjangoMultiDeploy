@@ -27,7 +27,7 @@
         <span class="text-muted">IPv4:</span>
         <code class="ms-1">{{ pub_ipv4 }}</code>
         <button class="btn btn-xs btn-outline-secondary ms-2" style="font-size:.7rem;padding:1px 6px"
-                onclick="setTarget('{{ pub_ipv4 }}')">
+                data-action="setTarget" data-arg="{{ pub_ipv4 }}">
           <i class="bi bi-crosshair me-1"></i>Als Ziel setzen
         </button>
       </div>
@@ -37,7 +37,7 @@
         <span class="text-muted">IPv6:</span>
         <code class="ms-1">{{ pub_ipv6 }}</code>
         <button class="btn btn-xs btn-outline-secondary ms-2" style="font-size:.7rem;padding:1px 6px"
-                onclick="setTarget('{{ pub_ipv6 }}')">
+                data-action="setTarget" data-arg="{{ pub_ipv6 }}">
           <i class="bi bi-crosshair me-1"></i>Als Ziel setzen
         </button>
       </div>
@@ -56,7 +56,6 @@
         <label class="form-label small text-muted">Hostname oder IP-Adresse</label>
         <input type="text" id="scan-target" class="form-control form-control-sm font-monospace"
                placeholder="z.B. example.com oder 192.168.1.1"
-               oninput="updatePortDefault()">
         <div class="form-text">Hostname, IPv4 oder IPv6-Adresse</div>
       </div>
       <div class="col-md-2">
@@ -73,7 +72,7 @@
         </select>
       </div>
       <div class="col-md-2">
-        <button class="btn btn-warning btn-sm w-100" onclick="runCustomHttpScan()">
+        <button class="btn btn-warning btn-sm w-100" data-action="runCustomHttpScan">
           <i class="bi bi-globe me-1"></i>HTTP-Scan
         </button>
       </div>
@@ -116,7 +115,7 @@
         </div>
       </div>
       <div class="col-auto">
-        <button class="btn btn-info btn-sm" onclick="runPortScan()">
+        <button class="btn btn-info btn-sm" data-action="runPortScan">
           <i class="bi bi-radar me-1"></i>Port-Scan starten
         </button>
       </div>
@@ -137,7 +136,7 @@
 </div>
 <div id="http-scan-output"></div>
 <div id="http-scan-actions" class="d-none mt-2 mb-1">
-  <button class="btn btn-outline-success btn-sm" onclick="downloadReport()">
+  <button class="btn btn-outline-success btn-sm" data-action="downloadReport">
     <i class="bi bi-file-earmark-text me-1"></i>Report herunterladen (.md)
   </button>
 </div>
@@ -147,10 +146,10 @@
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-journal-text me-2"></i>Scan-Log <span class="text-muted small">(In-Memory, kein Neustart)</span></span>
     <div class="d-flex gap-2">
-      <button class="btn btn-outline-secondary btn-sm" onclick="loadScanLog()">
+      <button class="btn btn-outline-secondary btn-sm" data-action="loadScanLog">
         <i class="bi bi-arrow-clockwise me-1"></i>Aktualisieren
       </button>
-      <button class="btn btn-outline-danger btn-sm" onclick="clearScanLog()">
+      <button class="btn btn-outline-danger btn-sm" data-action="clearScanLog">
         <i class="bi bi-trash me-1"></i>Log leeren
       </button>
     </div>
@@ -575,7 +574,7 @@ function renderHttpScanResult(d) {
     html += `<div class="alert alert-warning small py-2 mb-3"><i class="bi bi-exclamation-circle me-1"></i>${d.error}</div>`;
   }
   html += renderSummaryBar(d.summary || {});
-  html += `<button class="btn btn-sm btn-outline-secondary mb-3" onclick="downloadReport(window._lastScanData)"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report herunterladen (.md)</button>`;
+  html += `<button class="btn btn-sm btn-outline-secondary mb-3" data-action="downloadReport"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report herunterladen (.md)</button>`;
   html += `<div class="text-muted small mb-3">
     <i class="bi bi-bullseye me-1"></i>Ziel: <code>${d.target_url}</code>
     ${d.http_status ? `&nbsp;· Status: <strong>${d.http_status}</strong>` : ''}
@@ -812,5 +811,22 @@ function renderHttpScanResult(d) {
 
   return html;
 }
+
+// ── CSP-compliant event delegation dispatcher ──────────────────────────────
+document.addEventListener('click', function (e) {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  switch (el.dataset.action) {
+    case 'setTarget':          setTarget(el.dataset.arg); break;
+    case 'runCustomHttpScan':  runCustomHttpScan(); break;
+    case 'runPortScan':        runPortScan(); break;
+    case 'downloadReport':     downloadReport(window._lastScanData); break;
+    case 'loadScanLog':        loadScanLog(); break;
+    case 'clearScanLog':       clearScanLog(); break;
+  }
+});
+
+// oninput replacement: update port default when scan-target changes
+document.getElementById('scan-target')?.addEventListener('input', updatePortDefault);
 </script>
 {% endblock %}

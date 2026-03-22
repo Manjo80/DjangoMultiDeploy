@@ -43,7 +43,7 @@
           <td class="font-monospace align-middle">{{ h }}</td>
           <td class="text-end">
             <form method="post" style="display:inline"
-                  onsubmit="return confirm('Host \'{{ h }}\' wirklich entfernen?')">
+                  data-confirm="Host '{{ h }}' wirklich entfernen?">
               {% csrf_token %}
               <input type="hidden" name="action" value="remove">
               <input type="hidden" name="host"   value="{{ h }}">
