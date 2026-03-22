@@ -136,6 +136,11 @@
   Scanne… (TLS + Headers + Cookies + CORS + Konfigurationslecks)
 </div>
 <div id="http-scan-output"></div>
+<div id="http-scan-actions" class="d-none mt-2 mb-1">
+  <button class="btn btn-outline-success btn-sm" onclick="downloadReport()">
+    <i class="bi bi-file-earmark-text me-1"></i>Report herunterladen (.md)
+  </button>
+</div>
 
 <!-- Scan-Log Panel -->
 <div class="card mt-4" id="scan-log-card">
@@ -217,10 +222,13 @@ async function runCustomHttpScan() {
     loading.classList.add('d-none');
     if (d.error && !d.headers?.length && !d.cookies?.length) {
       output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      document.getElementById('http-scan-actions').classList.add('d-none');
       loadScanLog();
       return;
     }
+    window._lastScanData = d;
     output.innerHTML = '<div class="card"><div class="card-header"><i class="bi bi-globe me-1"></i>HTTP / TLS Scan Ergebnis</div><div class="card-body">' + renderHttpScanResult(d) + '</div></div>';
+    document.getElementById('http-scan-actions').classList.remove('d-none');
     loadScanLog();
   } catch(e) {
     clearTimeout(timer);
@@ -351,6 +359,18 @@ function severityBadge(s) {
   return `<span class="badge bg-${cls} text-${cls==='warning'?'dark':'white'}"><i class="bi bi-${icons[s]||'info-circle'} me-1"></i>${labels[s]||s}</span>`;
 }
 
+function fixLocationBadge(loc) {
+  if (!loc) return '';
+  const cfg = {
+    nginx:  {cls:'primary',   icon:'server',           label:'nginx'},
+    env:    {cls:'secondary', icon:'file-earmark-lock', label:'.env'},
+    webapp: {cls:'info',      icon:'code-slash',        label:'webapp'},
+    proxy:  {cls:'dark',      icon:'shield-shaded',     label:'proxy'},
+  };
+  const c = cfg[loc] || {cls:'secondary', icon:'question-circle', label:loc};
+  return `<span class="badge bg-${c.cls} ms-1" title="Fix in: ${c.label}"><i class="bi bi-${c.icon} me-1"></i>${c.label}</span>`;
+}
+
 function renderSummaryBar(summary) {
   const items = [
     {key:'critical',label:'Kritisch',cls:'danger'},
@@ -414,6 +434,140 @@ async function clearScanLog() {
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Report Download ──────────────────────────────────────────────────────────
+
+function downloadReport() {
+  const d = window._lastScanData;
+  if (!d) return;
+  const md = generateMarkdownReport(d);
+  const blob = new Blob([md], {type: 'text/markdown;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const host = (d.target_url || 'scan').replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9._-]/g, '_');
+  a.download = `security-report_${host}_${new Date().toISOString().slice(0,10)}.md`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function generateMarkdownReport(d) {
+  const now = new Date().toLocaleString('de-DE');
+  const sevLabel = {critical:'🔴 Kritisch',high:'🟠 Hoch',medium:'🟡 Mittel',low:'⚪ Niedrig',info:'🔵 Info',ok:'✅ OK',warning:'🟡 Warnung'};
+  const locLabel = {nginx:'nginx-Konfiguration',env:'.env Datei',webapp:'webapp (settings.py)',proxy:'Reverse Proxy'};
+
+  let md = `# Security Report: ${d.target_url}\n\n`;
+  md += `**Scan-Zeitpunkt:** ${now}\n\n`;
+
+  // Summary
+  const s = d.summary || {};
+  md += `## Zusammenfassung\n\n`;
+  md += `| Schweregrad | Anzahl |\n|---|---|\n`;
+  for (const [key, label] of [['critical','🔴 Kritisch'],['high','🟠 Hoch'],['medium','🟡 Mittel'],['low','⚪ Niedrig'],['ok','✅ OK']]) {
+    if (s[key]) md += `| ${label} | ${s[key]} |\n`;
+  }
+  md += '\n';
+
+  // Group by fix_location
+  const byLoc = {};
+  const allFindings = [];
+
+  for (const h of (d.headers || [])) {
+    if (h.severity !== 'ok') allFindings.push({type:'Header', name:h.header, severity:h.severity, msg:h.msg, loc:h.fix_location});
+  }
+  for (const c of (d.cors || [])) {
+    if (c.severity !== 'ok') allFindings.push({type:'CORS', name:c.header, severity:c.severity, msg:c.msg, loc:c.fix_location});
+  }
+  for (const ck of (d.cookies || [])) {
+    for (const issue of (ck.issues || [])) {
+      allFindings.push({type:'Cookie', name:`${ck.name} (${issue.flag})`, severity:issue.severity, msg:issue.msg, loc:issue.fix_location, hint:issue.fix_hint});
+    }
+  }
+
+  for (const f of allFindings) {
+    const loc = f.loc || 'unbekannt';
+    if (!byLoc[loc]) byLoc[loc] = [];
+    byLoc[loc].push(f);
+  }
+
+  // Section per location
+  const locOrder = ['webapp','env','nginx','proxy'];
+  for (const loc of locOrder) {
+    const items = byLoc[loc];
+    if (!items || !items.length) continue;
+    md += `## Fixes in: ${locLabel[loc] || loc}\n\n`;
+    for (const f of items) {
+      md += `### ${sevLabel[f.severity] || f.severity} — ${f.name}\n\n`;
+      md += `- **Typ:** ${f.type}\n`;
+      md += `- **Problem:** ${f.msg}\n`;
+      if (f.hint) md += `- **Fix:** ${f.hint}\n`;
+      md += '\n';
+    }
+  }
+
+  // Specific code hints for webapp fixes
+  const webappItems = byLoc['webapp'] || [];
+  const envItems    = byLoc['env']    || [];
+  if (webappItems.length || envItems.length) {
+    md += `## Konkrete Konfigurationshinweise\n\n`;
+  }
+  if (envItems.length) {
+    md += `### .env Datei (z.B. /srv/djmanager/.env)\n\n\`\`\`ini\n`;
+    const names = new Set(envItems.map(f => f.name));
+    if (names.has('Secure') || names.has('Strict-Transport-Security')) {
+      md += `SESSION_COOKIE_SECURE=True\nCSRF_COOKIE_SECURE=True\nSECURE_HSTS_SECONDS=31536000\nSECURE_HSTS_INCLUDE_SUBDOMAINS=True\n`;
+    }
+    md += `\`\`\`\n\n`;
+  }
+  if (webappItems.length) {
+    md += `### settings.py / webapp\n\n\`\`\`python\n`;
+    const names = new Set(webappItems.map(f => f.name));
+    if (names.has('csrftoken (HttpOnly)') || webappItems.some(f => f.name.includes('HttpOnly'))) {
+      md += `# Achtung: CSRF_COOKIE_HTTPONLY=True bricht AJAX-Requests die fetch() nutzen!\n`;
+      md += `# Nur setzen wenn alle CSRF-Token via {% csrf_token %} Template-Tag geliefert werden.\n`;
+      md += `CSRF_COOKIE_HTTPONLY = True  # oder weglassen (Standard False ist für AJAX nötig)\n`;
+    }
+    if (names.has('X-Frame-Options')) {
+      md += `X_FRAME_OPTIONS = 'DENY'  # bereits Standard in settings.py\n`;
+    }
+    if (names.has('X-Content-Type-Options')) {
+      md += `SECURE_CONTENT_TYPE_NOSNIFF = True  # bereits Standard in settings.py\n`;
+    }
+    md += `\`\`\`\n\n`;
+  }
+
+  // Nginx hints
+  const nginxItems = byLoc['nginx'] || [];
+  if (nginxItems.length) {
+    md += `### nginx Konfiguration\n\nIn den \`server {}\`-Block (z.B. /etc/nginx/sites-available/<projekt>) einfügen:\n\n\`\`\`nginx\n`;
+    const hNames = new Set(nginxItems.map(f => f.name));
+    if (hNames.has('Content-Security-Policy')) {
+      md += `add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none';" always;\n`;
+    }
+    if (hNames.has('Referrer-Policy')) {
+      md += `add_header Referrer-Policy "same-origin" always;\n`;
+    }
+    if (hNames.has('Permissions-Policy')) {
+      md += `add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;\n`;
+    }
+    if (hNames.has('Cross-Origin-Opener-Policy')) {
+      md += `add_header Cross-Origin-Opener-Policy "same-origin" always;\n`;
+    }
+    if (hNames.has('Cross-Origin-Embedder-Policy')) {
+      md += `add_header Cross-Origin-Embedder-Policy "require-corp" always;\n`;
+    }
+    if (hNames.has('Cross-Origin-Resource-Policy')) {
+      md += `add_header Cross-Origin-Resource-Policy "same-origin" always;\n`;
+    }
+    if (hNames.has('Server')) {
+      md += `server_tokens off;  # Server-Version verstecken\n`;
+    }
+    md += `\`\`\`\n\n`;
+    md += `Nach Änderung: \`nginx -t && systemctl reload nginx\`\n\n`;
+  }
+
+  md += `---\n_Report erstellt von DjangoMultiDeploy Security Scanner_\n`;
+  return md;
 }
 
 function renderHttpScanResult(d) {
@@ -484,7 +638,7 @@ function renderHttpScanResult(d) {
   if (d.headers && d.headers.length) {
     html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-layout-text-window me-1"></i>HTTP Security Headers</h6>';
     html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
-    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wo fixen</th><th>Wert / Hinweis</th></tr></thead><tbody>';
     for (const h of d.headers) {
       const rowClass = h.severity === 'ok' ? '' :
                        h.severity === 'low' ? 'text-muted' :
@@ -493,9 +647,10 @@ function renderHttpScanResult(d) {
       html += `<tr class="${rowClass}">
         <td class="font-monospace small text-nowrap">${h.header}</td>
         <td class="text-nowrap">${severityBadge(h.severity)}</td>
+        <td class="text-nowrap">${h.severity !== 'ok' ? fixLocationBadge(h.fix_location) : ''}</td>
         <td class="small">`;
       if (h.value && h.status !== 'missing') {
-        html += `<code class="d-block text-truncate" style="max-width:420px" title="${h.value}">${h.value}</code>`;
+        html += `<code class="d-block text-truncate" style="max-width:380px" title="${h.value}">${h.value}</code>`;
       }
       if (h.msg && h.status !== 'ok') html += `<span class="text-muted">${h.msg}</span>`;
       html += '</td></tr>';
@@ -507,15 +662,16 @@ function renderHttpScanResult(d) {
   if (d.cors && d.cors.length) {
     html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-arrow-left-right me-1"></i>CORS-Konfiguration</h6>';
     html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
-    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wo fixen</th><th>Wert / Hinweis</th></tr></thead><tbody>';
     for (const c of d.cors) {
       const rowClass = ['critical','high'].includes(c.severity) ? 'table-danger' :
                        c.severity === 'medium' ? 'table-warning' : '';
       html += `<tr class="${rowClass}">
         <td class="font-monospace small text-nowrap">${c.header}</td>
         <td>${severityBadge(c.severity)}</td>
+        <td>${c.severity !== 'ok' ? fixLocationBadge(c.fix_location) : ''}</td>
         <td class="small">
-          ${c.value ? `<code class="d-block text-truncate" style="max-width:420px">${c.value}</code>` : ''}
+          ${c.value ? `<code class="d-block text-truncate" style="max-width:380px">${c.value}</code>` : ''}
           ${c.msg && c.severity !== 'ok' ? `<span class="text-muted">${c.msg}</span>` : ''}
         </td>
       </tr>`;
@@ -543,7 +699,9 @@ function renderHttpScanResult(d) {
       if (hasIssues) {
         html += '<ul class="mt-1 mb-0 ps-3">';
         for (const issue of ck.issues) {
-          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg}</li>`;
+          html += `<li class="text-warning">${severityBadge(issue.severity)} ${fixLocationBadge(issue.fix_location)} <strong>${issue.flag}</strong>: ${issue.msg}`;
+          if (issue.fix_hint) html += ` <span class="text-muted small d-block ps-2">→ ${issue.fix_hint}</span>`;
+          html += '</li>';
         }
         html += '</ul>';
       }
