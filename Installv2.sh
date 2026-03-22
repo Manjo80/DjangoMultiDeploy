@@ -1914,6 +1914,19 @@ server {
         access_log off;
     }
 
+    # Scanner-Endpunkte — längerer Timeout wegen HTTP/Port-Scans (max. 90s Django-Timeout)
+    location ~* ^/(security-scanner/(http-scan|port-scan)|[^/]+/http-scan|[^/]+/security-scan|manager/(http-scan|security-scan))/ {
+        limit_req zone=django_general burst=5 nodelay;
+        proxy_pass http://${LOCAL_IP}:${GUNICORN_PORT};
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+
     # Django App
     location / {
         limit_req zone=django_general burst=30 nodelay;

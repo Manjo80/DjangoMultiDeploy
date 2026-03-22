@@ -173,5 +173,10 @@ LOGGING = {
             'level': 'WARNING',
             'propagate': False,
         },
+        'djmanager.scanner': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
