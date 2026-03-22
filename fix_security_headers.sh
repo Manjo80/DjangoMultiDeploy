@@ -36,15 +36,18 @@ _add_header_after_last() {
 
   if [ -n "$ref_line" ]; then
     sed -i "${ref_line}a\\    ${header_line}" "$file"
-  else
-    # Kein add_header im Server-Block → nach ssl_session_cache einfügen
-    ref_line=$(grep -n "^    ssl_session_cache\|^    ssl_ciphers\|^    ssl_protocols" "$file" 2>/dev/null | tail -1 | cut -d: -f1 || true)
-    if [ -n "$ref_line" ]; then
-      sed -i "${ref_line}a\\    ${header_line}" "$file"
-    else
-      echo "  ⚠  Konnte Einfügeposition nicht bestimmen in: $file" >&2
-    fi
+    return 0
   fi
+
+  # Kein add_header im Server-Block → nach ssl_session_cache einfügen
+  ref_line=$(grep -n "^    ssl_session_cache\|^    ssl_ciphers\|^    ssl_protocols" "$file" 2>/dev/null | tail -1 | cut -d: -f1 || true)
+  if [ -n "$ref_line" ]; then
+    sed -i "${ref_line}a\\    ${header_line}" "$file"
+    return 0
+  fi
+
+  echo "  ⚠  Konnte Einfügeposition nicht bestimmen in: $(basename "$file")" >&2
+  return 1
 }
 
 # Ersetzt einen vorhandenen Header auf Server-Block-Ebene (4 Leerzeichen).
@@ -99,9 +102,10 @@ patch_nginx_config() {
   local hname hline
   while IFS='|' read -r hname hline; do
     if ! _has_header_in_server_block "$file" "$hname"; then
-      _add_header_after_last "$file" "$hline"
-      echo "     ➕ $hname hinzugefügt"
-      changed=1
+      if _add_header_after_last "$file" "$hline"; then
+        echo "     ➕ $hname hinzugefügt"
+        changed=1
+      fi
     fi
   done <<HEADERS
 X-Content-Type-Options|$HEADER_XCTO
