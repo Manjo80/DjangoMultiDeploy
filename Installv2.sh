@@ -3040,6 +3040,14 @@ echo "✅ Cloudflare Real-IP-Config aktualisiert"
 # nginx neu laden (statische Dateien könnten sich geändert haben)
 nginx -t 2>/dev/null && systemctl reload nginx && echo "✅ nginx neu geladen" || true
 
+# Security-Header sicherstellen (nginx-Config regenerierung kann Headers zurücksetzen)
+_FIX_HEADERS="\$SCRIPT_DIR/fix_security_headers.sh"
+if [ -f "\$_FIX_HEADERS" ]; then
+  echo "🔒 Überprüfe Security-Header..."
+  NGINX_SITES=/etc/nginx/sites-available bash "\$_FIX_HEADERS" 2>&1 \
+    | grep -v "^📦\|^📋\|^🔒\|Verzeichnis\|Backup\|Gefundene\|•\|Fertig" || true
+fi
+
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║                    MANAGER UPDATE DONE ✅                     ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
