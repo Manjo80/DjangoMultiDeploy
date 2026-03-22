@@ -2959,7 +2959,8 @@ if [ -f "/etc/nginx/sites-available/djmanager" ] && [ -f "\$_ENV_FILE_NG" ]; the
     printf '    add_header X-XSS-Protection "1; mode=block" always;\n'
     printf '    add_header Referrer-Policy "strict-origin-when-cross-origin" always;\n'
     printf '    add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;\n'
-    printf '    add_header Content-Security-Policy "default-src '\''self'\''; script-src '\''self'\'' https://cdn.jsdelivr.net; style-src '\''self'\'' '\''unsafe-inline'\'' https://cdn.jsdelivr.net; img-src '\''self'\'' data: blob:; font-src '\''self'\'' data: https://cdn.jsdelivr.net; object-src '\''none'\''; base-uri '\''self'\''; form-action '\''self'\''; frame-ancestors '\''none'\'';" always;\n'
+    printf '    # Content-Security-Policy: set by Django'\''s SecurityHeadersMiddleware with per-request nonce.\n'
+    printf '    # A static nginx CSP here would conflict (browser applies both headers, nonce scripts blocked).\n'
     printf '    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;\n'
     printf '    add_header Cross-Origin-Opener-Policy "same-origin" always;\n'
     printf '    add_header Cross-Origin-Embedder-Policy "unsafe-none" always;\n'
@@ -3148,7 +3149,8 @@ server {
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' data: https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';" always;
+    # Content-Security-Policy: set by Django's SecurityHeadersMiddleware with per-request nonce.
+    # A static nginx CSP here would conflict (browser applies both headers, nonce scripts blocked).
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Cross-Origin-Embedder-Policy "unsafe-none" always;
