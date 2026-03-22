@@ -60,6 +60,12 @@ patch_config() {
   CUR_FILE="$1"
   CHANGED=0
 
+  # Standard nginx Default-Config immer überspringen
+  if [ "$(basename "$CUR_FILE")" = "default" ]; then
+    echo "  ⏭  Default-Config — überspringe: $(basename "$CUR_FILE")"
+    return
+  fi
+
   # Nur SSL-Configs
   if ! grep -q "listen.*ssl\|ssl_certificate" "$CUR_FILE" 2>/dev/null; then
     echo "  ⏭  Kein SSL — überspringe: $(basename "$CUR_FILE")"
@@ -90,6 +96,13 @@ patch_config() {
     CHANGED=1
   fi
 
+  # COEP: require-corp → unsafe-none (require-corp blockt CDN-Ressourcen ohne CORP-Header)
+  if grep -q "^    add_header Cross-Origin-Embedder-Policy.*require-corp" "$CUR_FILE" 2>/dev/null; then
+    sed -i 's|^    add_header[[:space:]]\+Cross-Origin-Embedder-Policy.*|    add_header Cross-Origin-Embedder-Policy "unsafe-none" always;|' "$CUR_FILE"
+    echo "     ✏  COEP: require-corp → unsafe-none"
+    CHANGED=1
+  fi
+
   # Fehlende Header ergänzen (einzeln aufgerufen — kein Loop, kein pipefail-Problem)
   _ensure "X-Content-Type-Options"   'add_header X-Content-Type-Options "nosniff" always;'
   _ensure "X-XSS-Protection"        'add_header X-XSS-Protection "1; mode=block" always;'
@@ -98,7 +111,7 @@ patch_config() {
   _ensure "Content-Security-Policy" "add_header Content-Security-Policy \"default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none';\" always;"
   _ensure "Strict-Transport-Security"       'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'
   _ensure "Cross-Origin-Opener-Policy"      'add_header Cross-Origin-Opener-Policy "same-origin" always;'
-  _ensure "Cross-Origin-Embedder-Policy"    'add_header Cross-Origin-Embedder-Policy "require-corp" always;'
+  _ensure "Cross-Origin-Embedder-Policy"    'add_header Cross-Origin-Embedder-Policy "unsafe-none" always;'
   _ensure "Cross-Origin-Resource-Policy"    'add_header Cross-Origin-Resource-Policy "same-origin" always;'
 
   if [ "$CHANGED" -eq 0 ]; then
