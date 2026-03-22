@@ -225,23 +225,43 @@ def _check_security_headers(headers):
     """Analyse response headers and return list of findings."""
     findings = []
 
+    # fix_location: where to fix the issue
+    # 'nginx'  = nginx config (add_header / server_tokens)
+    # 'env'    = .env file (Django env vars like SECURE_HSTS_SECONDS)
+    # 'webapp' = Django settings.py / middleware
+    # 'proxy'  = reverse proxy (Cloudflare, Zoraxy, etc.)
+    _fix_locations = {
+        'Strict-Transport-Security':       'env',        # SECURE_HSTS_SECONDS in .env
+        'Content-Security-Policy':         'nginx',      # add_header CSP in nginx
+        'X-Frame-Options':                 'webapp',     # X_FRAME_OPTIONS in settings.py
+        'X-Content-Type-Options':          'webapp',     # SECURE_CONTENT_TYPE_NOSNIFF in settings.py
+        'Referrer-Policy':                 'nginx',      # add_header Referrer-Policy in nginx
+        'Permissions-Policy':              'nginx',      # add_header Permissions-Policy in nginx
+        'Cross-Origin-Opener-Policy':      'nginx',      # add_header COOP in nginx
+        'Cross-Origin-Embedder-Policy':    'nginx',      # add_header COEP in nginx
+        'Cross-Origin-Resource-Policy':    'nginx',      # add_header CORP in nginx
+        'Server':                          'nginx',      # server_tokens off in nginx
+        'X-Powered-By':                    'nginx',      # proxy_hide_header X-Powered-By
+    }
+
     def check(name, severity, present_ok, absent_msg, value_check_fn=None, ok_msg=None):
         val = headers.get(name.lower())
+        loc = _fix_locations.get(name)
         if val is None:
             findings.append({'header': name, 'severity': severity, 'status': 'missing',
-                             'value': None, 'msg': absent_msg})
+                             'value': None, 'msg': absent_msg, 'fix_location': loc})
         else:
             if value_check_fn:
                 warn = value_check_fn(val)
                 if warn:
                     findings.append({'header': name, 'severity': 'warning', 'status': 'weak',
-                                     'value': val, 'msg': warn})
+                                     'value': val, 'msg': warn, 'fix_location': loc})
                 else:
                     findings.append({'header': name, 'severity': 'ok', 'status': 'ok',
-                                     'value': val, 'msg': ok_msg or 'OK'})
+                                     'value': val, 'msg': ok_msg or 'OK', 'fix_location': loc})
             else:
                 findings.append({'header': name, 'severity': 'ok', 'status': 'ok',
-                                 'value': val, 'msg': ok_msg or 'OK'})
+                                 'value': val, 'msg': ok_msg or 'OK', 'fix_location': loc})
 
     check('Strict-Transport-Security', 'high',
           present_ok=True,
@@ -360,6 +380,7 @@ def _check_cors(headers):
                     'status': 'weak',
                     'value': f'Origin: {acao}, Credentials: {acac}',
                     'msg': 'CORS-Wildcard (*) mit Credentials=true ist gefährlich — ermöglicht Cross-Origin-Datenklau!',
+                    'fix_location': 'nginx',
                 })
             else:
                 findings.append({
@@ -368,6 +389,7 @@ def _check_cors(headers):
                     'status': 'weak',
                     'value': acao,
                     'msg': 'CORS-Wildcard (*) erlaubt jeder Website Zugriff auf API-Antworten. Prüfen ob gewollt.',
+                    'fix_location': 'nginx',
                 })
         else:
             findings.append({
@@ -376,6 +398,7 @@ def _check_cors(headers):
                 'status': 'ok',
                 'value': acao,
                 'msg': f'CORS auf bestimmte Origin eingeschränkt: {acao}',
+                'fix_location': 'nginx',
             })
     return findings
 
@@ -400,16 +423,24 @@ def _check_cookies(headers):
         issues = []
         if not flags['secure']:
             issues.append({'flag': 'Secure', 'severity': 'high',
-                          'msg': 'Secure-Flag fehlt — Cookie wird auch über HTTP gesendet.'})
+                          'msg': 'Secure-Flag fehlt — Cookie wird auch über HTTP gesendet.',
+                          'fix_location': 'env',
+                          'fix_hint': 'SESSION_COOKIE_SECURE=True und CSRF_COOKIE_SECURE=True in .env setzen'})
         if not flags['httponly']:
             issues.append({'flag': 'HttpOnly', 'severity': 'medium',
-                          'msg': 'HttpOnly-Flag fehlt — Cookie per JavaScript auslesbar (XSS-Risiko).'})
+                          'msg': 'HttpOnly-Flag fehlt — Cookie per JavaScript auslesbar (XSS-Risiko).',
+                          'fix_location': 'webapp',
+                          'fix_hint': 'CSRF_COOKIE_HTTPONLY=True in settings.py (Achtung: JS-AJAX-Requests brauchen dann {% csrf_token %})'})
         if not flags['samesite']:
             issues.append({'flag': 'SameSite', 'severity': 'medium',
-                          'msg': 'SameSite-Flag fehlt — CSRF-Risiko erhöht.'})
+                          'msg': 'SameSite-Flag fehlt — CSRF-Risiko erhöht.',
+                          'fix_location': 'webapp',
+                          'fix_hint': 'SESSION_COOKIE_SAMESITE="Lax" in settings.py'})
         elif flags['samesite'] == 'none' and not flags['secure']:
             issues.append({'flag': 'SameSite=None', 'severity': 'high',
-                          'msg': 'SameSite=None ohne Secure-Flag ist ungültig.'})
+                          'msg': 'SameSite=None ohne Secure-Flag ist ungültig.',
+                          'fix_location': 'webapp',
+                          'fix_hint': 'SESSION_COOKIE_SAMESITE="Lax" oder Secure-Flag aktivieren'})
         findings.append({'name': name, 'issues': issues, 'flags': flags})
     return findings
 
