@@ -90,6 +90,9 @@ SESSION_COOKIE_SAMESITE = 'Lax'
 # CSRF-Cookie langlebig machen (1 Jahr) — verhindert 403-Fehler wenn
 # iOS/Android den Browser-Tab einfriert und Session-Cookies löscht
 CSRF_COOKIE_AGE = 31449600  # 1 Jahr
+# HttpOnly: JS kann den Token nicht mehr per document.cookie lesen.
+# Alle AJAX-Requests nutzen {{ csrf_token }} aus dem Template-Kontext.
+CSRF_COOKIE_HTTPONLY = True
 
 # ── Security headers (relevant even behind reverse proxy) ─────────────────────
 

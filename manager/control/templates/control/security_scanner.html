@@ -422,8 +422,7 @@ async function loadScanLog() {
 
 async function clearScanLog() {
   if (!confirm('Scan-Log wirklich leeren?')) return;
-  const csrfToken = document.cookie.split(';')
-    .map(c => c.trim()).find(c => c.startsWith('csrftoken='))?.split('=')[1] || '';
+  const csrfToken = '{{ csrf_token }}';
   try {
     await fetch(clearLogUrl, {method:'POST', headers:{'X-CSRFToken': csrfToken}});
     await loadScanLog();

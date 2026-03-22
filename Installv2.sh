@@ -1913,6 +1913,9 @@ server {
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none';" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Embedder-Policy "require-corp" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
 
     # Bekannte Angriffspfade blockieren
     location ~* ^/(wp-admin|wp-login\.php|xmlrpc\.php|phpmyadmin|\.env|\.git|shell\.php|eval\.php) {
@@ -2947,10 +2950,16 @@ if [ -f "/etc/nginx/sites-available/djmanager" ] && [ -f "\$_ENV_FILE_NG" ]; the
     printf '    ssl_protocols       TLSv1.2 TLSv1.3;\n'
     printf '    ssl_ciphers         HIGH:!aNULL:!MD5;\n'
     printf '    ssl_session_cache   shared:SSL:10m;\n'
-    printf '    add_header X-Frame-Options "SAMEORIGIN" always;\n'
+    printf '    add_header X-Frame-Options "DENY" always;\n'
     printf '    add_header X-Content-Type-Options "nosniff" always;\n'
     printf '    add_header X-XSS-Protection "1; mode=block" always;\n'
-    printf '    add_header Strict-Transport-Security "max-age=31536000" always;\n'
+    printf '    add_header Referrer-Policy "strict-origin-when-cross-origin" always;\n'
+    printf '    add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;\n'
+    printf '    add_header Content-Security-Policy "default-src '\''self'\''; script-src '\''self'\'' '\''unsafe-inline'\'' '\''unsafe-eval'\''; style-src '\''self'\'' '\''unsafe-inline'\''; img-src '\''self'\'' data: blob:; font-src '\''self'\'' data:; frame-ancestors '\''none'\'';" always;\n'
+    printf '    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;\n'
+    printf '    add_header Cross-Origin-Opener-Policy "same-origin" always;\n'
+    printf '    add_header Cross-Origin-Embedder-Policy "require-corp" always;\n'
+    printf '    add_header Cross-Origin-Resource-Policy "same-origin" always;\n'
     printf '    access_log /var/log/nginx/djmanager.access.log;\n'
     printf '    error_log  /var/log/nginx/djmanager.error.log;\n'
     printf '    location /static/ {\n        alias %s/staticfiles/;\n        expires 1h;\n        access_log off;\n    }\n' "\$MANAGER_DIR"
@@ -3122,10 +3131,16 @@ server {
     ssl_session_cache   shared:SSL:10m;
 
     # Security Headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
-    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none';" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Embedder-Policy "require-corp" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
 
     # Manager-Logs (sichtbar im Log-Viewer)
     access_log /var/log/nginx/djmanager.access.log;
