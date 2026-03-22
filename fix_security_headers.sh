@@ -12,24 +12,31 @@ BACKUP_DIR="/tmp/nginx_headers_backup_$(date +%Y%m%d_%H%M%S)"
 
 # ─── Hilfsfunktionen ─────────────────────────────────────────────────────────
 
-_has_header() {
+# Prüft ob ein Header auf Server-Block-Ebene vorhanden ist.
+# Server-Block-Header haben 4 Leerzeichen Einrückung (nicht 8 wie location-Blöcke).
+_has_header_in_server_block() {
   local file="$1" name="$2"
-  grep -q "add_header[[:space:]]\+${name}" "$file" 2>/dev/null
+  grep -q "^    add_header[[:space:]]\+${name}" "$file" 2>/dev/null
 }
 
-# Fügt einen Header ein, falls er noch nicht vorhanden ist.
-# Einfügen *nach* der letzten vorhandenen add_header-Zeile im Server-Block.
+# Findet die letzte add_header-Zeile auf Server-Block-Ebene (4 Leerzeichen).
+# Location-Block-Header (8 Leerzeichen) werden dabei IGNORIERT.
+_last_server_block_header_line() {
+  local file="$1"
+  grep -n "^    add_header" "$file" | tail -1 | cut -d: -f1
+}
+
+# Fügt einen Header nach dem letzten Server-Block-Level add_header ein.
 _add_header_after_last() {
   local file="$1" header_line="$2"
-  # Letzte add_header-Zeile finden und danach einfügen
-  local last_line
-  last_line=$(grep -n "add_header" "$file" | tail -1 | cut -d: -f1)
-  if [ -n "$last_line" ]; then
-    sed -i "${last_line}a\\    ${header_line}" "$file"
+  local ref_line
+  ref_line=$(_last_server_block_header_line "$file")
+
+  if [ -n "$ref_line" ] && [ "$ref_line" -gt 0 ]; then
+    sed -i "${ref_line}a\\    ${header_line}" "$file"
   else
-    # Keine add_header-Zeilen → nach ssl_session_cache einfügen
-    local ref_line
-    ref_line=$(grep -n "ssl_session_cache\|ssl_ciphers\|ssl_protocols" "$file" | tail -1 | cut -d: -f1)
+    # Kein add_header im Server-Block → nach ssl_session_cache einfügen
+    ref_line=$(grep -n "^    ssl_session_cache\|^    ssl_ciphers\|^    ssl_protocols" "$file" | tail -1 | cut -d: -f1)
     if [ -n "$ref_line" ]; then
       sed -i "${ref_line}a\\    ${header_line}" "$file"
     else
@@ -38,10 +45,10 @@ _add_header_after_last() {
   fi
 }
 
-# Ersetzt einen vorhandenen Header-Wert durch den neuen.
+# Ersetzt einen vorhandenen Header (nur Server-Block-Ebene).
 _replace_header() {
   local file="$1" name="$2" new_line="$3"
-  sed -i "s|.*add_header[[:space:]]\+${name}.*|    ${new_line}|" "$file"
+  sed -i "s|^    add_header[[:space:]]\+${name}.*|    ${new_line}|" "$file"
 }
 
 # ─── Header-Definitionen ─────────────────────────────────────────────────────
@@ -63,31 +70,32 @@ patch_nginx_config() {
   local file="$1"
   local changed=0
 
-  # Nur HTTPS-Server-Blöcke patchen (die mit ssl in der listen-Zeile)
+  # Nur HTTPS-Server-Blöcke patchen
   if ! grep -q "listen.*ssl\|ssl_certificate" "$file" 2>/dev/null; then
-    echo "  ⏭  Kein SSL-Block gefunden, überspringe: $(basename "$file")"
+    echo "  ⏭  Kein SSL-Block — überspringe: $(basename "$file")"
     return
   fi
 
   echo "  🔍 Prüfe: $(basename "$file")"
 
-  # X-Frame-Options: SAMEORIGIN → DENY korrigieren falls nötig
-  if grep -q 'add_header X-Frame-Options.*SAMEORIGIN' "$file"; then
+  # X-Frame-Options: SAMEORIGIN → DENY korrigieren
+  if grep -q "^    add_header X-Frame-Options.*SAMEORIGIN" "$file"; then
     _replace_header "$file" "X-Frame-Options" "$HEADER_XFRAME"
     echo "     ✏  X-Frame-Options: SAMEORIGIN → DENY"
     changed=1
   fi
 
-  # HSTS: ohne includeSubDomains → mit includeSubDomains
-  if grep -q 'add_header Strict-Transport-Security' "$file" && \
-     ! grep -q 'includeSubDomains' "$file"; then
+  # HSTS: ohne includeSubDomains ergänzen
+  if grep -q "^    add_header Strict-Transport-Security" "$file" && \
+     ! grep -q "includeSubDomains" "$file"; then
     _replace_header "$file" "Strict-Transport-Security" "$HEADER_HSTS"
     echo "     ✏  HSTS: includeSubDomains ergänzt"
     changed=1
   fi
 
-  # Fehlende Header hinzufügen
-  for name_line in \
+  # Fehlende Header hinzufügen (Reihenfolge: erst alle prüfen, dann in richtiger Reihe einfügen)
+  local missing_headers=()
+  for entry in \
     "X-Content-Type-Options|$HEADER_XCTO" \
     "X-XSS-Protection|$HEADER_XSS" \
     "Referrer-Policy|$HEADER_RP" \
@@ -98,9 +106,10 @@ patch_nginx_config() {
     "Cross-Origin-Embedder-Policy|$HEADER_COEP" \
     "Cross-Origin-Resource-Policy|$HEADER_CORP"
   do
-    local hname="${name_line%%|*}"
-    local hline="${name_line#*|}"
-    if ! _has_header "$file" "$hname"; then
+    local hname="${entry%%|*}"
+    local hline="${entry#*|}"
+    if ! _has_header_in_server_block "$file" "$hname"; then
+      # Nach dem aktuell letzten Server-Block-Header einfügen
       _add_header_after_last "$file" "$hline"
       echo "     ➕ $hname hinzugefügt"
       changed=1
@@ -125,14 +134,21 @@ if [ ! -d "$NGINX_SITES" ]; then
 fi
 
 echo "🔒 Security-Header-Patch für nginx"
-echo "   Verzeichnis: $NGINX_SITES"
-echo "   Backup:      $BACKUP_DIR"
+echo "   Verzeichnis : $NGINX_SITES"
+echo "   Backup      : $BACKUP_DIR"
 echo ""
 
 # Backup erstellen
 mkdir -p "$BACKUP_DIR"
 cp -r "$NGINX_SITES"/. "$BACKUP_DIR/"
 echo "📦 Backup erstellt: $BACKUP_DIR"
+echo ""
+
+# Gefundene Dateien auflisten (Transparenz)
+echo "📋 Gefundene Konfigurationen:"
+for f in "$NGINX_SITES"/*; do
+  [ -f "$f" ] && echo "   • $(basename "$f")"
+done
 echo ""
 
 # Alle Konfigurationsdateien patchen
