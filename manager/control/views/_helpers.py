@@ -83,7 +83,7 @@ def _build_extern_scan_hosts(nginx_names, allowed_hosts):
     seen = set()
     result = []
     for h in nginx_names + allowed_hosts:
-        h = h.strip()
+        h = h.strip().lower()  # DNS hostnames are case-insensitive; normalise to lowercase
         if (h and h not in _INTERNAL_HOSTS
                 and not h.startswith('127.')
                 and not h.startswith('.')

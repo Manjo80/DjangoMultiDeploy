@@ -59,11 +59,13 @@ def security_scanner_run(request):
     except ValueError:
         return JsonResponse({'error': 'Ungültiger Port'}, status=400)
 
-    # IPv6 addresses must be wrapped in brackets in URLs
+    # Normalise hostname to lowercase (DNS is case-insensitive).
+    # IPv6 addresses must be wrapped in brackets in URLs.
     try:
         addr = ipaddress.ip_address(target)
         url_host = f'[{target}]' if isinstance(addr, ipaddress.IPv6Address) else target
     except ValueError:
+        target = target.lower()
         url_host = target
 
     if port is None:

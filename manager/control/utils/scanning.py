@@ -206,6 +206,34 @@ def _check_tls(hostname, port=443):
         result['cert_valid'] = False
         result['error'] = f'Zertifikat ungültig: {e}'
         logger.warning('TLS Zertifikatsfehler %s:%d — %s', hostname, port, e)
+        # Second pass without verification to retrieve cert details (subject, expiry, etc.)
+        # for self-signed or otherwise invalid certificates.
+        try:
+            ctx_noverify = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx_noverify.check_hostname = False
+            ctx_noverify.verify_mode = ssl.CERT_NONE
+            connect_ip2, _ = _resolve_connect_ip(hostname, port)
+            connect_addr2 = (connect_ip2 or hostname, port)
+            with socket.create_connection(connect_addr2, timeout=10) as sock2:
+                with ctx_noverify.wrap_socket(sock2, server_hostname=hostname) as ssock2:
+                    result['tls_version'] = ssock2.version()
+                    cipher2 = ssock2.cipher()
+                    result['cipher'] = cipher2[0] if cipher2 else None
+                    cert2 = ssock2.getpeercert()
+                    if cert2:
+                        subj2 = dict(x[0] for x in cert2.get('subject', []))
+                        result['cert_subject'] = subj2.get('commonName', '')
+                        issuer2 = dict(x[0] for x in cert2.get('issuer', []))
+                        result['cert_issuer'] = issuer2.get('organizationName', issuer2.get('commonName', ''))
+                        not_after2 = cert2.get('notAfter', '')
+                        if not_after2:
+                            exp2 = datetime.datetime.strptime(not_after2, '%b %d %H:%M:%S %Y %Z')
+                            result['cert_expiry'] = exp2.strftime('%Y-%m-%d')
+                            result['cert_days_left'] = (exp2 - datetime.datetime.utcnow()).days
+                    logger.debug('TLS Zertifikat-Details (unverified) %s — %s, Aussteller: %s',
+                                 hostname, result['tls_version'], result['cert_issuer'])
+        except Exception:
+            pass  # Best-effort; original error already recorded
     except ssl.SSLError as e:
         result['reachable'] = True
         result['error'] = f'TLS-Fehler: {e.reason or str(e)}'

@@ -249,7 +249,7 @@ def project_http_scan(request, name):
         result = run_http_security_scan(url, hostname=None, check_tls=False)
     else:
         # target is a hostname or IP — use the project's configured nginx port
-        hostname = target
+        hostname = target.lower()  # normalise: DNS is case-insensitive
         # IPv6 addresses must be wrapped in brackets in URLs
         try:
             addr = ipaddress.ip_address(hostname)
