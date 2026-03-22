@@ -267,7 +267,12 @@ def project_http_scan(request, name):
         else:
             url = f'https://{url_host}/'
             check_tls = True
-        result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls)
+        # Use local nginx port to avoid hairpin-NAT timeouts (server cannot reach
+        # its own public domain from within). Only bypass when port is non-standard
+        # (i.e. the per-project nginx port, not 80/443 which are the public ports).
+        _local_port = int(nginx_port) if nginx_port not in ('80', '443') else None
+        result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls,
+                                        local_port=_local_port)
 
     return JsonResponse(result)
 
