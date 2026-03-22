@@ -1,5 +1,6 @@
 """
 DjangoMultiDeploy Manager — Security Middleware
+  - SecurityHeadersMiddleware: set CSP, Permissions-Policy, COEP, CORP headers
   - TwoFactorMiddleware: redirect 2FA-enabled users to verify page
   - IPWhitelistMiddleware: block IPs not in whitelist (if configured)
 """
@@ -8,6 +9,43 @@ import threading
 
 from django.shortcuts import redirect
 from django.http import HttpResponseForbidden
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Security Headers Middleware
+# ──────────────────────────────────────────────────────────────────────────────
+
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data: https://cdn.jsdelivr.net; "
+    "frame-ancestors 'none';"
+)
+
+_SECURITY_HEADERS = [
+    ('Content-Security-Policy', _CSP),
+    ('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=()'),
+    ('Cross-Origin-Embedder-Policy', 'unsafe-none'),
+    ('Cross-Origin-Resource-Policy', 'same-origin'),
+]
+
+
+class SecurityHeadersMiddleware:
+    """
+    Sets security headers that nginx may not yet have in older installations.
+    Only adds headers that are not already present (nginx takes priority).
+    """
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        for name, value in _SECURITY_HEADERS:
+            if name not in response:
+                response[name] = value
+        return response
 
 
 # ──────────────────────────────────────────────────────────────────────────────
