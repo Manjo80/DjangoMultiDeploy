@@ -7,7 +7,6 @@ import socket
 import ipaddress
 import datetime
 import logging
-import subprocess
 import concurrent.futures
 import urllib.request
 import urllib.error
@@ -30,65 +29,13 @@ def _getaddrinfo(host, port, *args, timeout=_DNS_TIMEOUT):
             raise socket.gaierror(f'DNS-Timeout nach {timeout}s für {host}')
 
 
-def _get_local_ips():
-    """Return the set of IPv4 addresses assigned to this host."""
-    ips = set()
-    try:
-        out = subprocess.check_output(['hostname', '-I'], text=True, timeout=3)
-        for token in out.split():
-            try:
-                addr = ipaddress.ip_address(token)
-                if isinstance(addr, ipaddress.IPv4Address):
-                    ips.add(token)
-            except ValueError:
-                pass
-    except Exception:
-        pass
-    if not ips:
-        try:
-            hostname = socket.gethostname()
-            for info in _getaddrinfo(hostname, None, socket.AF_INET):
-                ip = info[4][0]
-                if ip and not ip.startswith('127.'):
-                    ips.add(ip)
-        except Exception:
-            pass
-    return ips
-
-
-def _resolve_connect_ip(hostname, port):
-    """
-    Resolve hostname to an IPv4 connect address.
-    If the IP belongs to this host (hairpin-NAT situation), return 127.0.0.1
-    so nginx can be reached via the loopback interface.
-    Returns (connect_ip, original_ipv4) or (None, None) on failure.
-    """
-    try:
-        infos = _getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
-        if not infos:
-            return None, None
-        ipv4 = infos[0][4][0]
-        local_ips = _get_local_ips()
-        if ipv4 in local_ips:
-            return '127.0.0.1', ipv4
-        try:
-            with socket.create_connection(('127.0.0.1', port), timeout=2):
-                return '127.0.0.1', ipv4
-        except OSError:
-            pass
-        return ipv4, ipv4
-    except socket.gaierror:
-        return None, None
-
-
 def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
     """
     Fetch a URL and return (status_code, headers_dict, body_bytes, final_url, error).
     headers_dict keys are lowercased.
-    Forces IPv4 TCP connections to avoid IPv6 issues, while preserving SNI/Host.
+    Connects directly to the hostname without any loopback/hairpin-NAT tricks —
+    the scanner behaves like an external client.
     """
-    import http.client
-
     if verify_ssl:
         ctx = ssl.create_default_context()
     else:
@@ -100,40 +47,7 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
         except ssl.SSLError:
             pass
 
-    class _V4Conn(http.client.HTTPConnection):
-        def connect(self):
-            connect_ip, _ = _resolve_connect_ip(self.host, self.port or 80)
-            if connect_ip:
-                self.host = connect_ip
-            super().connect()
-
-    class _V4TLSConn(http.client.HTTPSConnection):
-        def connect(self):
-            sni_host = self.host  # original hostname for SNI / nginx vhost routing
-            connect_ip, _ = _resolve_connect_ip(self.host, self.port or 443)
-            if connect_ip:
-                original_host = self.host
-                self.host = connect_ip
-                # TCP-only connect (HTTPConnection, no SSL)
-                http.client.HTTPConnection.connect(self)
-                # Restore original hostname so SSL uses correct SNI
-                self.host = original_host
-                server_hostname = self._tunnel_host if self._tunnel_host else self.host
-                self.sock = self._context.wrap_socket(
-                    self.sock, server_hostname=server_hostname
-                )
-            else:
-                super().connect()
-
-    class _V4HTTPHandler(urllib.request.HTTPHandler):
-        def http_open(self, req):
-            return self.do_open(_V4Conn, req)
-
-    class _V4HTTPSHandler(urllib.request.HTTPSHandler):
-        def https_open(self, req):
-            return self.do_open(_V4TLSConn, req, context=ctx)
-
-    opener = urllib.request.build_opener(_V4HTTPHandler(), _V4HTTPSHandler())
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
     opener.addheaders = [('User-Agent', 'DjangoMultiDeploySecurityScanner/1.0')]
     if not follow_redirects:
         class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -164,7 +78,12 @@ def _http_get(url, timeout=10, verify_ssl=True, follow_redirects=False):
 
 
 def _check_tls(hostname, port=443):
-    """Return TLS info dict for hostname:port."""
+    """
+    Return TLS info dict for hostname:port.
+    Connects directly to the hostname — no hairpin-NAT bypass.
+    The scanner behaves like an external client checking the certificate
+    that real users see (typically the reverse-proxy cert).
+    """
     result = {
         'reachable': False,
         'tls_version': None,
@@ -179,9 +98,7 @@ def _check_tls(hostname, port=443):
     logger.debug('TLS-Check: %s:%d', hostname, port)
     try:
         ctx = ssl.create_default_context()
-        connect_ip, _ = _resolve_connect_ip(hostname, port)
-        connect_addr = (connect_ip or hostname, port)
-        with socket.create_connection(connect_addr, timeout=10) as sock:
+        with socket.create_connection((hostname, port), timeout=10) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                 result['reachable'] = True
                 result['tls_version'] = ssock.version()
@@ -206,6 +123,18 @@ def _check_tls(hostname, port=443):
         result['cert_valid'] = False
         result['error'] = f'Zertifikat ungültig: {e}'
         logger.warning('TLS Zertifikatsfehler %s:%d — %s', hostname, port, e)
+        # Best-effort: get TLS version/cipher even for invalid certs
+        try:
+            ctx_nv = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx_nv.check_hostname = False
+            ctx_nv.verify_mode = ssl.CERT_NONE
+            with socket.create_connection((hostname, port), timeout=10) as s2:
+                with ctx_nv.wrap_socket(s2, server_hostname=hostname) as ss2:
+                    result['tls_version'] = ss2.version()
+                    c2 = ss2.cipher()
+                    result['cipher'] = c2[0] if c2 else None
+        except Exception:
+            pass
     except ssl.SSLError as e:
         result['reachable'] = True
         result['error'] = f'TLS-Fehler: {e.reason or str(e)}'
