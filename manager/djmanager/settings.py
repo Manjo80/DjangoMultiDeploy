@@ -28,6 +28,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    'control.middleware.SecurityHeadersMiddleware',  # CSP, Permissions-Policy, COEP, CORP
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -95,6 +96,10 @@ CSRF_COOKIE_AGE = 31449600  # 1 Jahr
 CSRF_COOKIE_HTTPONLY = True
 
 # ── Security headers (relevant even behind reverse proxy) ─────────────────────
+# CSP, Permissions-Policy, COEP, CORP are set by SecurityHeadersMiddleware
+# (control/middleware.py) so they are present even when nginx lacks them.
+# Django's SecurityMiddleware handles: HSTS, X-Content-Type-Options, X-XSS-Protection.
+# Django's XFrameOptionsMiddleware handles: X-Frame-Options = DENY.
 
 # ── Password validation ───────────────────────────────────────────────────────
 
