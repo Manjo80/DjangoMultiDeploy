@@ -117,10 +117,20 @@ class IPWhitelistMiddleware:
         if not whitelist:
             return self.get_response(request)
 
-        # Determine real client IP (behind nginx proxy)
-        ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
+        # Determine real client IP.
+        # Priority: CF-Connecting-IP (set by Cloudflare, always single IP)
+        #           > X-Real-IP (set by nginx after real_ip module restores it)
+        #           > X-Forwarded-For first entry
+        #           > REMOTE_ADDR
+        ip = (
+            request.META.get('HTTP_CF_CONNECTING_IP')
+            or request.META.get('HTTP_X_REAL_IP')
+            or request.META.get('HTTP_X_FORWARDED_FOR', '')
+            or request.META.get('REMOTE_ADDR', '')
+        )
         if ip and ',' in ip:
             ip = ip.split(',')[0].strip()
+        ip = ip.strip()
 
         if not _ip_in_whitelist(ip, whitelist):
             return HttpResponseForbidden(
