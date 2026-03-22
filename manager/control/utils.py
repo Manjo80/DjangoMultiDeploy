@@ -1924,28 +1924,29 @@ def _check_security_headers(headers):
     """Analyse response headers and return list of findings."""
     findings = []
 
-    def check(name, severity, present_ok, absent_msg, value_check_fn=None, ok_msg=None):
+    def check(name, severity, present_ok, absent_msg, value_check_fn=None, ok_msg=None, fix_location='nginx'):
         val = headers.get(name.lower())
         if val is None:
             findings.append({'header': name, 'severity': severity, 'status': 'missing',
-                             'value': None, 'msg': absent_msg})
+                             'value': None, 'msg': absent_msg, 'fix_location': fix_location})
         else:
             if value_check_fn:
                 warn = value_check_fn(val)
                 if warn:
                     findings.append({'header': name, 'severity': 'warning', 'status': 'weak',
-                                     'value': val, 'msg': warn})
+                                     'value': val, 'msg': warn, 'fix_location': fix_location})
                 else:
                     findings.append({'header': name, 'severity': 'ok', 'status': 'ok',
-                                     'value': val, 'msg': ok_msg or 'OK'})
+                                     'value': val, 'msg': ok_msg or 'OK', 'fix_location': fix_location})
             else:
                 findings.append({'header': name, 'severity': 'ok', 'status': 'ok',
-                                 'value': val, 'msg': ok_msg or 'OK'})
+                                 'value': val, 'msg': ok_msg or 'OK', 'fix_location': fix_location})
 
     # Strict-Transport-Security
     check('Strict-Transport-Security', 'high',
           present_ok=True,
           absent_msg='HSTS fehlt — Browser kann unverschlüsselt verbinden.',
+          fix_location='nginx',
           value_check_fn=lambda v: (
               'max-age zu kurz (empfohlen ≥ 31536000)'
               if 'max-age' in v.lower() and any(
@@ -1970,12 +1971,14 @@ def _check_security_headers(headers):
     check('Content-Security-Policy', 'high',
           present_ok=True,
           absent_msg='CSP fehlt — kein Schutz gegen XSS und Dateninjektionen.',
+          fix_location='webapp',
           value_check_fn=csp_check)
 
     # X-Frame-Options
     check('X-Frame-Options', 'medium',
           present_ok=True,
           absent_msg='X-Frame-Options fehlt — Clickjacking möglich.',
+          fix_location='nginx',
           value_check_fn=lambda v: (
               None if v.upper() in ('DENY', 'SAMEORIGIN') else
               f'Wert "{v}" unbekannt. Empfohlen: DENY oder SAMEORIGIN.'
@@ -1985,6 +1988,7 @@ def _check_security_headers(headers):
     check('X-Content-Type-Options', 'medium',
           present_ok=True,
           absent_msg='X-Content-Type-Options fehlt — MIME-Sniffing möglich.',
+          fix_location='nginx',
           value_check_fn=lambda v: (
               None if v.lower() == 'nosniff' else f'Wert "{v}" — sollte "nosniff" sein.'
           ))
@@ -1992,18 +1996,21 @@ def _check_security_headers(headers):
     # Referrer-Policy
     check('Referrer-Policy', 'low',
           present_ok=True,
+          fix_location='nginx',
           absent_msg='Referrer-Policy fehlt — URLs können an externe Seiten gesendet werden.')
 
     # Permissions-Policy
     check('Permissions-Policy', 'low',
           present_ok=True,
+          fix_location='nginx',
           absent_msg='Permissions-Policy fehlt — Browser-Features nicht eingeschränkt.')
 
     # X-XSS-Protection (deprecated but informative)
     xss = headers.get('x-xss-protection')
     if xss and xss.strip() == '0':
         findings.append({'header': 'X-XSS-Protection', 'severity': 'info', 'status': 'ok',
-                         'value': xss, 'msg': 'Auf 0 gesetzt (browser-seitig deaktiviert, CSP bevorzugt)'})
+                         'value': xss, 'msg': 'Auf 0 gesetzt (browser-seitig deaktiviert, CSP bevorzugt)',
+                         'fix_location': 'nginx'})
 
     # Server header (version leak)
     server = headers.get('server')
@@ -2012,47 +2019,52 @@ def _check_security_headers(headers):
         if re.search(r'[\d.]', server):
             findings.append({'header': 'Server', 'severity': 'low', 'status': 'weak',
                              'value': server,
-                             'msg': 'Server-Header enthält Versionsinfos — per nginx: server_tokens off;'})
+                             'msg': 'Server-Header enthält Versionsinfos — per nginx: server_tokens off;',
+                             'fix_location': 'nginx'})
         else:
             findings.append({'header': 'Server', 'severity': 'ok', 'status': 'ok',
-                             'value': server, 'msg': 'Kein Versions-Leak.'})
+                             'value': server, 'msg': 'Kein Versions-Leak.', 'fix_location': 'nginx'})
 
     # X-Powered-By
     powered = headers.get('x-powered-by')
     if powered:
         findings.append({'header': 'X-Powered-By', 'severity': 'low', 'status': 'weak',
                          'value': powered,
-                         'msg': 'X-Powered-By gibt Technologie-Infos preis — sollte entfernt werden.'})
+                         'msg': 'X-Powered-By gibt Technologie-Infos preis — sollte entfernt werden.',
+                         'fix_location': 'nginx'})
 
     # Cross-Origin-Opener-Policy (COOP)
     coop = headers.get('cross-origin-opener-policy')
     if coop is None:
         findings.append({'header': 'Cross-Origin-Opener-Policy', 'severity': 'low', 'status': 'missing',
                          'value': None,
-                         'msg': 'COOP fehlt — Schutz gegen Spectre/Cross-Origin-Leaks empfohlen. Empfohlen: same-origin'})
+                         'msg': 'COOP fehlt — Schutz gegen Spectre/Cross-Origin-Leaks empfohlen. Empfohlen: same-origin',
+                         'fix_location': 'nginx'})
     else:
         findings.append({'header': 'Cross-Origin-Opener-Policy', 'severity': 'ok', 'status': 'ok',
-                         'value': coop, 'msg': 'OK'})
+                         'value': coop, 'msg': 'OK', 'fix_location': 'nginx'})
 
     # Cross-Origin-Embedder-Policy (COEP)
     coep = headers.get('cross-origin-embedder-policy')
     if coep is None:
         findings.append({'header': 'Cross-Origin-Embedder-Policy', 'severity': 'low', 'status': 'missing',
                          'value': None,
-                         'msg': 'COEP fehlt — für SharedArrayBuffer / high-res timers nötig. Empfohlen: require-corp'})
+                         'msg': 'COEP fehlt — für SharedArrayBuffer / high-res timers nötig. Empfohlen: require-corp',
+                         'fix_location': 'nginx'})
     else:
         findings.append({'header': 'Cross-Origin-Embedder-Policy', 'severity': 'ok', 'status': 'ok',
-                         'value': coep, 'msg': 'OK'})
+                         'value': coep, 'msg': 'OK', 'fix_location': 'nginx'})
 
     # Cross-Origin-Resource-Policy (CORP)
     corp = headers.get('cross-origin-resource-policy')
     if corp is None:
         findings.append({'header': 'Cross-Origin-Resource-Policy', 'severity': 'low', 'status': 'missing',
                          'value': None,
-                         'msg': 'CORP fehlt — Ressourcen können Cross-Origin eingebettet werden. Empfohlen: same-origin'})
+                         'msg': 'CORP fehlt — Ressourcen können Cross-Origin eingebettet werden. Empfohlen: same-origin',
+                         'fix_location': 'nginx'})
     else:
         findings.append({'header': 'Cross-Origin-Resource-Policy', 'severity': 'ok', 'status': 'ok',
-                         'value': corp, 'msg': 'OK'})
+                         'value': corp, 'msg': 'OK', 'fix_location': 'nginx'})
 
     return findings
 
@@ -2071,6 +2083,7 @@ def _check_cors(headers):
                     'status': 'weak',
                     'value': f'Origin: {acao}, Credentials: {acac}',
                     'msg': 'CORS-Wildcard (*) mit Credentials=true ist gefährlich — ermöglicht Cross-Origin-Datenklau!',
+                    'fix_location': 'webapp',
                 })
             else:
                 findings.append({
@@ -2079,6 +2092,7 @@ def _check_cors(headers):
                     'status': 'weak',
                     'value': acao,
                     'msg': 'CORS-Wildcard (*) erlaubt jeder Website Zugriff auf API-Antworten. Prüfen ob gewollt.',
+                    'fix_location': 'webapp',
                 })
         else:
             findings.append({
@@ -2087,6 +2101,7 @@ def _check_cors(headers):
                 'status': 'ok',
                 'value': acao,
                 'msg': f'CORS auf bestimmte Origin eingeschränkt: {acao}',
+                'fix_location': 'webapp',
             })
     return findings
 
@@ -2113,16 +2128,20 @@ def _check_cookies(headers):
         issues = []
         if not flags['secure']:
             issues.append({'flag': 'Secure', 'severity': 'high',
-                          'msg': 'Secure-Flag fehlt — Cookie wird auch über HTTP gesendet.'})
+                          'msg': 'Secure-Flag fehlt — Cookie wird auch über HTTP gesendet.',
+                          'fix_location': 'webapp'})
         if not flags['httponly']:
             issues.append({'flag': 'HttpOnly', 'severity': 'medium',
-                          'msg': 'HttpOnly-Flag fehlt — Cookie per JavaScript auslesbar (XSS-Risiko).'})
+                          'msg': 'HttpOnly-Flag fehlt — Cookie per JavaScript auslesbar (XSS-Risiko).',
+                          'fix_location': 'webapp'})
         if not flags['samesite']:
             issues.append({'flag': 'SameSite', 'severity': 'medium',
-                          'msg': 'SameSite-Flag fehlt — CSRF-Risiko erhöht.'})
+                          'msg': 'SameSite-Flag fehlt — CSRF-Risiko erhöht.',
+                          'fix_location': 'webapp'})
         elif flags['samesite'] == 'none' and not flags['secure']:
             issues.append({'flag': 'SameSite=None', 'severity': 'high',
-                          'msg': 'SameSite=None ohne Secure-Flag ist ungültig.'})
+                          'msg': 'SameSite=None ohne Secure-Flag ist ungültig.',
+                          'fix_location': 'webapp'})
         findings.append({'name': name, 'issues': issues, 'flags': flags})
     return findings
 
