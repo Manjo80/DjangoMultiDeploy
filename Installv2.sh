@@ -2762,14 +2762,18 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
 
   # .env zeilenweise mit printf schreiben
   {
-    printf 'SECRET_KEY=%s\n'            "${_MANAGER_SECRET}"
+    printf 'SECRET_KEY=%s\n'                      "${_MANAGER_SECRET}"
     printf 'DEBUG=False\n'
-    printf 'ALLOWED_HOSTS=%s\n'         "${_MGR_ALLOWED_HOSTS}"
-    printf 'CSRF_TRUSTED_ORIGINS=%s\n'  "${_MGR_CSRF_ORIGINS}"
+    printf 'ALLOWED_HOSTS=%s\n'                   "${_MGR_ALLOWED_HOSTS}"
+    printf 'CSRF_TRUSTED_ORIGINS=%s\n'            "${_MGR_CSRF_ORIGINS}"
     printf 'USE_X_FORWARDED_HOST=False\n'
-    printf 'MANAGER_PORT=%s\n'          "${_MANAGER_PORT}"
-    printf 'MANAGER_DOMAIN=%s\n'        "${_MANAGER_DOMAIN:-}"
-    printf 'INSTALL_SCRIPT=%s\n'        "${_SCRIPT_DIR}/Installv2.sh"
+    printf 'SESSION_COOKIE_SECURE=True\n'
+    printf 'CSRF_COOKIE_SECURE=True\n'
+    printf 'SECURE_HSTS_SECONDS=31536000\n'
+    printf 'SECURE_HSTS_INCLUDE_SUBDOMAINS=True\n'
+    printf 'MANAGER_PORT=%s\n'                    "${_MANAGER_PORT}"
+    printf 'MANAGER_DOMAIN=%s\n'                  "${_MANAGER_DOMAIN:-}"
+    printf 'INSTALL_SCRIPT=%s\n'                  "${_SCRIPT_DIR}/Installv2.sh"
     printf 'REGISTRY_DIR=/etc/django-servers.d\n'
   } > "$_MANAGER_DIR/.env"
   chmod 600 "$_MANAGER_DIR/.env"
