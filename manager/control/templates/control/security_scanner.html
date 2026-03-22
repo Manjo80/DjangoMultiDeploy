@@ -401,11 +401,22 @@ function renderHttpScanResult(d) {
     }
   }
 
+  // Fix-location badge helper
+  function fixBadge(loc) {
+    if (!loc) return '';
+    const cfg = {
+      webapp: ['#0d6efd', 'Webapp'],
+      nginx:  ['#fd7e14', 'Nginx'],
+      proxy:  ['#6f42c1', 'Proxy'],
+    }[loc] || ['#6c757d', loc];
+    return `<span class="badge ms-1" style="background:${cfg[0]};font-size:.7em" title="Fix in: ${cfg[1]}">${cfg[1]}</span>`;
+  }
+
   // Security Headers
   if (d.headers && d.headers.length) {
     html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-layout-text-window me-1"></i>HTTP Security Headers</h6>';
     html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
-    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th><th class="text-nowrap">Fix in</th></tr></thead><tbody>';
     for (const h of d.headers) {
       const rowClass = h.severity === 'ok' ? '' :
                        h.severity === 'low' ? 'text-muted' :
@@ -419,7 +430,7 @@ function renderHttpScanResult(d) {
         html += `<code class="d-block text-truncate" style="max-width:420px" title="${h.value}">${h.value}</code>`;
       }
       if (h.msg && h.status !== 'ok') html += `<span class="text-muted">${h.msg}</span>`;
-      html += '</td></tr>';
+      html += `</td><td class="text-nowrap">${fixBadge(h.fix_location)}</td></tr>`;
     }
     html += '</tbody></table></div>';
   }
@@ -428,7 +439,7 @@ function renderHttpScanResult(d) {
   if (d.cors && d.cors.length) {
     html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-arrow-left-right me-1"></i>CORS-Konfiguration</h6>';
     html += '<div class="table-responsive"><table class="table table-sm table-dark mb-3">';
-    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th></tr></thead><tbody>';
+    html += '<thead><tr><th>Header</th><th>Status</th><th>Wert / Hinweis</th><th class="text-nowrap">Fix in</th></tr></thead><tbody>';
     for (const c of d.cors) {
       const rowClass = ['critical','high'].includes(c.severity) ? 'table-danger' :
                        c.severity === 'medium' ? 'table-warning' : '';
@@ -439,6 +450,7 @@ function renderHttpScanResult(d) {
           ${c.value ? `<code class="d-block text-truncate" style="max-width:420px">${c.value}</code>` : ''}
           ${c.msg && c.severity !== 'ok' ? `<span class="text-muted">${c.msg}</span>` : ''}
         </td>
+        <td class="text-nowrap">${fixBadge(c.fix_location)}</td>
       </tr>`;
     }
     html += '</tbody></table></div>';
@@ -464,7 +476,7 @@ function renderHttpScanResult(d) {
       if (hasIssues) {
         html += '<ul class="mt-1 mb-0 ps-3">';
         for (const issue of ck.issues) {
-          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg}</li>`;
+          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg} ${fixBadge(issue.fix_location)}</li>`;
         }
         html += '</ul>';
       }
