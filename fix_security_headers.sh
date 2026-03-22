@@ -103,6 +103,22 @@ patch_config() {
     CHANGED=1
   fi
 
+  # CSP: cdn.jsdelivr.net ergänzen wenn nicht vorhanden (Bootstrap/Icons CDN)
+  if grep -q "^    add_header Content-Security-Policy" "$CUR_FILE" 2>/dev/null \
+     && ! grep -q "cdn.jsdelivr.net" "$CUR_FILE" 2>/dev/null; then
+    sed -i \
+      "s|script-src 'self' 'unsafe-inline' 'unsafe-eval';|script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net;|g" \
+      "$CUR_FILE"
+    sed -i \
+      "s|style-src 'self' 'unsafe-inline';|style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;|g" \
+      "$CUR_FILE"
+    sed -i \
+      "s|font-src 'self' data:;|font-src 'self' data: https://cdn.jsdelivr.net;|g" \
+      "$CUR_FILE"
+    echo "     ✏  CSP: cdn.jsdelivr.net ergänzt"
+    CHANGED=1
+  fi
+
   # Fehlende Header ergänzen (einzeln aufgerufen — kein Loop, kein pipefail-Problem)
   _ensure "X-Content-Type-Options"   'add_header X-Content-Type-Options "nosniff" always;'
   _ensure "X-XSS-Protection"        'add_header X-XSS-Protection "1; mode=block" always;'
