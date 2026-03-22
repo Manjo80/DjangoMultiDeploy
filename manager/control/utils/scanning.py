@@ -276,12 +276,39 @@ def _check_security_headers(headers):
           ))
 
     def csp_check(v):
+        """Check CSP for dangerous directives.
+
+        'unsafe-inline' in script-src (or default-src without an explicit
+        script-src) is a real XSS vector.  'unsafe-inline' in style-src only
+        enables CSS injection which cannot directly execute JavaScript, so it
+        is reported at a lower level (info) rather than a hard warning.
+        """
         warnings = []
-        vl = v.lower()
-        if 'unsafe-inline' in vl:
-            warnings.append("'unsafe-inline' erlaubt XSS")
-        if 'unsafe-eval' in vl:
-            warnings.append("'unsafe-eval' erlaubt Code-Injection")
+        # Parse directives into a dict: name -> value-list
+        directives = {}
+        for part in v.split(';'):
+            part = part.strip()
+            if not part:
+                continue
+            tokens = part.split()
+            if tokens:
+                directives[tokens[0].lower()] = ' '.join(tokens[1:]).lower()
+
+        # Determine the effective script policy
+        script_policy = directives.get('script-src', directives.get('default-src', ''))
+        if "'unsafe-inline'" in script_policy:
+            warnings.append("'unsafe-inline' in script-src erlaubt XSS")
+
+        if "'unsafe-eval'" in script_policy:
+            warnings.append("'unsafe-eval' in script-src erlaubt Code-Injection")
+
+        # style-src unsafe-inline: CSS injection risk (lower severity — no JS exec)
+        style_policy = directives.get('style-src', directives.get('default-src', ''))
+        if "'unsafe-inline'" in style_policy and "'unsafe-inline'" not in script_policy:
+            warnings.append(
+                "'unsafe-inline' in style-src (CSS-Injection möglich, kein JS)"
+            )
+
         if not warnings:
             return None
         return '; '.join(warnings)

@@ -47,7 +47,7 @@
 </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function copyKey() {
   const text = `{{ key_content|escapejs }}`;
   navigator.clipboard.writeText(text).then(() => {

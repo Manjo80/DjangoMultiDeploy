@@ -103,11 +103,23 @@ patch_config() {
     CHANGED=1
   fi
 
+  # CSP: 'unsafe-inline'/'unsafe-eval' aus script-src entfernen (kein JS-Inline-Execution)
+  if grep -q "^    add_header Content-Security-Policy.*script-src.*unsafe-inline" "$CUR_FILE" 2>/dev/null; then
+    sed -i \
+      "s|script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net|script-src 'self' https://cdn.jsdelivr.net|g; \
+       s|script-src 'self' 'unsafe-inline' 'unsafe-eval'|script-src 'self'|g; \
+       s|script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net|script-src 'self' https://cdn.jsdelivr.net|g; \
+       s|script-src 'self' 'unsafe-inline'|script-src 'self'|g" \
+      "$CUR_FILE"
+    echo "     ✏  CSP: 'unsafe-inline'/'unsafe-eval' aus script-src entfernt"
+    CHANGED=1
+  fi
+
   # CSP: cdn.jsdelivr.net ergänzen wenn nicht vorhanden (Bootstrap/Icons CDN)
   if grep -q "^    add_header Content-Security-Policy" "$CUR_FILE" 2>/dev/null \
      && ! grep -q "cdn.jsdelivr.net" "$CUR_FILE" 2>/dev/null; then
     sed -i \
-      "s|script-src 'self' 'unsafe-inline' 'unsafe-eval';|script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net;|g" \
+      "s|script-src 'self';|script-src 'self' https://cdn.jsdelivr.net;|g" \
       "$CUR_FILE"
     sed -i \
       "s|style-src 'self' 'unsafe-inline';|style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;|g" \
@@ -124,7 +136,7 @@ patch_config() {
   _ensure "X-XSS-Protection"        'add_header X-XSS-Protection "1; mode=block" always;'
   _ensure "Referrer-Policy"         'add_header Referrer-Policy "strict-origin-when-cross-origin" always;'
   _ensure "Permissions-Policy"      'add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;'
-  _ensure "Content-Security-Policy" "add_header Content-Security-Policy \"default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'none';\" always;"
+  _ensure "Content-Security-Policy" "add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';\" always;"
   _ensure "Strict-Transport-Security"       'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'
   _ensure "Cross-Origin-Opener-Policy"      'add_header Cross-Origin-Opener-Policy "same-origin" always;'
   _ensure "Cross-Origin-Embedder-Policy"    'add_header Cross-Origin-Embedder-Policy "unsafe-none" always;'

@@ -50,7 +50,7 @@
 </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // Auto-submit when 6 digits entered
 document.getElementById('totpCode').addEventListener('input', function() {
   if (this.value.replace(/\s/g,'').length === 6) {
