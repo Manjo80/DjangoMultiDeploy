@@ -269,6 +269,16 @@
                 {{ p.last_backup|default:"⚠️ noch keins" }}
               </td>
           </tr>
+          <tr><th class="text-muted">Version</th>
+              <td>
+                {% if p.LAST_COMMIT %}
+                  <span class="font-monospace text-info" title="{{ p.LAST_COMMIT_MSG|default:'' }}">{{ p.LAST_COMMIT }}</span>
+                  {% if p.LAST_UPDATE %}<br><small class="text-muted">{{ p.LAST_UPDATE }}</small>{% endif %}
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+          </tr>
           <tr><th class="text-muted">Extern</th>
               <td class="text-truncate" style="max-width:160px">
                 {% if p.PRIMARY_HOST %}
