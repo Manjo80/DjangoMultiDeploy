@@ -412,6 +412,29 @@ def reset_project(name):
         log.append(f'⚠️ Reset abgebrochen — Service {name} neu gestartet')
         return ok, '\n'.join(log)
 
+    # Sanitize .env: ensure numeric fields are never empty (prevents int("") crashes)
+    env_path = os.path.join(appdir, '.env')
+    if os.path.exists(env_path):
+        _numeric_defaults = {'EMAIL_PORT': '587', 'DB_PORT': ''}
+        try:
+            lines = open(env_path, errors='ignore').readlines()
+            new_lines = []
+            changed = False
+            for line in lines:
+                for key, default in _numeric_defaults.items():
+                    if line.startswith(f'{key}=') and line.strip() == f'{key}=':
+                        if default:
+                            line = f'{key}={default}\n'
+                            changed = True
+                        break
+                new_lines.append(line)
+            if changed:
+                with open(env_path, 'w') as fh:
+                    fh.writelines(new_lines)
+                log.append('🔧 .env bereinigt (leere numerische Felder auf Standardwerte gesetzt)')
+        except Exception as e:
+            log.append(f'⚠️ .env Bereinigung fehlgeschlagen: {e}')
+
     venv_activate = os.path.join(appdir, '.venv', 'bin', 'activate')
     req_file      = os.path.join(appdir, 'requirements.txt')
 
