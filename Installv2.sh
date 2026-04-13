@@ -2119,7 +2119,11 @@ if [ -d "\$APPDIR/.git" ]; then
   # ein Repo eines anderen Benutzers (\$APPUSER) pullt
   git config --global --add safe.directory "\$APPDIR" 2>/dev/null || true
   git config --global pull.rebase false 2>/dev/null || true
-  git -C "\$APPDIR" stash --quiet 2>/dev/null || true
+  # Stash local changes so git pull can proceed. Falls back to checkout
+  # (discard) if stash fails silently (e.g. root/ownership edge cases).
+  git -C "\$APPDIR" stash --quiet 2>/dev/null \
+    || git -C "\$APPDIR" checkout -- . 2>/dev/null \
+    || true
   if [ -f "\$GITHUB_DEPLOY_KEY" ]; then
     GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
       git -C "\$APPDIR" pull --ff-only 2>/dev/null \

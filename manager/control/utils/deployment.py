@@ -10,6 +10,51 @@ from .registry import get_project
 from .deploy_keys import KEYS_DIR
 
 
+def _patch_project_update_script(script_path):
+    """
+    Idempotently patches an existing project update script to add git stash
+    before git pull. Scripts installed before this was added would fail with
+    "Please commit your changes or stash them" when local files were modified.
+    """
+    try:
+        with open(script_path) as f:
+            content = f.read()
+
+        if 'git stash' in content:
+            return  # Already patched
+
+        changed = False
+
+        # Ensure pull.rebase false is present (older scripts may lack it too)
+        if 'pull.rebase false' not in content:
+            old = '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
+            new = (
+                '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
+                '  git config --global pull.rebase false 2>/dev/null || true\n'
+            )
+            if old in content:
+                content = content.replace(old, new, 1)
+                changed = True
+
+        # Add git stash (with checkout fallback) right after pull.rebase config
+        old = '  git config --global pull.rebase false 2>/dev/null || true\n'
+        new = (
+            '  git config --global pull.rebase false 2>/dev/null || true\n'
+            '  git -C "$APPDIR" stash --quiet 2>/dev/null \\\n'
+            '    || git -C "$APPDIR" checkout -- . 2>/dev/null \\\n'
+            '    || true\n'
+        )
+        if old in content:
+            content = content.replace(old, new, 1)
+            changed = True
+
+        if changed:
+            with open(script_path, 'w') as f:
+                f.write(content)
+    except OSError:
+        pass
+
+
 def run_update(name):
     """Run the project update script. Returns (ok, output)."""
     import re as _re
@@ -40,6 +85,10 @@ def run_update(name):
                             f.write(new_content)
                 except OSError:
                     pass
+
+    # Auto-patch: add git stash if missing from older installed scripts.
+    # Without stash, git pull aborts when local files were modified after install.
+    _patch_project_update_script(script)
 
     try:
         result = subprocess.run(
