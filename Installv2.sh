@@ -2157,6 +2157,14 @@ su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && py
 echo "📦 Sammle statische Dateien..."
 su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
 
+# Glossar neu einlesen (optional — wird übersprungen wenn Command nicht vorhanden)
+echo "📖 Lade Glossar (falls vorhanden)..."
+_gout=\$(su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py load_glossary 2>&1") \
+  && echo "✅ Glossar geladen" \
+  || { echo "\$_gout" | grep -q "Unknown command\|No such command" \
+       && echo "⏭️  load_glossary nicht vorhanden (übersprungen)" \
+       || echo "⚠️  Glossar laden fehlgeschlagen: \$_gout"; }
+
 # Service neustarten (direkt als root — kein sudo nötig)
 echo "🔄 Neustart Service..."
 systemctl restart "\$SERVICE"

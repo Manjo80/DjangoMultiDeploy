@@ -12,41 +12,64 @@ from .deploy_keys import KEYS_DIR
 
 def _patch_project_update_script(script_path):
     """
-    Idempotently patches an existing project update script to add git stash
-    before git pull. Scripts installed before this was added would fail with
-    "Please commit your changes or stash them" when local files were modified.
+    Idempotently patches an existing project update script:
+    1. git stash before git pull  (fixes "please commit your changes" abort)
+    2. load_glossary after collectstatic  (optional management command)
     """
     try:
         with open(script_path) as f:
             content = f.read()
 
-        if 'git stash' in content:
-            return  # Already patched
-
         changed = False
 
-        # Ensure pull.rebase false is present (older scripts may lack it too)
-        if 'pull.rebase false' not in content:
-            old = '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
+        # ── Patch 1: git stash ───────────────────────────────────────────────
+        if 'git stash' not in content:
+            # Ensure pull.rebase false is present (older scripts may lack it)
+            if 'pull.rebase false' not in content:
+                old = '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
+                new = (
+                    '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
+                    '  git config --global pull.rebase false 2>/dev/null || true\n'
+                )
+                if old in content:
+                    content = content.replace(old, new, 1)
+                    changed = True
+
+            old = '  git config --global pull.rebase false 2>/dev/null || true\n'
             new = (
-                '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
                 '  git config --global pull.rebase false 2>/dev/null || true\n'
+                '  git -C "$APPDIR" stash --quiet 2>/dev/null \\\n'
+                '    || git -C "$APPDIR" checkout -- . 2>/dev/null \\\n'
+                '    || true\n'
             )
             if old in content:
                 content = content.replace(old, new, 1)
                 changed = True
 
-        # Add git stash (with checkout fallback) right after pull.rebase config
-        old = '  git config --global pull.rebase false 2>/dev/null || true\n'
-        new = (
-            '  git config --global pull.rebase false 2>/dev/null || true\n'
-            '  git -C "$APPDIR" stash --quiet 2>/dev/null \\\n'
-            '    || git -C "$APPDIR" checkout -- . 2>/dev/null \\\n'
-            '    || true\n'
-        )
-        if old in content:
-            content = content.replace(old, new, 1)
-            changed = True
+        # ── Patch 2: load_glossary after collectstatic ───────────────────────
+        if 'load_glossary' not in content:
+            old = (
+                'python manage.py collectstatic --noinput"\n'
+                '\n'
+                '# Service neustarten'
+            )
+            new = (
+                'python manage.py collectstatic --noinput"\n'
+                '\n'
+                '# Glossar neu einlesen (optional — wird übersprungen wenn Command nicht vorhanden)\n'
+                'echo "📖 Lade Glossar (falls vorhanden)..."\n'
+                '_gout=$(su - "$APPUSER" -s /bin/bash -c'
+                ' "cd $APPDIR && source .venv/bin/activate && python manage.py load_glossary 2>&1") \\\n'
+                '  && echo "✅ Glossar geladen" \\\n'
+                '  || { echo "$_gout" | grep -q "Unknown command\\|No such command" \\\n'
+                '       && echo "⏭️  load_glossary nicht vorhanden (übersprungen)" \\\n'
+                '       || echo "⚠️  Glossar laden fehlgeschlagen: $_gout"; }\n'
+                '\n'
+                '# Service neustarten'
+            )
+            if old in content:
+                content = content.replace(old, new, 1)
+                changed = True
 
         if changed:
             with open(script_path, 'w') as f:
@@ -379,7 +402,19 @@ def reset_project(name):
     )
     log.append(f'{"✅" if rc == 0 else "⚠️"} collectstatic')
 
-    # 8. Restart service
+    # 8. load_glossary (optional — silently skipped if command doesn't exist)
+    rc, out = _run_as(
+        f'cd {appdir} && source {venv_activate} && python manage.py load_glossary 2>&1',
+        timeout=120,
+    )
+    if rc == 0:
+        log.append('✅ Glossar geladen')
+    elif 'Unknown command' in out or 'No such command' in out:
+        log.append('⏭️ load_glossary nicht vorhanden (übersprungen)')
+    else:
+        log.append(f'⚠️ Glossar laden fehlgeschlagen:\n{out[-300:]}')
+
+    # 9. Restart service
     _run('systemctl', 'start', name)
     log.append(f'✅ Service {name} neu gestartet')
     log.append('✅ Reset abgeschlossen')
