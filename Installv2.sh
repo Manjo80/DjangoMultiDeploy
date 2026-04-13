@@ -1469,10 +1469,10 @@ CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS_VALUE
 LANGUAGE_CODE="$LANGUAGE_CODE"
 TIME_ZONE="$TIME_ZONE"
 EMAIL_HOST="${EMAIL_HOST:-}"
-EMAIL_PORT="${EMAIL_PORT:-}"
+EMAIL_PORT="${EMAIL_PORT:-587}"
 EMAIL_HOST_USER="${EMAIL_HOST_USER:-}"
 EMAIL_HOST_PASSWORD="${EMAIL_HOST_PASSWORD:-}"
-EMAIL_USE_TLS="${EMAIL_USE_TLS:-}"
+EMAIL_USE_TLS="${EMAIL_USE_TLS:-True}"
 DEFAULT_FROM_EMAIL="${DEFAULT_FROM_EMAIL:-}"
 EOF
 
@@ -1606,7 +1606,7 @@ _email_host = os.getenv("EMAIL_HOST", "")
 if _email_host:
     EMAIL_BACKEND       = "django.core.mail.backends.smtp.EmailBackend"
     EMAIL_HOST          = _email_host
-    EMAIL_PORT          = int(os.getenv("EMAIL_PORT", "587"))
+    EMAIL_PORT          = int(os.getenv("EMAIL_PORT") or "587")
     EMAIL_HOST_USER     = os.getenv("EMAIL_HOST_USER", "")
     EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
     EMAIL_USE_TLS       = os.getenv("EMAIL_USE_TLS", "True") == "True"
