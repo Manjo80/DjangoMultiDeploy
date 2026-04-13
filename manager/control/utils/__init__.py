@@ -27,6 +27,7 @@ from .deployment import (
     run_update,
     extract_project_zip,
     update_project_from_zip,
+    reset_project,
     remove_project,
     start_install,
     run_management_command,
@@ -89,7 +90,7 @@ __all__ = [
     'list_backups', 'run_backup', 'delete_backup', 'get_last_backup',
     # deployment
     'run_update', 'extract_project_zip', 'update_project_from_zip',
-    'remove_project', 'start_install', 'run_management_command',
+    'reset_project', 'remove_project', 'start_install', 'run_management_command',
     # deploy_keys
     'KEYS_DIR', 'GLOBAL_DEPLOY_KEY', '_load_key_registry',
     'create_deploy_key', 'list_deploy_keys', 'get_deploy_key_pubkey',

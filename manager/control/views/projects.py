@@ -34,6 +34,7 @@ from ..utils import (
     run_pip_audit, run_django_deploy_check,
     run_migration_status, run_pip_outdated, run_pip_upgrade,
     run_http_security_scan, KEYS_DIR, GLOBAL_DEPLOY_KEY,
+    reset_project,
     remove_project,
 )
 from ._helpers import (
@@ -353,6 +354,35 @@ def remove_done(request):
     if not result:
         return redirect('dashboard')
     return render(request, 'control/remove_done.html', result)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reset wizard (Neu aufsetzen)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@admin_required
+def reset_confirm(request, name):
+    conf = get_project(name)
+    if not conf:
+        raise Http404(f'Projekt "{name}" nicht gefunden.')
+    return render(request, 'control/reset_confirm.html', {'name': name, 'conf': conf})
+
+
+@require_POST
+@admin_required
+def reset_run(request, name):
+    ok, output = reset_project(name)
+    AuditLog.log(request, f'Projekt neu aufgesetzt: {name}', project=name, success=ok)
+    request.session['reset_result'] = {'name': name, 'ok': ok, 'output': output}
+    return redirect('reset_done')
+
+
+@login_required
+def reset_done(request):
+    result = request.session.pop('reset_result', None)
+    if not result:
+        return redirect('dashboard')
+    return render(request, 'control/reset_done.html', result)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
