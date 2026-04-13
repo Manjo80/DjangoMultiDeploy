@@ -6,8 +6,46 @@ import subprocess
 import shlex
 from django.conf import settings
 
-from .registry import get_project
+from .registry import get_project, set_project_conf_value
 from .deploy_keys import KEYS_DIR
+
+
+def _record_version(name):
+    """
+    After a successful update or reset: read the current git commit hash +
+    message from the project's APPDIR and store LAST_COMMIT, LAST_COMMIT_MSG,
+    and LAST_UPDATE in the project's .conf file so the dashboard can display
+    the deployed version.
+    """
+    from datetime import datetime
+    conf = get_project(name)
+    if not conf:
+        return
+    appdir = conf.get('APPDIR', f'/srv/{name}')
+    if not os.path.isdir(os.path.join(appdir, '.git')):
+        return
+    try:
+        short_hash = subprocess.run(
+            ['git', '-C', appdir, 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        commit_msg = subprocess.run(
+            ['git', '-C', appdir, 'log', '-1', '--format=%s'],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        branch = subprocess.run(
+            ['git', '-C', appdir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+    except Exception:
+        return
+    if not short_hash:
+        return
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    label = f'{short_hash} ({branch})' if branch else short_hash
+    set_project_conf_value(name, 'LAST_COMMIT', label)
+    set_project_conf_value(name, 'LAST_COMMIT_MSG', commit_msg[:120])
+    set_project_conf_value(name, 'LAST_UPDATE', now)
 
 
 def _patch_project_update_script(script_path):
@@ -128,7 +166,10 @@ def run_update(name):
                 f'   → Manager → Deploy Keys → Key für "{name}" anlegen/zuweisen\n'
                 f'   → GitHub → Repo → Settings → Deploy keys → Key eintragen (Read access)'
             )
-        return result.returncode == 0, output
+        ok = result.returncode == 0
+        if ok:
+            _record_version(name)
+        return ok, output
     except Exception as e:
         return False, str(e)
 
@@ -417,6 +458,9 @@ def reset_project(name):
     # 9. Restart service
     _run('systemctl', 'start', name)
     log.append(f'✅ Service {name} neu gestartet')
+
+    # 10. Record deployed version
+    _record_version(name)
     log.append('✅ Reset abgeschlossen')
     return ok, '\n'.join(log)
 

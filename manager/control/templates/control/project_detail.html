@@ -58,6 +58,15 @@
           <tr><th class="text-muted">GitHub</th><td class="text-break">{{ conf.GITHUB_REPO_URL|default:"(kein)" }}</td></tr>
           <tr><th class="text-muted">Sprache</th><td>{{ conf.LANGUAGE_CODE|default:"-" }} / {{ conf.TIME_ZONE|default:"-" }}</td></tr>
           <tr><th class="text-muted">Installiert</th><td>{{ conf.INSTALL_DATE|default:"-" }}</td></tr>
+          {% if conf.LAST_COMMIT %}
+          <tr><th class="text-muted">Git-Stand</th>
+              <td>
+                <span class="font-monospace text-info">{{ conf.LAST_COMMIT }}</span>
+                {% if conf.LAST_COMMIT_MSG %}<br><small class="text-muted">{{ conf.LAST_COMMIT_MSG }}</small>{% endif %}
+              </td>
+          </tr>
+          <tr><th class="text-muted">Letztes Update</th><td>{{ conf.LAST_UPDATE|default:"-" }}</td></tr>
+          {% endif %}
         </table>
       </div>
       {% if role == 'admin' %}
