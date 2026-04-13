@@ -10,6 +10,74 @@ from .registry import get_project
 from .deploy_keys import KEYS_DIR
 
 
+def _patch_project_update_script(script_path):
+    """
+    Idempotently patches an existing project update script:
+    1. git stash before git pull  (fixes "please commit your changes" abort)
+    2. load_glossary after collectstatic  (optional management command)
+    """
+    try:
+        with open(script_path) as f:
+            content = f.read()
+
+        changed = False
+
+        # ── Patch 1: git stash ───────────────────────────────────────────────
+        if 'git stash' not in content:
+            # Ensure pull.rebase false is present (older scripts may lack it)
+            if 'pull.rebase false' not in content:
+                old = '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
+                new = (
+                    '  git config --global --add safe.directory "$APPDIR" 2>/dev/null || true\n'
+                    '  git config --global pull.rebase false 2>/dev/null || true\n'
+                )
+                if old in content:
+                    content = content.replace(old, new, 1)
+                    changed = True
+
+            old = '  git config --global pull.rebase false 2>/dev/null || true\n'
+            new = (
+                '  git config --global pull.rebase false 2>/dev/null || true\n'
+                '  git -C "$APPDIR" stash --quiet 2>/dev/null \\\n'
+                '    || git -C "$APPDIR" checkout -- . 2>/dev/null \\\n'
+                '    || true\n'
+            )
+            if old in content:
+                content = content.replace(old, new, 1)
+                changed = True
+
+        # ── Patch 2: load_glossary after collectstatic ───────────────────────
+        if 'load_glossary' not in content:
+            old = (
+                'python manage.py collectstatic --noinput"\n'
+                '\n'
+                '# Service neustarten'
+            )
+            new = (
+                'python manage.py collectstatic --noinput"\n'
+                '\n'
+                '# Glossar neu einlesen (optional — wird übersprungen wenn Command nicht vorhanden)\n'
+                'echo "📖 Lade Glossar (falls vorhanden)..."\n'
+                '_gout=$(su - "$APPUSER" -s /bin/bash -c'
+                ' "cd $APPDIR && source .venv/bin/activate && python manage.py load_glossary 2>&1") \\\n'
+                '  && echo "✅ Glossar geladen" \\\n'
+                '  || { echo "$_gout" | grep -q "Unknown command\\|No such command" \\\n'
+                '       && echo "⏭️  load_glossary nicht vorhanden (übersprungen)" \\\n'
+                '       || echo "⚠️  Glossar laden fehlgeschlagen: $_gout"; }\n'
+                '\n'
+                '# Service neustarten'
+            )
+            if old in content:
+                content = content.replace(old, new, 1)
+                changed = True
+
+        if changed:
+            with open(script_path, 'w') as f:
+                f.write(content)
+    except OSError:
+        pass
+
+
 def run_update(name):
     """Run the project update script. Returns (ok, output)."""
     import re as _re
@@ -40,6 +108,10 @@ def run_update(name):
                             f.write(new_content)
                 except OSError:
                     pass
+
+    # Auto-patch: add git stash if missing from older installed scripts.
+    # Without stash, git pull aborts when local files were modified after install.
+    _patch_project_update_script(script)
 
     try:
         result = subprocess.run(
@@ -182,6 +254,171 @@ def update_project_from_zip(name, uploaded_file):
             os.unlink(zip_path)
         except OSError:
             pass
+
+
+def reset_project(name):
+    """
+    Full reset: backup → stop service → drop+recreate DB → git fetch+reset --hard
+    → pip install → migrate → collectstatic → restart service.
+    Preserves: .env, .venv, media/, staticfiles/
+    Returns (ok, output).
+    """
+    conf = get_project(name)
+    if not conf:
+        return False, 'Projekt nicht gefunden'
+
+    appdir  = conf.get('APPDIR', f'/srv/{name}')
+    appuser = conf.get('APPUSER', name)
+    dbtype  = conf.get('DBTYPE', '')
+    dbname  = conf.get('DBNAME', '')
+    log = []
+    ok  = True
+
+    def _run(*cmd, timeout=60):
+        try:
+            r = subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout)
+            return r.returncode, (r.stdout + r.stderr).strip()
+        except Exception as e:
+            return 1, str(e)
+
+    def _run_as(cmd, timeout=300):
+        r = subprocess.run(
+            ['su', '-', appuser, '-s', '/bin/bash', '-c', cmd],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return r.returncode, (r.stdout + r.stderr).strip()[-800:]
+
+    # 1. Backup
+    log.append('💾 Erstelle Backup vor Reset...')
+    backup_script = f'/usr/local/bin/{name}_backup.sh'
+    if os.path.exists(backup_script):
+        rc, out = _run(backup_script, timeout=120)
+        log.append('✅ Backup erstellt' if rc == 0 else '⚠️ Backup fehlgeschlagen — Reset wird fortgesetzt')
+    else:
+        log.append('⏭️ Kein Backup-Script gefunden')
+
+    # 2. Stop service
+    _run('systemctl', 'stop', name)
+    log.append(f'🔴 Service {name} gestoppt')
+
+    # 3. Drop + recreate database
+    if dbtype and dbname:
+        log.append(f'🗄️ Setze Datenbank zurück ({dbtype} / {dbname})...')
+        dbuser = ''
+        env_path = os.path.join(appdir, '.env')
+        if os.path.exists(env_path):
+            for line in open(env_path, errors='ignore'):
+                if line.startswith('DB_USER=') or line.startswith('DATABASE_USER='):
+                    dbuser = line.split('=', 1)[1].strip().strip('"\'')
+                    break
+        if dbtype == 'postgresql':
+            _run('su', '-s', '/bin/bash', 'postgres', '-c',
+                 f'psql -c "DROP DATABASE IF EXISTS \\"{dbname}\\";"')
+            _run('su', '-s', '/bin/bash', 'postgres', '-c',
+                 f'psql -c "CREATE DATABASE \\"{dbname}\\";"')
+            if dbuser:
+                _run('su', '-s', '/bin/bash', 'postgres', '-c',
+                     f'psql -c "GRANT ALL PRIVILEGES ON DATABASE \\"{dbname}\\" TO \\"{dbuser}\\";"')
+            log.append(f'✅ PostgreSQL-Datenbank {dbname} neu erstellt')
+        elif dbtype == 'mysql':
+            _run('mysql', '-u', 'root', '-e', f'DROP DATABASE IF EXISTS `{dbname}`;')
+            _run('mysql', '-u', 'root', '-e',
+                 f'CREATE DATABASE `{dbname}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;')
+            if dbuser:
+                _run('mysql', '-u', 'root', '-e',
+                     f"GRANT ALL ON `{dbname}`.* TO '{dbuser}'@'localhost'; FLUSH PRIVILEGES;")
+            log.append(f'✅ MySQL-Datenbank {dbname} neu erstellt')
+    else:
+        log.append('⏭️ Keine Datenbank konfiguriert — überspringe DB-Reset')
+
+    # 4. Git fetch + reset --hard (keeps .env, .venv, media, staticfiles)
+    if os.path.isdir(os.path.join(appdir, '.git')):
+        log.append('📥 Git: Lade neueste Version vom Remote...')
+        deploy_key_id = conf.get('DEPLOY_KEY_ID', '').strip()
+        key_path = ''
+        if deploy_key_id:
+            candidate = os.path.join(KEYS_DIR, f'{deploy_key_id}_ed25519')
+            if os.path.exists(candidate):
+                key_path = candidate
+        ssh_env = (
+            f'GIT_SSH_COMMAND="ssh -i {key_path} -o IdentitiesOnly=yes -o ConnectTimeout=30" '
+            if key_path else ''
+        )
+        _run('git', 'config', '--global', '--add', 'safe.directory', appdir)
+        _run('git', 'config', '--global', 'pull.rebase', 'false')
+        rc, out = _run('bash', '-c', f'{ssh_env}git -C {appdir} fetch --all --quiet', timeout=60)
+        if rc != 0:
+            log.append(f'❌ git fetch fehlgeschlagen:\n{out}')
+            ok = False
+        else:
+            rc2, out2 = _run('bash', '-c',
+                f'branch=$(git -C {appdir} rev-parse --abbrev-ref HEAD 2>/dev/null || echo main); '
+                f'git -C {appdir} reset --hard origin/$branch 2>/dev/null '
+                f'|| git -C {appdir} reset --hard origin/main 2>/dev/null '
+                f'|| git -C {appdir} reset --hard origin/master',
+                timeout=30)
+            log.append('✅ Git: neueste Version geladen' if rc2 == 0 else f'⚠️ git reset: {out2}')
+            _run('bash', '-c',
+                f'git -C {appdir} clean -fd '
+                f'--exclude=.env --exclude=.venv --exclude=media --exclude=staticfiles '
+                f'2>/dev/null || true',
+                timeout=30)
+    else:
+        log.append('⏭️ Kein Git-Repository gefunden — überspringe git reset')
+
+    if not ok:
+        _run('systemctl', 'start', name)
+        log.append(f'⚠️ Reset abgebrochen — Service {name} neu gestartet')
+        return ok, '\n'.join(log)
+
+    venv_activate = os.path.join(appdir, '.venv', 'bin', 'activate')
+    req_file      = os.path.join(appdir, 'requirements.txt')
+
+    # 5. pip install
+    if os.path.isfile(req_file):
+        log.append('📦 Installiere Python-Abhängigkeiten...')
+        rc, out = _run_as(
+            f'source {venv_activate} && pip install --no-cache-dir --prefer-binary -r {req_file}',
+            timeout=300,
+        )
+        log.append(f'{"✅" if rc == 0 else "❌"} pip install\n{out[-400:]}')
+        if rc != 0:
+            ok = False
+
+    # 6. migrate (fresh DB)
+    log.append('📊 Führe Migrationen aus (neue Datenbank)...')
+    rc, out = _run_as(
+        f'cd {appdir} && source {venv_activate} && python manage.py migrate --noinput',
+        timeout=180,
+    )
+    log.append(f'{"✅" if rc == 0 else "❌"} migrate\n{out[-500:]}')
+    if rc != 0:
+        ok = False
+
+    # 7. collectstatic
+    rc, _ = _run_as(
+        f'cd {appdir} && source {venv_activate} && python manage.py collectstatic --noinput',
+        timeout=60,
+    )
+    log.append(f'{"✅" if rc == 0 else "⚠️"} collectstatic')
+
+    # 8. load_glossary (optional — silently skipped if command doesn't exist)
+    rc, out = _run_as(
+        f'cd {appdir} && source {venv_activate} && python manage.py load_glossary 2>&1',
+        timeout=120,
+    )
+    if rc == 0:
+        log.append('✅ Glossar geladen')
+    elif 'Unknown command' in out or 'No such command' in out:
+        log.append('⏭️ load_glossary nicht vorhanden (übersprungen)')
+    else:
+        log.append(f'⚠️ Glossar laden fehlgeschlagen:\n{out[-300:]}')
+
+    # 9. Restart service
+    _run('systemctl', 'start', name)
+    log.append(f'✅ Service {name} neu gestartet')
+    log.append('✅ Reset abgeschlossen')
+    return ok, '\n'.join(log)
 
 
 def remove_project(name, opts):

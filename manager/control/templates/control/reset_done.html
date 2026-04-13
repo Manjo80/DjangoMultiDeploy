@@ -1,0 +1,50 @@
+{% extends "control/base.html" %}
+{% block title %}Neu aufgesetzt — {{ name }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-7">
+
+<div class="card">
+  <div class="card-header {% if ok %}bg-success{% else %}bg-warning{% endif %} text-{% if ok %}white{% else %}dark{% endif %}">
+    <h5 class="mb-0">
+      {% if ok %}
+        <i class="bi bi-check-circle me-2"></i>Projekt "{{ name }}" erfolgreich neu aufgesetzt
+      {% else %}
+        <i class="bi bi-exclamation-triangle me-2"></i>Neu aufsetzen von "{{ name }}" mit Fehlern
+      {% endif %}
+    </h5>
+  </div>
+  <div class="card-body">
+
+    {% if ok %}
+    <div class="alert alert-success">
+      Das Projekt <strong>{{ name }}</strong> wurde neu aufgesetzt.
+      Datenbank geleert, Code auf neueste GitHub-Version zurückgesetzt, Migrationen ausgeführt.
+    </div>
+    {% else %}
+    <div class="alert alert-warning">
+      Beim Neu aufsetzen sind Fehler aufgetreten. Prüfe die Ausgabe unten.
+    </div>
+    {% endif %}
+
+    {% if output %}
+    <h6 class="text-muted">Ausgabe:</h6>
+    <pre class="log-output">{{ output }}</pre>
+    {% endif %}
+
+    <div class="mt-3 d-flex gap-2">
+      {% if ok %}
+      <a href="{% url 'project_detail' name %}" class="btn btn-primary">← Zum Projekt</a>
+      {% else %}
+      <a href="{% url 'project_detail' name %}" class="btn btn-secondary">← Zum Projekt</a>
+      {% endif %}
+      <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary">Dashboard</a>
+    </div>
+
+  </div>
+</div>
+
+</div>
+</div>
+{% endblock %}

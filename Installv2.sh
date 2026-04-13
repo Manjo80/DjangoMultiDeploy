@@ -2119,7 +2119,11 @@ if [ -d "\$APPDIR/.git" ]; then
   # ein Repo eines anderen Benutzers (\$APPUSER) pullt
   git config --global --add safe.directory "\$APPDIR" 2>/dev/null || true
   git config --global pull.rebase false 2>/dev/null || true
-  git -C "\$APPDIR" stash --quiet 2>/dev/null || true
+  # Stash local changes so git pull can proceed. Falls back to checkout
+  # (discard) if stash fails silently (e.g. root/ownership edge cases).
+  git -C "\$APPDIR" stash --quiet 2>/dev/null \
+    || git -C "\$APPDIR" checkout -- . 2>/dev/null \
+    || true
   if [ -f "\$GITHUB_DEPLOY_KEY" ]; then
     GIT_SSH_COMMAND="ssh -i \$GITHUB_DEPLOY_KEY -o IdentitiesOnly=yes -o ConnectTimeout=30" \
       git -C "\$APPDIR" pull --ff-only 2>/dev/null \
@@ -2152,6 +2156,14 @@ su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && py
 # Statische Dateien sammeln
 echo "📦 Sammle statische Dateien..."
 su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
+
+# Glossar neu einlesen (optional — wird übersprungen wenn Command nicht vorhanden)
+echo "📖 Lade Glossar (falls vorhanden)..."
+_gout=\$(su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py load_glossary 2>&1") \
+  && echo "✅ Glossar geladen" \
+  || { echo "\$_gout" | grep -q "Unknown command\|No such command" \
+       && echo "⏭️  load_glossary nicht vorhanden (übersprungen)" \
+       || echo "⚠️  Glossar laden fehlgeschlagen: \$_gout"; }
 
 # Service neustarten (direkt als root — kein sudo nötig)
 echo "🔄 Neustart Service..."
