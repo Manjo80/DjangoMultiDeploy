@@ -1922,9 +1922,9 @@ server {
         return 404;
     }
 
-    # Rate Limiting für Login/Admin-Bereich
-    location ~* ^/(login|djadmin|accounts/login|api/auth) {
-        limit_req zone=django_login burst=5 nodelay;
+    # Rate Limiting nur für Login-Endpunkte (nicht ganzen Admin-Bereich)
+    location ~* ^/(login|djadmin/login|accounts/login|api/auth) {
+        limit_req zone=django_login burst=10 nodelay;
         add_header Retry-After 60 always;
         proxy_pass http://${LOCAL_IP}:${GUNICORN_PORT};
         proxy_set_header Host \$http_host;
