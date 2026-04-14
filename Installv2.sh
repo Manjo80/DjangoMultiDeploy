@@ -1841,10 +1841,14 @@ RATELIMIT
   echo "✅ Nginx Rate-Limit-Zonen angelegt"
 fi
 
-# Cloudflare Real-IP Wiederherstellung (global für alle Sites)
-# Stellt $remote_addr auf die echte Client-IP zurück, wenn Traffic über Cloudflare kommt.
-# Aktuell gehaltene IP-Ranges: https://www.cloudflare.com/ips/
-cat > /etc/nginx/conf.d/cloudflare_realip.conf <<'CFREALIP'
+# Real-IP: lokaler Reverse Proxy (Zoraxy etc.) + Cloudflare
+if [ ! -f /etc/nginx/conf.d/realip.conf ]; then
+  cat > /etc/nginx/conf.d/realip.conf <<'REALIP'
+# Lokaler Reverse Proxy (Zoraxy, Traefik, etc.) — privates Netz
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 172.16.0.0/12;
+set_real_ip_from 192.168.0.0/16;
+set_real_ip_from 127.0.0.1;
 # Cloudflare IPv4
 set_real_ip_from 103.21.244.0/22;
 set_real_ip_from 103.22.200.0/22;
@@ -1869,11 +1873,11 @@ set_real_ip_from 2606:4700::/32;
 set_real_ip_from 2803:f800::/32;
 set_real_ip_from 2a06:98c0::/29;
 set_real_ip_from 2c0f:f248::/32;
-# CF-Connecting-IP enthält die Original-Client-IP (zuverlässiger als X-Forwarded-For)
-real_ip_header CF-Connecting-IP;
+real_ip_header X-Forwarded-For;
 real_ip_recursive on;
-CFREALIP
-echo "✅ Nginx Cloudflare Real-IP-Config angelegt"
+REALIP
+  echo "✅ Nginx Real-IP-Config angelegt (Zoraxy + Cloudflare)"
+fi
 
 # Self-Signed SSL-Zertifikat bereitstellen (einmalig, geteilt für alle Sites)
 _generate_selfsigned_cert
