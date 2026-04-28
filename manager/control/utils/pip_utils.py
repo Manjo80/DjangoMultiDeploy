@@ -49,6 +49,58 @@ def run_pip_audit(project):
         return {'ok': False, 'vulnerabilities': [], 'error': str(e)}
 
 
+def run_bandit(project):
+    """
+    Run bandit static analysis against the project source (excludes .venv).
+    Returns {'ok': bool, 'findings': [...], 'metrics': {...}, 'error': str}
+    """
+    appdir = f'/srv/{project}'
+    venv_pip = f'{appdir}/.venv/bin/pip'
+    if not os.path.exists(venv_pip):
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'venv nicht gefunden'}
+
+    # Install bandit into the project venv if missing
+    bandit_bin = f'{appdir}/.venv/bin/bandit'
+    if not os.path.exists(bandit_bin):
+        subprocess.run([venv_pip, 'install', '--quiet', 'bandit'],
+                       capture_output=True, timeout=60)
+
+    if not os.path.exists(bandit_bin):
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'bandit konnte nicht installiert werden'}
+
+    try:
+        result = subprocess.run(
+            [bandit_bin, '-r', appdir, '--exclude', f'{appdir}/.venv',
+             '-f', 'json', '-q'],
+            capture_output=True, text=True, timeout=120,
+        )
+        output = result.stdout.strip()
+        if not output:
+            return {'ok': True, 'findings': [], 'metrics': {}, 'error': ''}
+        data = json.loads(output)
+        findings = []
+        for r in data.get('results', []):
+            filepath = r.get('filename', '')
+            # Show path relative to appdir
+            rel = filepath.replace(appdir + '/', '') if filepath.startswith(appdir) else filepath
+            findings.append({
+                'file':       rel,
+                'line':       r.get('line_number', ''),
+                'severity':   r.get('issue_severity', '').upper(),
+                'confidence': r.get('issue_confidence', '').upper(),
+                'text':       r.get('issue_text', ''),
+                'test_id':    r.get('test_id', ''),
+            })
+        metrics = data.get('metrics', {}).get('_totals', {})
+        return {'ok': True, 'findings': findings, 'metrics': metrics, 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'Timeout (bandit)'}
+    except json.JSONDecodeError:
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'Ungültige bandit Ausgabe'}
+    except Exception as e:
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': str(e)}
+
+
 def run_django_deploy_check(project):
     """
     Run `manage.py check --deploy` and return parsed issues.

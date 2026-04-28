@@ -74,6 +74,7 @@ from .pip_utils import (
     run_migration_status,
     run_pip_outdated,
     run_pip_upgrade,
+    run_bandit,
 )
 
 from .scanning import (
@@ -105,6 +106,7 @@ __all__ = [
     # pip_utils
     'run_pip_audit', 'run_django_deploy_check', 'run_manager_pip_audit',
     'run_manager_deploy_check', 'run_migration_status', 'run_pip_outdated', 'run_pip_upgrade',
+    'run_bandit',
     # scanning
     'run_http_security_scan', 'get_public_ip', 'run_port_scan',
 ]

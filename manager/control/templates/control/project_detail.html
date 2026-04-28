@@ -1678,6 +1678,43 @@ async function runSecurityScan() {
       html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Sicherheitswarnungen.</div>';
     }
 
+    // ── Bandit (Code-Analyse) ──
+    html += '<h6 class="mt-4 mb-2"><i class="bi bi-code-slash me-2"></i>Bandit — Code-Analyse</h6>';
+    if (!d.bandit) {
+      html += '<div class="alert alert-secondary small">Nicht verfügbar</div>';
+    } else if (!d.bandit.ok && d.bandit.error) {
+      html += `<div class="alert alert-secondary small"><span class="badge bg-secondary me-1">Fehler</span>${d.bandit.error}</div>`;
+    } else {
+      const findings = d.bandit.findings || [];
+      const m = d.bandit.metrics || {};
+      const high   = (m['SEVERITY.HIGH']   || 0);
+      const medium = (m['SEVERITY.MEDIUM'] || 0);
+      const low    = (m['SEVERITY.LOW']    || 0);
+      if (findings.length === 0) {
+        html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Code-Probleme gefunden.</div>';
+      } else {
+        const sevColor = high > 0 ? 'danger' : medium > 0 ? 'warning' : 'info';
+        html += `<div class="alert alert-${sevColor} small mb-2">
+          <i class="bi bi-exclamation-triangle me-1"></i>${findings.length} Fund/Funde —
+          <span class="badge bg-danger ms-1">HIGH ${high}</span>
+          <span class="badge bg-warning text-dark ms-1">MEDIUM ${medium}</span>
+          <span class="badge bg-secondary ms-1">LOW ${low}</span>
+        </div>`;
+        const sevBadge = s => s === 'HIGH' ? 'bg-danger' : s === 'MEDIUM' ? 'bg-warning text-dark' : 'bg-secondary';
+        html += '<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
+        html += '<thead><tr><th>Schwere</th><th>Datei : Zeile</th><th>Problem</th><th>Test</th></tr></thead><tbody>';
+        findings.forEach(f => {
+          html += `<tr>
+            <td><span class="badge ${sevBadge(f.severity)}">${f.severity}</span></td>
+            <td class="text-muted font-monospace" style="font-size:.75rem">${f.file}:${f.line}</td>
+            <td>${f.text}</td>
+            <td class="text-muted">${f.test_id}</td>
+          </tr>`;
+        });
+        html += '</tbody></table></div>';
+      }
+    }
+
     out.innerHTML = html;
   } catch(e) {
     out.innerHTML = `<div class="alert alert-danger small">Fehler: ${e.message}</div>`;

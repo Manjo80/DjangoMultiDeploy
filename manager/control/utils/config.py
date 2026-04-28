@@ -55,8 +55,8 @@ def update_allowed_hosts(name, hosts):
     appdir = conf.get('APPDIR', f'/srv/{name}')
     env_path = os.path.join(appdir, '.env')
 
-    # Sanitize host list
-    hosts = [h.strip() for h in hosts if h.strip()]
+    # Sanitize host list — lowercase to avoid CSRF case-sensitive mismatches
+    hosts = [h.strip().lower() for h in hosts if h.strip()]
     if not hosts:
         return False, 'Mindestens ein Host erforderlich'
 
