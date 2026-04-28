@@ -8,6 +8,7 @@ from .admin_views import (
     audit_log_view, security_settings_view, manager_settings_view,
     manager_env_view, project_env_view, firewall_view,
     manager_action, manager_update, manager_security_scan, manager_http_scan,
+    manager_pip_outdated, manager_pip_upgrade_view,
 )
 from .dashboard import dashboard
 from .install import (
@@ -41,6 +42,7 @@ __all__ = [
     'audit_log_view', 'security_settings_view', 'manager_settings_view',
     'manager_env_view', 'project_env_view', 'firewall_view',
     'manager_action', 'manager_update', 'manager_security_scan', 'manager_http_scan',
+    'manager_pip_outdated', 'manager_pip_upgrade_view',
     # dashboard
     'dashboard',
     # install

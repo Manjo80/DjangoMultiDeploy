@@ -558,6 +558,10 @@ async function runManagerScan(btn) {
       html += '<div class="alert py-1 small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine bekannten Lücken.</div>';
     }
 
+    // pip outdated
+    html += '<h6 class="mt-2 mb-1 small"><i class="bi bi-arrow-up-circle me-1"></i>Veraltete Pakete</h6>';
+    html += '<div id="mgr-pip-outdated-area"><button class="btn btn-sm btn-outline-secondary py-0" data-action="loadManagerPipOutdated">Pakete prüfen</button></div>';
+
     // deploy check
     html += '<h6 class="mt-2 mb-1 small"><i class="bi bi-shield-check me-1"></i>Django Deploy Check</h6>';
     if (d.deploy_check.error) {
@@ -579,6 +583,46 @@ async function runManagerScan(btn) {
     out.innerHTML = `<div class="alert alert-danger py-1 small">Fehler: ${e}</div>`;
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function loadManagerPipOutdated() {
+  const area = document.getElementById('mgr-pip-outdated-area');
+  area.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Prüfe…';
+  try {
+    const r = await fetch('{% url "manager_pip_outdated" %}');
+    const d = await r.json();
+    if (!d.ok) { area.innerHTML = `<div class="alert alert-secondary py-1 small">${d.error}</div>`; return; }
+    if (!d.packages.length) {
+      area.innerHTML = '<div class="alert py-1 small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Alle Pakete aktuell.</div>';
+      return;
+    }
+    let html = `<div class="alert alert-warning py-1 small mb-2">${d.packages.length} veraltete Pakete</div>`;
+    html += '<div class="table-responsive"><table class="table table-sm table-dark small mb-0"><thead><tr><th>Paket</th><th>Aktuell</th><th>Neu</th><th></th></tr></thead><tbody>';
+    d.packages.forEach(p => {
+      html += `<tr><td>${p.name}</td><td class="text-muted">${p.current}</td><td class="text-success">${p.latest}</td>
+        <td><button class="btn btn-sm btn-outline-success py-0" data-action="upgradeManagerPkg" data-pkg="${p.name}" style="font-size:.75rem">Update</button></td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    area.innerHTML = html;
+  } catch(e) {
+    area.innerHTML = `<div class="alert alert-danger py-1 small">Fehler: ${e}</div>`;
+  }
+}
+
+async function upgradeManagerPkg(pkg, btn) {
+  if (!confirm(`Manager-Paket "${pkg}" aktualisieren?`)) return;
+  btn.disabled = true; btn.textContent = '…';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', csrf);
+  fd.append('package', pkg);
+  try {
+    const r = await fetch('{% url "manager_pip_upgrade" %}', {method: 'POST', body: fd});
+    const d = await r.json();
+    btn.textContent = d.ok ? '✓' : '✗';
+    if (!d.ok) alert('Fehler:\n' + d.output);
+  } catch(e) {
+    btn.disabled = false; btn.textContent = 'Update';
   }
 }
 
@@ -625,10 +669,12 @@ document.addEventListener('click', function (e) {
   const el = e.target.closest('[data-action]');
   if (!el) return;
   switch (el.dataset.action) {
-    case 'managerAction':    managerAction(el.dataset.cmd, el); break;
-    case 'runManagerUpdate': runManagerUpdate(el); break;
-    case 'runManagerScan':   runManagerScan(el); break;
-    case 'runManagerHttpScan': runManagerHttpScan(el.dataset.host); break;
+    case 'managerAction':         managerAction(el.dataset.cmd, el); break;
+    case 'runManagerUpdate':      runManagerUpdate(el); break;
+    case 'runManagerScan':        runManagerScan(el); break;
+    case 'runManagerHttpScan':    runManagerHttpScan(el.dataset.host); break;
+    case 'loadManagerPipOutdated': loadManagerPipOutdated(); break;
+    case 'upgradeManagerPkg':     upgradeManagerPkg(el.dataset.pkg, el); break;
     case 'quickAction':      quickAction(el.dataset.project, el.dataset.cmd, el); break;
     case 'runUpdate':        runUpdate(el.dataset.project, el); break;
     case 'runFavCmd':        runFavCmd(el.dataset.project, el.dataset.cmd, el.dataset.label, el); break;
