@@ -31,7 +31,7 @@ from ..utils import (
     run_management_command, get_allowed_hosts, get_nginx_server_names,
     update_allowed_hosts, get_ufw_status, get_nginx_stats, get_service_restarts,
     extract_project_zip, update_project_from_zip,
-    run_pip_audit, run_django_deploy_check,
+    run_pip_audit, run_django_deploy_check, run_bandit,
     run_migration_status, run_pip_outdated, run_pip_upgrade,
     run_http_security_scan, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     reset_project,
@@ -217,12 +217,14 @@ def project_stats(request, name):
 def project_security_scan(request, name):
     if not _check_project_access(request.user, name):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
-    """Run pip-audit + manage.py check --deploy (lazy-loaded from frontend)."""
+    """Run pip-audit + manage.py check --deploy + bandit (lazy-loaded from frontend)."""
     pip_results   = run_pip_audit(name)
     deploy_issues = run_django_deploy_check(name)
+    bandit_results = run_bandit(name)
     return JsonResponse({
         'pip_audit':    pip_results,
         'deploy_check': deploy_issues,
+        'bandit':       bandit_results,
     })
 
 
