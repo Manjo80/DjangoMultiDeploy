@@ -359,3 +359,41 @@ def run_pip_upgrade(name, package_name):
         return {'ok': False, 'output': 'Timeout nach 180 Sekunden'}
     except Exception as e:
         return {'ok': False, 'output': str(e)}
+
+
+def run_manager_pip_outdated():
+    """List outdated packages in the manager venv."""
+    pip_bin = os.path.join(settings.MANAGER_VENV, 'bin', 'pip')
+    if not os.path.exists(pip_bin):
+        return {'ok': False, 'packages': [], 'error': 'Manager-venv nicht gefunden'}
+    try:
+        result = subprocess.run(
+            [pip_bin, 'list', '--outdated', '--format=json'],
+            capture_output=True, text=True, timeout=60,
+        )
+        data = json.loads(result.stdout.strip() or '[]')
+        packages = [{'name': p['name'], 'current': p['version'], 'latest': p['latest_version']} for p in data]
+        return {'ok': True, 'packages': packages, 'error': ''}
+    except Exception as e:
+        return {'ok': False, 'packages': [], 'error': str(e)}
+
+
+def run_manager_pip_upgrade(package_name):
+    """Upgrade a single package in the manager venv."""
+    import re as _re
+    if not package_name or not _re.match(r'^[A-Za-z0-9_.\-]+$', package_name):
+        return {'ok': False, 'output': 'Ungültiger Paketname'}
+    pip_bin = os.path.join(settings.MANAGER_VENV, 'bin', 'pip')
+    if not os.path.exists(pip_bin):
+        return {'ok': False, 'output': 'Manager-venv nicht gefunden'}
+    try:
+        result = subprocess.run(
+            [pip_bin, 'install', '--upgrade', package_name],
+            capture_output=True, text=True, timeout=180,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return {'ok': result.returncode == 0, 'output': output or '(keine Ausgabe)'}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'output': 'Timeout nach 180 Sekunden'}
+    except Exception as e:
+        return {'ok': False, 'output': str(e)}

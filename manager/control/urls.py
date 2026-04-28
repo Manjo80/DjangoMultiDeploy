@@ -88,6 +88,8 @@ urlpatterns = [
     path('manager/update/', views.manager_update, name='manager_update'),
     path('manager/security-scan/', views.manager_security_scan, name='manager_security_scan'),
     path('manager/http-scan/', views.manager_http_scan, name='manager_http_scan'),
+    path('manager/pip-outdated/', views.manager_pip_outdated, name='manager_pip_outdated'),
+    path('manager/pip-upgrade/', views.manager_pip_upgrade_view, name='manager_pip_upgrade'),
 
     # HTTP/TLS security scan per project
     path('project/<str:name>/http-scan/', views.project_http_scan, name='project_http_scan'),

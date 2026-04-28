@@ -20,6 +20,7 @@ from ..utils import (
     get_ufw_status, get_ufw_port_rules, ufw_toggle_port,
     sync_env_to_conf,
     run_manager_pip_audit, run_manager_deploy_check,
+    run_manager_pip_outdated, run_manager_pip_upgrade,
     run_http_security_scan,
 )
 from ._helpers import admin_required, operator_required, _check_project_access
@@ -480,6 +481,25 @@ def manager_security_scan(request):
         'pip_audit':    pip_results,
         'deploy_check': deploy_issues,
     })
+
+
+@login_required
+def manager_pip_outdated(request):
+    """List outdated packages in the manager venv."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    result = run_manager_pip_outdated()
+    return JsonResponse(result)
+
+
+@require_POST
+@admin_required
+def manager_pip_upgrade_view(request):
+    """Upgrade a single package in the manager venv."""
+    package = request.POST.get('package', '').strip()
+    result = run_manager_pip_upgrade(package)
+    AuditLog.log(request, f'Manager pip upgrade: {package}', success=result['ok'])
+    return JsonResponse(result)
 
 
 @login_required
