@@ -810,18 +810,49 @@ NUCLEI_SAFE_TEMPLATES = [
 
 
 def _install_nuclei():
-    """Download and install nuclei binary from GitHub releases."""
+    """Download and install nuclei binary — tries curl, wget, then urllib."""
     arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm'}
     go_arch = arch_map.get(_platform.machine(), 'amd64')
     url = f'https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_{go_arch}.zip'
     try:
         with _tempfile.TemporaryDirectory() as tmp:
             zip_path = os.path.join(tmp, 'nuclei.zip')
-            import urllib.request as _req
-            _req.urlretrieve(url, zip_path)
+
+            # Try curl first (handles SSL + redirects reliably)
+            if _shutil.which('curl'):
+                r = _subprocess.run(
+                    ['curl', '-fsSL', '-o', zip_path, url],
+                    timeout=120, capture_output=True,
+                )
+            elif _shutil.which('wget'):
+                r = _subprocess.run(
+                    ['wget', '-q', '-O', zip_path, url],
+                    timeout=120, capture_output=True,
+                )
+            else:
+                import urllib.request as _req
+                import ssl as _ssl
+                ctx = _ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = _ssl.CERT_NONE
+                with _req.urlopen(url, context=ctx, timeout=60) as resp:
+                    with open(zip_path, 'wb') as f:
+                        f.write(resp.read())
+                r = type('R', (), {'returncode': 0})()
+
+            if r.returncode != 0:
+                logger.error('nuclei download failed (exit %d)', r.returncode)
+                return False
+
             with _zipfile.ZipFile(zip_path) as zf:
-                zf.extract('nuclei', tmp)
-            _shutil.copy2(os.path.join(tmp, 'nuclei'), NUCLEI_BIN)
+                # Find the nuclei binary inside the zip (may vary by version)
+                binary = next((n for n in zf.namelist()
+                               if n.lower().startswith('nuclei') and '/' not in n), None)
+                if not binary:
+                    logger.error('nuclei binary not found in zip: %s', zf.namelist())
+                    return False
+                zf.extract(binary, tmp)
+            _shutil.copy2(os.path.join(tmp, binary), NUCLEI_BIN)
             os.chmod(NUCLEI_BIN, 0o755)
         return True
     except Exception as e:
@@ -890,3 +921,234 @@ def run_nuclei_scan(target_url, templates=None):
         return {'ok': False, 'findings': [], 'installed': True, 'error': 'Timeout (180s)'}
     except Exception as e:
         return {'ok': False, 'findings': [], 'installed': True, 'error': str(e)}
+
+
+# ── OWASP ZAP Integration ─────────────────────────────────────────────────────
+
+import time as _time
+import signal as _signal
+
+ZAP_DIR     = '/opt/zaproxy'
+ZAP_SH      = '/opt/zaproxy/zap.sh'
+ZAP_PORT    = 8090
+ZAP_API_KEY = 'djmanager-zap-key'
+ZAP_PID_FILE = '/tmp/djmanager-zap.pid'
+
+
+def _install_zap():
+    """Download and install ZAP standalone (no Docker required)."""
+    import urllib.request as _ureq
+    import tarfile as _tar
+
+    # Get latest ZAP release version from GitHub API
+    try:
+        with _ureq.urlopen(
+            'https://api.github.com/repos/zaproxy/zaproxy/releases/latest',
+            timeout=15
+        ) as resp:
+            import json as _j
+            tag = _j.loads(resp.read())['tag_name']  # e.g. "v2.15.0"
+    except Exception:
+        tag = 'v2.15.0'  # fallback
+
+    version = tag.lstrip('v')
+    tar_name = f'ZAP_{version}_Linux.tar.gz'
+    url = f'https://github.com/zaproxy/zaproxy/releases/download/{tag}/{tar_name}'
+
+    try:
+        with _tempfile.TemporaryDirectory() as tmp:
+            tar_path = os.path.join(tmp, tar_name)
+            if _shutil.which('curl'):
+                r = _subprocess.run(['curl', '-fsSL', '-o', tar_path, url],
+                                    timeout=300, capture_output=True)
+                if r.returncode != 0:
+                    return False, f'curl download failed: {r.stderr.decode()[:200]}'
+            elif _shutil.which('wget'):
+                r = _subprocess.run(['wget', '-q', '-O', tar_path, url],
+                                    timeout=300, capture_output=True)
+                if r.returncode != 0:
+                    return False, 'wget download failed'
+            else:
+                return False, 'curl oder wget nicht gefunden'
+
+            with _tar.open(tar_path, 'r:gz') as tf:
+                tf.extractall(tmp)
+
+            # Find extracted directory
+            extracted = [d for d in os.listdir(tmp)
+                         if os.path.isdir(os.path.join(tmp, d)) and d.startswith('ZAP')]
+            if not extracted:
+                return False, 'ZAP-Verzeichnis nicht gefunden nach Extraktion'
+
+            src = os.path.join(tmp, extracted[0])
+            if os.path.exists(ZAP_DIR):
+                _shutil.rmtree(ZAP_DIR)
+            _shutil.copytree(src, ZAP_DIR)
+            os.chmod(ZAP_SH, 0o755)
+        return True, f'ZAP {version} installiert'
+    except Exception as e:
+        return False, str(e)
+
+
+def _ensure_java():
+    """Check if Java 11+ is available, install if not."""
+    if _shutil.which('java'):
+        return True
+    r = _subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'default-jre-headless'],
+                        capture_output=True, timeout=120)
+    return r.returncode == 0
+
+
+def _zap_start():
+    """Start ZAP daemon. Returns (ok, error_msg)."""
+    if not _ensure_java():
+        return False, 'Java konnte nicht installiert werden'
+
+    if not os.path.exists(ZAP_SH):
+        ok, msg = _install_zap()
+        if not ok:
+            return False, f'ZAP Installation fehlgeschlagen: {msg}'
+
+    env = os.environ.copy()
+    env['ZAP_PORT'] = str(ZAP_PORT)
+
+    proc = _subprocess.Popen(
+        [ZAP_SH, '-daemon', '-host', '127.0.0.1', '-port', str(ZAP_PORT),
+         '-config', f'api.key={ZAP_API_KEY}',
+         '-config', 'api.addrs.addr.name=127.0.0.1',
+         '-config', 'api.addrs.addr.regex=false',
+         '-config', 'connection.timeoutInSecs=30'],
+        stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+        env=env, start_new_session=True,
+    )
+    with open(ZAP_PID_FILE, 'w') as f:
+        f.write(str(proc.pid))
+
+    # Wait for ZAP API to respond (up to 60s)
+    for _ in range(60):
+        _time.sleep(1)
+        try:
+            import urllib.request as _ureq
+            _ureq.urlopen(
+                f'http://127.0.0.1:{ZAP_PORT}/JSON/core/view/version/?apikey={ZAP_API_KEY}',
+                timeout=2
+            )
+            return True, ''
+        except Exception:
+            pass
+    return False, 'ZAP hat nicht geantwortet nach 60 Sekunden'
+
+
+def _zap_stop():
+    """Stop ZAP daemon."""
+    try:
+        import urllib.request as _ureq
+        _ureq.urlopen(
+            f'http://127.0.0.1:{ZAP_PORT}/JSON/core/action/shutdown/?apikey={ZAP_API_KEY}',
+            timeout=5
+        )
+    except Exception:
+        pass
+    if os.path.exists(ZAP_PID_FILE):
+        try:
+            pid = int(open(ZAP_PID_FILE).read().strip())
+            os.kill(pid, _signal.SIGTERM)
+        except Exception:
+            pass
+        try:
+            os.remove(ZAP_PID_FILE)
+        except Exception:
+            pass
+
+
+def _zap_api(path, params=None):
+    """Call ZAP JSON API. Returns parsed JSON or raises."""
+    import urllib.parse as _up
+    import urllib.request as _ureq
+    qs = _up.urlencode({**(params or {}), 'apikey': ZAP_API_KEY})
+    url = f'http://127.0.0.1:{ZAP_PORT}/JSON/{path}/?{qs}'
+    with _ureq.urlopen(url, timeout=30) as r:
+        return _json.loads(r.read())
+
+
+def run_zap_scan(target_url, scan_type='baseline'):
+    """
+    Run OWASP ZAP scan with auto-spider against target_url.
+    scan_type: 'baseline' (passive only) | 'full' (active, only for test systems)
+    Returns {'ok': bool, 'alerts': [...], 'scan_type': str, 'error': str}
+    """
+    started = False
+    try:
+        # Check if ZAP already running
+        try:
+            _zap_api('core/view/version')
+            already_running = True
+        except Exception:
+            already_running = False
+
+        if not already_running:
+            ok, err = _zap_start()
+            if not ok:
+                return {'ok': False, 'alerts': [], 'scan_type': scan_type, 'error': err}
+            started = True
+
+        # Open target URL to seed the session
+        _zap_api('core/action/accessUrl', {'url': target_url, 'followRedirects': 'true'})
+
+        # Spider (auto-crawl)
+        spider = _zap_api('spider/action/scan', {'url': target_url, 'recurse': 'true'})
+        spider_id = spider.get('scan', '0')
+
+        # Wait for spider to finish (max 60s)
+        for _ in range(60):
+            _time.sleep(1)
+            prog = _zap_api('spider/view/status', {'scanId': spider_id})
+            if int(prog.get('status', 0)) >= 100:
+                break
+
+        # Passive scan runs automatically — wait for queue to clear (max 60s)
+        for _ in range(60):
+            _time.sleep(1)
+            recs = _zap_api('pscan/view/recordsToScan')
+            if int(recs.get('recordsToScan', 1)) == 0:
+                break
+
+        # Active scan (only for 'full' type — use carefully!)
+        if scan_type == 'full':
+            active = _zap_api('ascan/action/scan', {'url': target_url, 'recurse': 'true'})
+            ascan_id = active.get('scan', '0')
+            for _ in range(300):  # max 5 min
+                _time.sleep(1)
+                prog = _zap_api('ascan/view/status', {'scanId': ascan_id})
+                if int(prog.get('status', 0)) >= 100:
+                    break
+
+        # Get alerts
+        raw = _zap_api('core/view/alerts', {'baseurl': target_url})
+        alerts_raw = raw.get('alerts', [])
+
+        risk_order = {'High': 0, 'Medium': 1, 'Low': 2, 'Informational': 3}
+        alerts = []
+        seen = set()
+        for a in alerts_raw:
+            key = (a.get('alertRef', ''), a.get('url', ''))
+            if key in seen:
+                continue
+            seen.add(key)
+            alerts.append({
+                'risk':        a.get('risk', ''),
+                'name':        a.get('alert', ''),
+                'url':         a.get('url', ''),
+                'description': (a.get('description') or '')[:300],
+                'solution':    (a.get('solution') or '')[:300],
+                'reference':   (a.get('reference') or '')[:200],
+            })
+        alerts.sort(key=lambda x: risk_order.get(x['risk'], 9))
+
+        return {'ok': True, 'alerts': alerts, 'scan_type': scan_type, 'error': ''}
+
+    except Exception as e:
+        return {'ok': False, 'alerts': [], 'scan_type': scan_type, 'error': str(e)}
+    finally:
+        if started:
+            _zap_stop()
