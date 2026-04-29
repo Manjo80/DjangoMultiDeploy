@@ -935,6 +935,59 @@ def _install_nuclei():
         return False
 
 
+def _nuclei_installed_version():
+    """Return installed nuclei version string or '' if not installed."""
+    if not os.path.exists(NUCLEI_BIN):
+        return ''
+    try:
+        r = _subprocess.run([NUCLEI_BIN, '-version'], capture_output=True, text=True, timeout=10)
+        for line in (r.stdout + r.stderr).splitlines():
+            if 'nuclei' in line.lower() and ('version' in line.lower() or line.strip().startswith('v')):
+                # Output is like: "Nuclei Engine Version: v3.8.0" or just "v3.8.0"
+                parts = line.split()
+                for p in parts:
+                    if p.startswith('v') and p[1:2].isdigit():
+                        return p.lstrip('v')
+    except Exception:
+        pass
+    return ''
+
+
+def _nuclei_latest_version():
+    """Query GitHub API for latest nuclei release tag. Returns version string or ''."""
+    try:
+        import urllib.request as _ureq
+        with _ureq.urlopen(
+            'https://api.github.com/repos/projectdiscovery/nuclei/releases/latest',
+            timeout=10
+        ) as resp:
+            tag = _json.loads(resp.read()).get('tag_name', '')
+            return tag.lstrip('v')
+    except Exception:
+        return ''
+
+
+def nuclei_version_info():
+    """Return dict with installed, latest, update_available."""
+    installed = _nuclei_installed_version()
+    latest    = _nuclei_latest_version()
+    needs_update = bool(installed and latest and installed != latest)
+    return {
+        'installed':      installed or None,
+        'latest':         latest or None,
+        'update_available': needs_update,
+    }
+
+
+def update_nuclei():
+    """Download and install the latest nuclei release. Returns {'ok': bool, 'version': str, 'error': str}."""
+    ok = _install_nuclei()
+    if ok:
+        ver = _nuclei_installed_version()
+        return {'ok': True, 'version': ver, 'error': ''}
+    return {'ok': False, 'version': '', 'error': 'Installation fehlgeschlagen — Proxmox-Host-Methode verwenden'}
+
+
 def _ensure_nuclei_templates():
     """Update nuclei templates (idempotent)."""
     try:

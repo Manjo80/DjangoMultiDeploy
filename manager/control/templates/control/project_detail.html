@@ -498,13 +498,22 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-radioactive me-1"></i>Nuclei — Vulnerability Scanner</span>
-        <span class="badge bg-secondary">passiv / produktionssicher</span>
+        <div class="d-flex align-items-center gap-2">
+          <span id="nuclei-version-badge" class="text-muted small"></span>
+          <span class="badge bg-secondary">passiv / produktionssicher</span>
+        </div>
       </div>
       <div class="card-body">
         <p class="small text-muted mb-2">
           Scannt auf bekannte Fehlkonfigurationen, exponierte Dateien und Technologien.
           Nur passiv — keine Formulare, kein Fuzzing.
         </p>
+        <div id="nuclei-update-bar" class="d-none alert alert-warning py-1 px-2 small mb-2 d-flex justify-content-between align-items-center">
+          <span id="nuclei-update-msg"></span>
+          <button class="btn btn-sm btn-warning ms-2" data-action="updateNuclei">
+            <i class="bi bi-arrow-up-circle me-1"></i>Jetzt updaten
+          </button>
+        </div>
         <div class="d-flex flex-wrap gap-2 mb-2">
           {% for h in extern_scan_hosts %}
           <button class="btn btn-sm btn-outline-warning"
@@ -1720,6 +1729,49 @@ function renderHttpScanResult(d) {
 const SEV_COLOR = {critical:'danger', high:'danger', medium:'warning', low:'info', info:'secondary', unknown:'secondary'};
 const SEV_LABEL = {critical:'KRITISCH', high:'HOCH', medium:'MITTEL', low:'NIEDRIG', info:'INFO', unknown:'?'};
 
+// Check nuclei version on page load
+(async function checkNucleiVersion() {
+  try {
+    const r = await fetch('{% url "nuclei_version" name %}');
+    const d = await r.json();
+    const badge = document.getElementById('nuclei-version-badge');
+    const bar   = document.getElementById('nuclei-update-bar');
+    const msg   = document.getElementById('nuclei-update-msg');
+    if (d.installed) {
+      badge.textContent = `v${d.installed}`;
+      if (d.update_available && d.latest) {
+        bar.classList.remove('d-none');
+        msg.textContent = `Update verfügbar: v${d.installed} → v${d.latest}`;
+      }
+    } else {
+      badge.innerHTML = '<span class="badge bg-danger">nicht installiert</span>';
+    }
+  } catch(e) {}
+})();
+
+async function updateNuclei() {
+  const bar = document.getElementById('nuclei-update-bar');
+  const msg = document.getElementById('nuclei-update-msg');
+  const btn = bar?.querySelector('[data-action="updateNuclei"]');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Installiere…'; }
+  try {
+    const fd = new FormData();
+    fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+    const r = await fetch('{% url "nuclei_update" name %}', {method: 'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('nuclei-version-badge').textContent = `v${d.version}`;
+      bar.classList.add('d-none');
+    } else {
+      msg.textContent = d.error;
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-up-circle me-1"></i>Retry'; }
+    }
+  } catch(e) {
+    msg.textContent = `Fehler: ${e.message}`;
+    if (btn) { btn.disabled = false; }
+  }
+}
+
 async function runNucleiScan(host) {
   const loading = document.getElementById('nuclei-loading');
   const output  = document.getElementById('nuclei-output');
@@ -2007,6 +2059,7 @@ document.addEventListener('click', function (e) {
     case 'runSecurityScan':       runSecurityScan(); break;
     case 'runHttpScan':           runHttpScan(el.dataset.host); break;
     case 'runNucleiScan':         runNucleiScan(el.dataset.host); break;
+    case 'updateNuclei':          updateNuclei(); break;
     case 'runZapScan':            runZapScan(el.dataset.host, el.dataset.type); break;
     case 'loadMigrations':        loadMigrations(); break;
     case 'loadOutdated':          loadOutdated(); break;
