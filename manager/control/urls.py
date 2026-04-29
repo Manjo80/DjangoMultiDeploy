@@ -94,7 +94,11 @@ urlpatterns = [
     # HTTP/TLS security scan per project
     path('project/<str:name>/http-scan/', views.project_http_scan, name='project_http_scan'),
     path('project/<str:name>/nuclei-scan/', views.project_nuclei_scan, name='project_nuclei_scan'),
+    path('project/<str:name>/nuclei-version/', views.nuclei_version_view, name='nuclei_version'),
+    path('project/<str:name>/nuclei-update/', views.nuclei_update_view, name='nuclei_update'),
     path('project/<str:name>/zap-scan/', views.project_zap_scan, name='project_zap_scan'),
+    path('project/<str:name>/zap-version/', views.zap_version_view, name='zap_version'),
+    path('project/<str:name>/zap-update/', views.zap_update_view, name='zap_update'),
 
     # Standalone Security Scanner (custom hostname + port scan)
     path('security-scanner/', views.security_scanner_view, name='security_scanner'),

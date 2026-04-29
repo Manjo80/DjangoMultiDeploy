@@ -821,7 +821,7 @@ def _install_nuclei():
         except Exception:
             return True  # already usable at sys_bin, caller checks NUCLEI_BIN path
 
-    # 2. Try apt (Debian/Ubuntu repos sometimes carry nuclei)
+    # 2. Try apt (nuclei not in standard repos, but worth a try)
     if _shutil.which('apt-get'):
         r = _subprocess.run(
             ['apt-get', 'install', '-y', '--no-install-recommends', 'nuclei'],
@@ -835,7 +835,28 @@ def _install_nuclei():
                 pass
             return True
 
-    # 3. Try snap
+    # 3. Try via Go (apt install golang-go + go install)
+    go_bin = _shutil.which('go')
+    if not go_bin and _shutil.which('apt-get'):
+        _subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'golang-go'],
+                        capture_output=True, timeout=120)
+        go_bin = _shutil.which('go')
+    if go_bin:
+        go_env = os.environ.copy()
+        go_env.setdefault('GOPATH', '/root/go')
+        go_env['PATH'] = go_env['PATH'] + ':/root/go/bin:/usr/local/go/bin'
+        r = _subprocess.run(
+            [go_bin, 'install', 'github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'],
+            capture_output=True, timeout=300, env=go_env,
+        )
+        if r.returncode == 0:
+            for candidate in ('/root/go/bin/nuclei', '/usr/local/go/bin/nuclei'):
+                if os.path.exists(candidate):
+                    _shutil.copy2(candidate, NUCLEI_BIN)
+                    os.chmod(NUCLEI_BIN, 0o755)
+                    return True
+
+    # 4. Try snap
     if _shutil.which('snap'):
         r = _subprocess.run(
             ['snap', 'install', 'nuclei', '--classic'],
@@ -849,10 +870,25 @@ def _install_nuclei():
                 pass
             return True
 
-    # 4. GitHub release download (needs internet)
-    arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm'}
+    # 5. GitHub release download (needs internet) — v3.x uses nuclei_VERSION_linux_ARCH.zip
+    arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm', 'i386': '386', 'i686': '386'}
     go_arch = arch_map.get(_platform.machine(), 'amd64')
-    url = f'https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_{go_arch}.zip'
+
+    # Resolve latest version tag via GitHub API (so URL includes version number)
+    version = 'v3.8.0'  # safe fallback
+    try:
+        import urllib.request as _ureq2
+        with _ureq2.urlopen(
+            'https://api.github.com/repos/projectdiscovery/nuclei/releases/latest',
+            timeout=10
+        ) as _resp:
+            version = _json.loads(_resp.read()).get('tag_name', version)
+    except Exception:
+        pass
+    ver_num = version.lstrip('v')  # "3.8.0"
+
+    # New v3 filename format: nuclei_3.8.0_linux_amd64.zip
+    url = f'https://github.com/projectdiscovery/nuclei/releases/download/{version}/nuclei_{ver_num}_linux_{go_arch}.zip'
     try:
         with _tempfile.TemporaryDirectory() as tmp:
             zip_path = os.path.join(tmp, 'nuclei.zip')
@@ -879,12 +915,14 @@ def _install_nuclei():
                 r = type('R', (), {'returncode': 0})()
 
             if r.returncode != 0:
-                logger.error('nuclei download failed (exit %d)', r.returncode)
+                logger.error('nuclei download failed (exit %d) url=%s', r.returncode, url)
                 return False
 
             with _zipfile.ZipFile(zip_path) as zf:
+                # Binary is at root of zip (no subdirectory in v3)
                 binary = next((n for n in zf.namelist()
-                               if n.lower().startswith('nuclei') and '/' not in n), None)
+                               if n.lower() == 'nuclei' or
+                               (n.lower().startswith('nuclei') and '/' not in n and not n.endswith('.txt'))), None)
                 if not binary:
                     logger.error('nuclei binary not found in zip: %s', zf.namelist())
                     return False
@@ -895,6 +933,59 @@ def _install_nuclei():
     except Exception as e:
         logger.error('nuclei install failed: %s', e)
         return False
+
+
+def _nuclei_installed_version():
+    """Return installed nuclei version string or '' if not installed."""
+    if not os.path.exists(NUCLEI_BIN):
+        return ''
+    try:
+        r = _subprocess.run([NUCLEI_BIN, '-version'], capture_output=True, text=True, timeout=10)
+        for line in (r.stdout + r.stderr).splitlines():
+            if 'nuclei' in line.lower() and ('version' in line.lower() or line.strip().startswith('v')):
+                # Output is like: "Nuclei Engine Version: v3.8.0" or just "v3.8.0"
+                parts = line.split()
+                for p in parts:
+                    if p.startswith('v') and p[1:2].isdigit():
+                        return p.lstrip('v')
+    except Exception:
+        pass
+    return ''
+
+
+def _nuclei_latest_version():
+    """Query GitHub API for latest nuclei release tag. Returns version string or ''."""
+    try:
+        import urllib.request as _ureq
+        with _ureq.urlopen(
+            'https://api.github.com/repos/projectdiscovery/nuclei/releases/latest',
+            timeout=10
+        ) as resp:
+            tag = _json.loads(resp.read()).get('tag_name', '')
+            return tag.lstrip('v')
+    except Exception:
+        return ''
+
+
+def nuclei_version_info():
+    """Return dict with installed, latest, update_available."""
+    installed = _nuclei_installed_version()
+    latest    = _nuclei_latest_version()
+    needs_update = bool(installed and latest and installed != latest)
+    return {
+        'installed':      installed or None,
+        'latest':         latest or None,
+        'update_available': needs_update,
+    }
+
+
+def update_nuclei():
+    """Download and install the latest nuclei release. Returns {'ok': bool, 'version': str, 'error': str}."""
+    ok = _install_nuclei()
+    if ok:
+        ver = _nuclei_installed_version()
+        return {'ok': True, 'version': ver, 'error': ''}
+    return {'ok': False, 'version': '', 'error': 'Installation fehlgeschlagen — Proxmox-Host-Methode verwenden'}
 
 
 def _ensure_nuclei_templates():
@@ -920,8 +1011,11 @@ def run_nuclei_scan(target_url, templates=None):
             return {'ok': False, 'findings': [], 'installed': False,
                     'error': (
                         'nuclei konnte nicht automatisch installiert werden. '
-                        'Manuell installieren: apt install nuclei '
-                        'oder: go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'
+                        'Falls der Server kein GitHub-Zugang hat: auf dem Proxmox-Host ausführen: '
+                        'curl -fsSL https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip '
+                        '-o /tmp/n.zip && unzip -o /tmp/n.zip nuclei -d /tmp/nb && '
+                        'pct push <LXC-ID> /tmp/nb/nuclei /usr/local/bin/nuclei && '
+                        'pct exec <LXC-ID> -- chmod +x /usr/local/bin/nuclei'
                     )}
 
     _ensure_nuclei_templates()
@@ -1026,9 +1120,68 @@ def _install_zap():
                 _shutil.rmtree(ZAP_DIR)
             _shutil.copytree(src, ZAP_DIR)
             os.chmod(ZAP_SH, 0o755)
+            # Store installed version for quick lookup
+            with open(os.path.join(ZAP_DIR, '.version'), 'w') as _vf:
+                _vf.write(version)
         return True, f'ZAP {version} installiert'
     except Exception as e:
         return False, str(e)
+
+
+def _zap_installed_version():
+    """Return installed ZAP version string or '' if not installed."""
+    ver_file = os.path.join(ZAP_DIR, '.version')
+    if os.path.exists(ver_file):
+        try:
+            return open(ver_file).read().strip()
+        except Exception:
+            pass
+    if not os.path.exists(ZAP_DIR):
+        return ''
+    # Fallback: parse jar filename e.g. zap-2.15.0.jar
+    try:
+        for f in os.listdir(ZAP_DIR):
+            if f.startswith('zap-') and f.endswith('.jar'):
+                return f[4:-4]  # strip "zap-" prefix and ".jar" suffix
+    except Exception:
+        pass
+    return ''
+
+
+def _zap_latest_version():
+    """Query GitHub API for latest ZAP release tag. Returns version string or ''."""
+    try:
+        import urllib.request as _ureq
+        with _ureq.urlopen(
+            'https://api.github.com/repos/zaproxy/zaproxy/releases/latest',
+            timeout=10
+        ) as resp:
+            tag = _json.loads(resp.read()).get('tag_name', '')
+            return tag.lstrip('v')
+    except Exception:
+        return ''
+
+
+def zap_version_info():
+    """Return dict with installed, latest, update_available."""
+    installed = _zap_installed_version()
+    latest    = _zap_latest_version()
+    needs_update = bool(installed and latest and installed != latest)
+    return {
+        'installed':        installed or None,
+        'latest':           latest or None,
+        'update_available': needs_update,
+        'is_installed':     os.path.exists(ZAP_SH),
+    }
+
+
+def update_zap():
+    """Download and install the latest ZAP release. Returns {'ok': bool, 'version': str, 'error': str}."""
+    ok, msg = _install_zap()
+    if ok:
+        ver = _zap_installed_version()
+        return {'ok': True, 'version': ver, 'error': ''}
+    return {'ok': False, 'version': '', 'error': msg}
 
 
 def _ensure_java():
