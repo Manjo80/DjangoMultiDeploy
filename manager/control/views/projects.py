@@ -316,12 +316,14 @@ def project_zap_scan(request, name):
     """
     Run OWASP ZAP scan with auto-spider.
     GET params: target=<hostname>, type=baseline|full
+    POST body (JSON, optional): auth credentials for authenticated scan
     """
     if not _check_project_access(request.user, name):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
 
-    hostname  = request.GET.get('target', '').strip().lower()
-    scan_type = request.GET.get('type', 'baseline')
+    params    = request.GET if request.method == 'GET' else request.POST
+    hostname  = params.get('target', request.GET.get('target', '')).strip().lower()
+    scan_type = params.get('type', request.GET.get('type', 'baseline'))
     if scan_type not in ('baseline', 'full'):
         scan_type = 'baseline'
     if not hostname:
@@ -334,8 +336,26 @@ def project_zap_scan(request, name):
         url_host = hostname
 
     target_url = f'https://{url_host}'
-    result = run_zap_scan(target_url, scan_type=scan_type)
-    AuditLog.log(request, f'ZAP {scan_type} scan: {hostname}', project=name, success=result['ok'])
+
+    # Optional auth dict (POST fields, never logged)
+    auth = None
+    if request.method == 'POST':
+        login_url = request.POST.get('login_url', '').strip()
+        username  = request.POST.get('auth_username', '').strip()
+        password  = request.POST.get('auth_password', '').strip()
+        if login_url and username and password:
+            auth = {
+                'login_url':          login_url,
+                'username_field':     request.POST.get('username_field', 'username').strip(),
+                'password_field':     request.POST.get('password_field', 'password').strip(),
+                'username':           username,
+                'password':           password,
+                'logged_in_indicator': request.POST.get('logged_in_indicator', '').strip(),
+            }
+
+    result = run_zap_scan(target_url, scan_type=scan_type, auth=auth)
+    suffix = ' (authentifiziert)' if auth else ''
+    AuditLog.log(request, f'ZAP {scan_type} scan{suffix}: {hostname}', project=name, success=result['ok'])
     return JsonResponse(result)
 
 
