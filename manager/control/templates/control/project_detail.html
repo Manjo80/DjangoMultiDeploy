@@ -524,6 +524,44 @@
     </div>
   </div>
 
+  <!-- OWASP ZAP Scanner (lazy-loaded) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-shaded me-1"></i>OWASP ZAP — Web Application Scanner</span>
+        <span class="badge bg-warning text-dark">Auto-Spider + Passiv-Scan</span>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">
+          Startet ZAP lokal on-demand, führt einen Auto-Spider durch und analysiert alle gefundenen Seiten passiv.
+          <strong>Baseline</strong>: nur passive Regeln — produktionssicher.
+          <strong>Full</strong>: aktiver Scan — <span class="text-warning">nur für Testsysteme!</span>
+          ZAP wird beim ersten Aufruf automatisch installiert (Java + ZAP-JAR, ~200 MB).
+        </p>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          {% for h in extern_scan_hosts %}
+          <button class="btn btn-sm btn-outline-info"
+                  data-action="runZapScan" data-host="{{ h }}" data-type="baseline">
+            <i class="bi bi-shield-check me-1"></i>{{ h }} (Baseline)
+          </button>
+          <button class="btn btn-sm btn-outline-danger"
+                  data-action="runZapScan" data-host="{{ h }}" data-type="full"
+                  title="Aktiver Scan — nur für Testsysteme!">
+            <i class="bi bi-shield-exclamation me-1"></i>{{ h }} (Full)
+          </button>
+          {% empty %}
+          <span class="text-muted small">Kein externer Hostname konfiguriert</span>
+          {% endfor %}
+        </div>
+        <div id="zap-loading" class="d-none text-muted small mb-2">
+          <span class="spinner-border spinner-border-sm me-1"></span>
+          ZAP läuft… Spider + Passiv-Scan kann 2–5 Minuten dauern. ZAP wird ggf. automatisch installiert.
+        </div>
+        <div id="zap-output"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Migration-Status (lazy-loaded) -->
   <div class="col-12">
     <div class="card">
@@ -1654,6 +1692,57 @@ async function runNucleiScan(host) {
 }
 </script>
 
+<!-- ZAP Scan JS -->
+<script nonce="{{ csp_nonce }}">
+const ZAP_RISK_COLOR = {High:'danger', Medium:'warning', Low:'info', Informational:'secondary'};
+const ZAP_RISK_LABEL = {High:'HOCH', Medium:'MITTEL', Low:'NIEDRIG', Informational:'INFO'};
+
+async function runZapScan(host, scanType) {
+  const loading = document.getElementById('zap-loading');
+  const output  = document.getElementById('zap-output');
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+  try {
+    const url = `{% url "project_zap_scan" name %}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`;
+    const r = await fetch(url);
+    const d = await r.json();
+    loading.classList.add('d-none');
+    if (!d.ok) {
+      output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      return;
+    }
+    const alerts = d.alerts || [];
+    if (alerts.length === 0) {
+      output.innerHTML = '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Findings — sieht gut aus.</div>';
+      return;
+    }
+    const highCount = alerts.filter(a => a.risk === 'High' || a.risk === 'Medium').length;
+    const alertCls  = alerts.some(a => a.risk === 'High') ? 'alert-danger' : (highCount > 0 ? 'alert-warning' : 'alert-info');
+    const typeLabel = scanType === 'full' ? 'Full (aktiv)' : 'Baseline (passiv)';
+    let html = `<div class="alert ${alertCls} small mb-2"><i class="bi bi-shield-shaded me-1"></i>ZAP ${typeLabel}: ${alerts.length} Alert(s) — davon ${highCount} hoch/mittel</div>`;
+    html += '<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
+    html += '<thead><tr><th>Risiko</th><th>Name</th><th>URL</th><th>Lösung</th></tr></thead><tbody>';
+    alerts.forEach(a => {
+      const c = ZAP_RISK_COLOR[a.risk] || 'secondary';
+      const l = ZAP_RISK_LABEL[a.risk] || a.risk;
+      const desc = a.description ? `<span class="text-muted d-block" style="font-size:.72rem">${a.description.substring(0, 200)}${a.description.length > 200 ? '…' : ''}</span>` : '';
+      const sol  = a.solution ? a.solution.substring(0, 150) + (a.solution.length > 150 ? '…' : '') : '–';
+      html += `<tr>
+        <td><span class="badge bg-${c}">${l}</span></td>
+        <td>${a.name}${desc}</td>
+        <td class="font-monospace text-muted" style="font-size:.72rem;word-break:break-all">${a.url || '–'}</td>
+        <td class="text-muted" style="font-size:.72rem">${sol}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+    output.innerHTML = html;
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+  }
+}
+</script>
+
 <!-- Security Scan JS -->
 <script nonce="{{ csp_nonce }}">
 // Django security warning codes: source category + hint
@@ -1820,6 +1909,7 @@ document.addEventListener('click', function (e) {
     case 'runSecurityScan':       runSecurityScan(); break;
     case 'runHttpScan':           runHttpScan(el.dataset.host); break;
     case 'runNucleiScan':         runNucleiScan(el.dataset.host); break;
+    case 'runZapScan':            runZapScan(el.dataset.host, el.dataset.type); break;
     case 'loadMigrations':        loadMigrations(); break;
     case 'loadOutdated':          loadOutdated(); break;
     case 'loadStats':             loadStats(); break;
