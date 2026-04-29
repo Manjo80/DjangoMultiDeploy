@@ -538,6 +538,55 @@
           <strong>Full</strong>: aktiver Scan — <span class="text-warning">nur für Testsysteme!</span>
           ZAP wird beim ersten Aufruf automatisch installiert (Java + ZAP-JAR, ~200 MB).
         </p>
+
+        <!-- Optional: Authenticated scan credentials -->
+        <div class="mb-2">
+          <button class="btn btn-sm btn-outline-secondary" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#zap-auth-form">
+            <i class="bi bi-key me-1"></i>Anmeldedaten (optional — Authenticated Scan)
+          </button>
+          <div class="collapse mt-2" id="zap-auth-form">
+            <div class="card card-body bg-dark border-secondary p-2">
+              <p class="text-muted small mb-2">
+                Wenn angegeben, meldet sich ZAP vor dem Spider an und scannt als eingeloggter Nutzer.
+                <strong>Passwörter werden nicht gespeichert</strong> — nur für diese Scan-Session.
+              </p>
+              <div class="row g-2">
+                <div class="col-12 col-md-6">
+                  <label class="form-label small text-muted mb-0">Login-URL</label>
+                  <input type="url" id="zap-login-url" class="form-control form-control-sm bg-dark text-light border-secondary"
+                         placeholder="https://example.com/accounts/login/">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small text-muted mb-0">Username-Feld</label>
+                  <input type="text" id="zap-user-field" class="form-control form-control-sm bg-dark text-light border-secondary"
+                         placeholder="username" value="username">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small text-muted mb-0">Password-Feld</label>
+                  <input type="text" id="zap-pass-field" class="form-control form-control-sm bg-dark text-light border-secondary"
+                         placeholder="password" value="password">
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label small text-muted mb-0">Benutzername</label>
+                  <input type="text" id="zap-username" class="form-control form-control-sm bg-dark text-light border-secondary"
+                         autocomplete="off">
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label small text-muted mb-0">Passwort</label>
+                  <input type="password" id="zap-password" class="form-control form-control-sm bg-dark text-light border-secondary"
+                         autocomplete="off">
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label small text-muted mb-0">Eingeloggt-Indikator (optional)</label>
+                  <input type="text" id="zap-logged-in" class="form-control form-control-sm bg-dark text-light border-secondary"
+                         placeholder="Logout|Abmelden">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="d-flex flex-wrap gap-2 mb-2">
           {% for h in extern_scan_hosts %}
           <button class="btn btn-sm btn-outline-info"
@@ -558,6 +607,24 @@
           ZAP läuft… Spider + Passiv-Scan kann 2–5 Minuten dauern. ZAP wird ggf. automatisch installiert.
         </div>
         <div id="zap-output"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scan-Report Download -->
+  <div class="col-12">
+    <div class="card border-secondary">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-file-earmark-text me-1"></i>Scan-Bericht</span>
+        <button id="report-btn" class="btn btn-sm btn-outline-light" data-action="downloadScanReport" disabled>
+          <i class="bi bi-download me-1"></i>Alle Scan-Ergebnisse als HTML herunterladen
+        </button>
+      </div>
+      <div class="card-body py-2">
+        <p class="small text-muted mb-0">
+          Fasst alle durchgeführten Scans dieser Seite (HTTP/TLS, Nuclei, ZAP) zu einem
+          herunterladbaren HTML-Report zusammen. Wird nach dem ersten Scan aktiviert.
+        </p>
       </div>
     </div>
   </div>
@@ -1365,6 +1432,9 @@ async function runHttpScan(target) {
       return;
     }
     window._lastScanData = d;
+    window._scanResults = window._scanResults || {};
+    window._scanResults.http = d;
+    document.getElementById('report-btn')?.removeAttribute('disabled');
     output.innerHTML = renderHttpScanResult(d);
   } catch(e) {
     loading.classList.add('d-none');
@@ -1659,6 +1729,9 @@ async function runNucleiScan(host) {
     const r = await fetch(`{% url "project_nuclei_scan" name %}?target=${encodeURIComponent(host)}`);
     const d = await r.json();
     loading.classList.add('d-none');
+    window._scanResults = window._scanResults || {};
+    window._scanResults.nuclei = d;
+    document.getElementById('report-btn')?.removeAttribute('disabled');
     if (!d.ok) {
       output.innerHTML = `<div class="alert alert-danger small">${d.error}</div>`;
       return;
@@ -1703,10 +1776,34 @@ async function runZapScan(host, scanType) {
   loading.classList.remove('d-none');
   output.innerHTML = '';
   try {
-    const url = `{% url "project_zap_scan" name %}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`;
-    const r = await fetch(url);
+    // Collect optional auth credentials
+    const loginUrl  = document.getElementById('zap-login-url')?.value.trim() || '';
+    const username  = document.getElementById('zap-username')?.value.trim() || '';
+    const password  = document.getElementById('zap-password')?.value || '';
+    const useAuth   = loginUrl && username && password;
+
+    let r;
+    const baseUrl = `{% url "project_zap_scan" name %}`;
+    if (useAuth) {
+      const fd = new FormData();
+      fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+      fd.append('target', host);
+      fd.append('type', scanType);
+      fd.append('login_url', loginUrl);
+      fd.append('username_field', document.getElementById('zap-user-field')?.value.trim() || 'username');
+      fd.append('password_field', document.getElementById('zap-pass-field')?.value.trim() || 'password');
+      fd.append('auth_username', username);
+      fd.append('auth_password', password);
+      fd.append('logged_in_indicator', document.getElementById('zap-logged-in')?.value.trim() || '');
+      r = await fetch(`${baseUrl}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`, {method: 'POST', body: fd});
+    } else {
+      r = await fetch(`${baseUrl}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`);
+    }
     const d = await r.json();
     loading.classList.add('d-none');
+    window._scanResults = window._scanResults || {};
+    window._scanResults.zap = d;
+    document.getElementById('report-btn')?.removeAttribute('disabled');
     if (!d.ok) {
       output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
       return;
@@ -1719,7 +1816,8 @@ async function runZapScan(host, scanType) {
     const highCount = alerts.filter(a => a.risk === 'High' || a.risk === 'Medium').length;
     const alertCls  = alerts.some(a => a.risk === 'High') ? 'alert-danger' : (highCount > 0 ? 'alert-warning' : 'alert-info');
     const typeLabel = scanType === 'full' ? 'Full (aktiv)' : 'Baseline (passiv)';
-    let html = `<div class="alert ${alertCls} small mb-2"><i class="bi bi-shield-shaded me-1"></i>ZAP ${typeLabel}: ${alerts.length} Alert(s) — davon ${highCount} hoch/mittel</div>`;
+    const authBadge = d.authenticated ? ' <span class="badge bg-success ms-1">authentifiziert</span>' : '';
+    let html = `<div class="alert ${alertCls} small mb-2"><i class="bi bi-shield-shaded me-1"></i>ZAP ${typeLabel}${authBadge}: ${alerts.length} Alert(s) — davon ${highCount} hoch/mittel</div>`;
     html += '<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
     html += '<thead><tr><th>Risiko</th><th>Name</th><th>URL</th><th>Lösung</th></tr></thead><tbody>';
     alerts.forEach(a => {
@@ -1915,6 +2013,7 @@ document.addEventListener('click', function (e) {
     case 'loadStats':             loadStats(); break;
     case 'upgradePkg':            upgradePkg(el.dataset.pkg, el); break;
     case 'downloadReport':        downloadReport(window._lastScanData); break;
+    case 'downloadScanReport':    downloadScanReport(); break;
     case 'copyToClipboard': {
       e.preventDefault();
       const target = document.getElementById(el.dataset.target);
@@ -1931,6 +2030,92 @@ document.addEventListener('click', function (e) {
 document.getElementById('new-host-input')?.addEventListener('keydown', function (e) {
   if (e.key === 'Enter') { e.preventDefault(); addHost(); }
 });
+</script>
+
+<!-- Scan-Report Download JS -->
+<script nonce="{{ csp_nonce }}">
+function downloadScanReport() {
+  const results = window._scanResults || {};
+  const project = '{{ name }}';
+  const now = new Date().toLocaleString('de-DE');
+
+  const riskColor = {High:'#dc3545', Medium:'#ffc107', Low:'#17a2b8', Informational:'#6c757d'};
+  const sevColor  = {critical:'#dc3545', high:'#dc3545', medium:'#ffc107', low:'#17a2b8', info:'#6c757d'};
+
+  function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function httpSection(d) {
+    if (!d) return '<p style="color:#888">Kein HTTP/TLS-Scan durchgeführt.</p>';
+    let rows = '';
+    (d.headers || []).forEach(h => {
+      rows += `<tr><td>${esc(h.name)}</td><td style="color:${sevColor[h.severity]||'#aaa'}">${esc(h.severity?.toUpperCase())}</td><td>${esc(h.value||'–')}</td><td>${esc(h.hint||'')}</td></tr>`;
+    });
+    return `<table border="1" cellpadding="4" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead style="background:#333"><tr><th>Header / Check</th><th>Schwere</th><th>Wert</th><th>Empfehlung</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
+  function nucleiSection(d) {
+    if (!d || !d.ok) return `<p style="color:#888">${esc(d?.error || 'Kein Nuclei-Scan durchgeführt.')}</p>`;
+    if (!d.findings?.length) return '<p style="color:#4caf50">✓ Keine Findings.</p>';
+    let rows = '';
+    d.findings.forEach(f => {
+      rows += `<tr><td style="color:${sevColor[f.severity]||'#aaa'}">${esc(f.severity?.toUpperCase())}</td><td>${esc(f.name)}</td><td style="font-family:monospace;font-size:11px">${esc(f.matched)}</td><td>${esc(f.description)}</td></tr>`;
+    });
+    return `<table border="1" cellpadding="4" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead style="background:#333"><tr><th>Schwere</th><th>Name</th><th>Ziel</th><th>Beschreibung</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
+  function zapSection(d) {
+    if (!d || !d.ok) return `<p style="color:#888">${esc(d?.error || 'Kein ZAP-Scan durchgeführt.')}</p>`;
+    if (!d.alerts?.length) return '<p style="color:#4caf50">✓ Keine Alerts.</p>';
+    const typeLabel = d.scan_type === 'full' ? 'Full (aktiv)' : 'Baseline (passiv)';
+    const authLabel = d.authenticated ? ' · authentifiziert' : '';
+    let rows = '';
+    d.alerts.forEach(a => {
+      rows += `<tr><td style="color:${riskColor[a.risk]||'#aaa'}">${esc(a.risk)}</td><td>${esc(a.name)}</td><td style="font-family:monospace;font-size:11px;word-break:break-all">${esc(a.url)}</td><td>${esc(a.solution)}</td></tr>`;
+    });
+    return `<p style="color:#aaa;font-size:12px">Scan-Typ: ${esc(typeLabel)}${esc(authLabel)}</p>
+      <table border="1" cellpadding="4" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead style="background:#333"><tr><th>Risiko</th><th>Alert</th><th>URL</th><th>Lösung</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Scan-Report: ${esc(project)}</title>
+<style>
+  body { background:#1a1a1a; color:#ddd; font-family:Arial,sans-serif; padding:24px; }
+  h1 { color:#fff; border-bottom:1px solid #555; padding-bottom:8px; }
+  h2 { color:#ccc; margin-top:32px; border-left:4px solid #555; padding-left:10px; }
+  table { margin-top:8px; }
+  th { text-align:left; background:#2a2a2a; color:#aaa; }
+  td, th { padding:6px 10px; border:1px solid #444; vertical-align:top; }
+  tr:nth-child(even) td { background:#202020; }
+  .meta { color:#888; font-size:13px; margin-bottom:24px; }
+</style>
+</head>
+<body>
+<h1>Sicherheits-Scan-Report: ${esc(project)}</h1>
+<p class="meta">Erstellt: ${esc(now)}</p>
+<h2>HTTP / TLS Security Scan</h2>
+${httpSection(results.http)}
+<h2>Nuclei — Vulnerability Scanner</h2>
+${nucleiSection(results.nuclei)}
+<h2>OWASP ZAP — Web Application Scanner</h2>
+${zapSection(results.zap)}
+</body></html>`;
+
+  const blob = new Blob([html], {type: 'text/html'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `scan-report-${project}-${new Date().toISOString().slice(0,10)}.html`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 </script>
 {% endif %}
 {% endblock %}

@@ -810,7 +810,46 @@ NUCLEI_SAFE_TEMPLATES = [
 
 
 def _install_nuclei():
-    """Download and install nuclei binary — tries curl, wget, then urllib."""
+    """Install nuclei binary — tries system package managers first, then GitHub release."""
+    # 1. Check if already in PATH at a different location
+    sys_bin = _shutil.which('nuclei')
+    if sys_bin:
+        try:
+            _shutil.copy2(sys_bin, NUCLEI_BIN)
+            os.chmod(NUCLEI_BIN, 0o755)
+            return True
+        except Exception:
+            return True  # already usable at sys_bin, caller checks NUCLEI_BIN path
+
+    # 2. Try apt (Debian/Ubuntu repos sometimes carry nuclei)
+    if _shutil.which('apt-get'):
+        r = _subprocess.run(
+            ['apt-get', 'install', '-y', '--no-install-recommends', 'nuclei'],
+            capture_output=True, timeout=60,
+        )
+        if r.returncode == 0 and _shutil.which('nuclei'):
+            try:
+                _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
+                os.chmod(NUCLEI_BIN, 0o755)
+            except Exception:
+                pass
+            return True
+
+    # 3. Try snap
+    if _shutil.which('snap'):
+        r = _subprocess.run(
+            ['snap', 'install', 'nuclei', '--classic'],
+            capture_output=True, timeout=120,
+        )
+        if r.returncode == 0 and _shutil.which('nuclei'):
+            try:
+                _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
+                os.chmod(NUCLEI_BIN, 0o755)
+            except Exception:
+                pass
+            return True
+
+    # 4. GitHub release download (needs internet)
     arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm'}
     go_arch = arch_map.get(_platform.machine(), 'amd64')
     url = f'https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_{go_arch}.zip'
@@ -818,15 +857,14 @@ def _install_nuclei():
         with _tempfile.TemporaryDirectory() as tmp:
             zip_path = os.path.join(tmp, 'nuclei.zip')
 
-            # Try curl first (handles SSL + redirects reliably)
             if _shutil.which('curl'):
                 r = _subprocess.run(
-                    ['curl', '-fsSL', '-o', zip_path, url],
+                    ['curl', '-fsSL', '--connect-timeout', '15', '-o', zip_path, url],
                     timeout=120, capture_output=True,
                 )
             elif _shutil.which('wget'):
                 r = _subprocess.run(
-                    ['wget', '-q', '-O', zip_path, url],
+                    ['wget', '-q', '--timeout=15', '-O', zip_path, url],
                     timeout=120, capture_output=True,
                 )
             else:
@@ -835,7 +873,7 @@ def _install_nuclei():
                 ctx = _ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = _ssl.CERT_NONE
-                with _req.urlopen(url, context=ctx, timeout=60) as resp:
+                with _req.urlopen(url, context=ctx, timeout=30) as resp:
                     with open(zip_path, 'wb') as f:
                         f.write(resp.read())
                 r = type('R', (), {'returncode': 0})()
@@ -845,7 +883,6 @@ def _install_nuclei():
                 return False
 
             with _zipfile.ZipFile(zip_path) as zf:
-                # Find the nuclei binary inside the zip (may vary by version)
                 binary = next((n for n in zf.namelist()
                                if n.lower().startswith('nuclei') and '/' not in n), None)
                 if not binary:
@@ -881,7 +918,11 @@ def run_nuclei_scan(target_url, templates=None):
         installed = _install_nuclei()
         if not installed:
             return {'ok': False, 'findings': [], 'installed': False,
-                    'error': 'nuclei konnte nicht installiert werden — Internet-Verbindung prüfen'}
+                    'error': (
+                        'nuclei konnte nicht automatisch installiert werden. '
+                        'Manuell installieren: apt install nuclei '
+                        'oder: go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'
+                    )}
 
     _ensure_nuclei_templates()
 
@@ -1071,13 +1112,67 @@ def _zap_api(path, params=None):
         return _json.loads(r.read())
 
 
-def run_zap_scan(target_url, scan_type='baseline'):
+def _zap_setup_auth(ctx_id, target_url, auth):
+    """Configure form-based authentication in ZAP for the given context."""
+    import urllib.parse as _up
+    login_url = auth.get('login_url', '')
+    user_field = auth.get('username_field', 'username')
+    pass_field = auth.get('password_field', 'password')
+    username   = auth.get('username', '')
+    password   = auth.get('password', '')
+    logged_in_indicator = auth.get('logged_in_indicator', '')
+
+    # Include target in context
+    _zap_api('context/action/includeInContext', {
+        'contextId': ctx_id,
+        'regex': target_url.rstrip('/') + '.*',
+    })
+
+    # Form-based auth config (ZAP URL-encodes the field names)
+    login_data = (
+        f'loginUrl={_up.quote(login_url, safe="")}'
+        f'&loginRequestData={_up.quote(user_field + "={%25username%25}&" + pass_field + "={%25password%25}", safe="")}'
+    )
+    _zap_api('authentication/action/setAuthenticationMethod', {
+        'contextId': ctx_id,
+        'authMethodName': 'formBasedAuthentication',
+        'authMethodConfigParams': login_data,
+    })
+
+    if logged_in_indicator:
+        _zap_api('authentication/action/setLoggedInIndicator', {
+            'contextId': ctx_id,
+            'loggedInIndicatorRegex': logged_in_indicator,
+        })
+
+    # Create user
+    user = _zap_api('users/action/newUser', {'contextId': ctx_id, 'name': 'djmanager-user'})
+    user_id = str(user.get('userId', '0'))
+
+    _zap_api('users/action/setAuthenticationCredentials', {
+        'contextId': ctx_id,
+        'userId': user_id,
+        'authCredentialsConfigParams': f'username={_up.quote(username)}&password={_up.quote(password)}',
+    })
+    _zap_api('users/action/setUserEnabled', {'contextId': ctx_id, 'userId': user_id, 'enabled': 'true'})
+
+    # Forced-user mode so spider/scan use the credentials automatically
+    _zap_api('forcedUser/action/setForcedUser', {'contextId': ctx_id, 'userId': user_id})
+    _zap_api('forcedUser/action/setForcedUserModeEnabled', {'boolean': 'true'})
+
+    return ctx_id, user_id
+
+
+def run_zap_scan(target_url, scan_type='baseline', auth=None):
     """
     Run OWASP ZAP scan with auto-spider against target_url.
     scan_type: 'baseline' (passive only) | 'full' (active, only for test systems)
-    Returns {'ok': bool, 'alerts': [...], 'scan_type': str, 'error': str}
+    auth: optional dict with keys login_url, username_field, password_field,
+          username, password, logged_in_indicator — enables authenticated spider.
+    Returns {'ok': bool, 'alerts': [...], 'scan_type': str, 'authenticated': bool, 'error': str}
     """
     started = False
+    authenticated = bool(auth and auth.get('username') and auth.get('login_url'))
     try:
         # Check if ZAP already running
         try:
@@ -1089,33 +1184,49 @@ def run_zap_scan(target_url, scan_type='baseline'):
         if not already_running:
             ok, err = _zap_start()
             if not ok:
-                return {'ok': False, 'alerts': [], 'scan_type': scan_type, 'error': err}
+                return {'ok': False, 'alerts': [], 'scan_type': scan_type,
+                        'authenticated': authenticated, 'error': err}
             started = True
+
+        ctx_id = None
+        user_id = None
+        if authenticated:
+            ctx = _zap_api('context/action/newContext', {'contextName': 'djmanager'})
+            ctx_id = str(ctx.get('contextId', '1'))
+            ctx_id, user_id = _zap_setup_auth(ctx_id, target_url, auth)
 
         # Open target URL to seed the session
         _zap_api('core/action/accessUrl', {'url': target_url, 'followRedirects': 'true'})
 
-        # Spider (auto-crawl)
-        spider = _zap_api('spider/action/scan', {'url': target_url, 'recurse': 'true'})
+        # Spider (auto-crawl), optionally with auth context
+        spider_params = {'url': target_url, 'recurse': 'true'}
+        if ctx_id:
+            spider_params['contextName'] = 'djmanager'
+            spider_params['userId'] = user_id
+        spider = _zap_api('spider/action/scan', spider_params)
         spider_id = spider.get('scan', '0')
 
-        # Wait for spider to finish (max 60s)
-        for _ in range(60):
+        # Wait for spider (max 90s)
+        for _ in range(90):
             _time.sleep(1)
             prog = _zap_api('spider/view/status', {'scanId': spider_id})
             if int(prog.get('status', 0)) >= 100:
                 break
 
-        # Passive scan runs automatically — wait for queue to clear (max 60s)
-        for _ in range(60):
+        # Passive scan queue (max 90s)
+        for _ in range(90):
             _time.sleep(1)
             recs = _zap_api('pscan/view/recordsToScan')
             if int(recs.get('recordsToScan', 1)) == 0:
                 break
 
-        # Active scan (only for 'full' type — use carefully!)
+        # Active scan (only for 'full' — use carefully!)
         if scan_type == 'full':
-            active = _zap_api('ascan/action/scan', {'url': target_url, 'recurse': 'true'})
+            ascan_params = {'url': target_url, 'recurse': 'true'}
+            if ctx_id:
+                ascan_params['contextId'] = ctx_id
+                ascan_params['userId'] = user_id
+            active = _zap_api('ascan/action/scan', ascan_params)
             ascan_id = active.get('scan', '0')
             for _ in range(300):  # max 5 min
                 _time.sleep(1)
@@ -1145,10 +1256,12 @@ def run_zap_scan(target_url, scan_type='baseline'):
             })
         alerts.sort(key=lambda x: risk_order.get(x['risk'], 9))
 
-        return {'ok': True, 'alerts': alerts, 'scan_type': scan_type, 'error': ''}
+        return {'ok': True, 'alerts': alerts, 'scan_type': scan_type,
+                'authenticated': authenticated, 'error': ''}
 
     except Exception as e:
-        return {'ok': False, 'alerts': [], 'scan_type': scan_type, 'error': str(e)}
+        return {'ok': False, 'alerts': [], 'scan_type': scan_type,
+                'authenticated': authenticated, 'error': str(e)}
     finally:
         if started:
             _zap_stop()
