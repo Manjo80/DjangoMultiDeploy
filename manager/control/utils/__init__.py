@@ -87,6 +87,8 @@ from .scanning import (
     nuclei_version_info,
     update_nuclei,
     run_zap_scan,
+    zap_version_info,
+    update_zap,
 )
 
 __all__ = [
@@ -116,5 +118,6 @@ __all__ = [
     'run_bandit',
     # scanning
     'run_http_security_scan', 'get_public_ip', 'run_port_scan',
-    'run_nuclei_scan', 'nuclei_version_info', 'update_nuclei', 'run_zap_scan',
+    'run_nuclei_scan', 'nuclei_version_info', 'update_nuclei',
+    'run_zap_scan', 'zap_version_info', 'update_zap',
 ]

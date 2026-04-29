@@ -34,7 +34,7 @@ from ..utils import (
     run_pip_audit, run_django_deploy_check, run_bandit,
     run_migration_status, run_pip_outdated, run_pip_upgrade,
     run_http_security_scan, run_nuclei_scan, nuclei_version_info, update_nuclei,
-    run_zap_scan, KEYS_DIR, GLOBAL_DEPLOY_KEY,
+    run_zap_scan, zap_version_info, update_zap, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     reset_project,
     remove_project,
 )
@@ -330,6 +330,25 @@ def nuclei_update_view(request, name):
 
 # ZAP Scanner
 # ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def zap_version_view(request, name):
+    """Return installed vs latest ZAP version."""
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    return JsonResponse(zap_version_info())
+
+
+@login_required
+@require_POST
+def zap_update_view(request, name):
+    """Download and install the latest ZAP release."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Nur Admins'}, status=403)
+    result = update_zap()
+    AuditLog.log(request, f'ZAP update: {result.get("version","?")}', project=name, success=result['ok'])
+    return JsonResponse(result)
+
 
 @login_required
 def project_zap_scan(request, name):

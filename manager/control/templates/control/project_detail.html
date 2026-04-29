@@ -538,9 +538,18 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-shield-shaded me-1"></i>OWASP ZAP — Web Application Scanner</span>
-        <span class="badge bg-warning text-dark">Auto-Spider + Passiv-Scan</span>
+        <div class="d-flex align-items-center gap-2">
+          <span id="zap-version-badge" class="text-muted small"></span>
+          <span class="badge bg-warning text-dark">Auto-Spider + Passiv-Scan</span>
+        </div>
       </div>
       <div class="card-body">
+        <div id="zap-update-bar" class="d-none alert alert-warning py-1 px-2 small mb-2 d-flex justify-content-between align-items-center">
+          <span id="zap-update-msg"></span>
+          <button class="btn btn-sm btn-warning ms-2" data-action="updateZap">
+            <i class="bi bi-arrow-up-circle me-1"></i>Jetzt updaten
+          </button>
+        </div>
         <p class="small text-muted mb-2">
           Startet ZAP lokal on-demand, führt einen Auto-Spider durch und analysiert alle gefundenen Seiten passiv.
           <strong>Baseline</strong>: nur passive Regeln — produktionssicher.
@@ -1822,6 +1831,49 @@ async function runNucleiScan(host) {
 const ZAP_RISK_COLOR = {High:'danger', Medium:'warning', Low:'info', Informational:'secondary'};
 const ZAP_RISK_LABEL = {High:'HOCH', Medium:'MITTEL', Low:'NIEDRIG', Informational:'INFO'};
 
+// Check ZAP version on page load
+(async function checkZapVersion() {
+  try {
+    const r = await fetch('{% url "zap_version" name %}');
+    const d = await r.json();
+    const badge = document.getElementById('zap-version-badge');
+    const bar   = document.getElementById('zap-update-bar');
+    const msg   = document.getElementById('zap-update-msg');
+    if (d.is_installed && d.installed) {
+      badge.textContent = `v${d.installed}`;
+      if (d.update_available && d.latest) {
+        bar.classList.remove('d-none');
+        msg.textContent = `Update verfügbar: v${d.installed} → v${d.latest}`;
+      }
+    } else if (!d.is_installed) {
+      badge.innerHTML = '<span class="badge bg-secondary">nicht installiert</span>';
+    }
+  } catch(e) {}
+})();
+
+async function updateZap() {
+  const bar = document.getElementById('zap-update-bar');
+  const msg = document.getElementById('zap-update-msg');
+  const btn = bar?.querySelector('[data-action="updateZap"]');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Installiere… (~200 MB)'; }
+  try {
+    const fd = new FormData();
+    fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+    const r = await fetch('{% url "zap_update" name %}', {method: 'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('zap-version-badge').textContent = `v${d.version}`;
+      bar.classList.add('d-none');
+    } else {
+      msg.textContent = d.error;
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-up-circle me-1"></i>Retry'; }
+    }
+  } catch(e) {
+    msg.textContent = `Fehler: ${e.message}`;
+    if (btn) { btn.disabled = false; }
+  }
+}
+
 async function runZapScan(host, scanType) {
   const loading = document.getElementById('zap-loading');
   const output  = document.getElementById('zap-output');
@@ -2061,6 +2113,7 @@ document.addEventListener('click', function (e) {
     case 'runNucleiScan':         runNucleiScan(el.dataset.host); break;
     case 'updateNuclei':          updateNuclei(); break;
     case 'runZapScan':            runZapScan(el.dataset.host, el.dataset.type); break;
+    case 'updateZap':             updateZap(); break;
     case 'loadMigrations':        loadMigrations(); break;
     case 'loadOutdated':          loadOutdated(); break;
     case 'loadStats':             loadStats(); break;

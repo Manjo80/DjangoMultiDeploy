@@ -1120,9 +1120,68 @@ def _install_zap():
                 _shutil.rmtree(ZAP_DIR)
             _shutil.copytree(src, ZAP_DIR)
             os.chmod(ZAP_SH, 0o755)
+            # Store installed version for quick lookup
+            with open(os.path.join(ZAP_DIR, '.version'), 'w') as _vf:
+                _vf.write(version)
         return True, f'ZAP {version} installiert'
     except Exception as e:
         return False, str(e)
+
+
+def _zap_installed_version():
+    """Return installed ZAP version string or '' if not installed."""
+    ver_file = os.path.join(ZAP_DIR, '.version')
+    if os.path.exists(ver_file):
+        try:
+            return open(ver_file).read().strip()
+        except Exception:
+            pass
+    if not os.path.exists(ZAP_DIR):
+        return ''
+    # Fallback: parse jar filename e.g. zap-2.15.0.jar
+    try:
+        for f in os.listdir(ZAP_DIR):
+            if f.startswith('zap-') and f.endswith('.jar'):
+                return f[4:-4]  # strip "zap-" prefix and ".jar" suffix
+    except Exception:
+        pass
+    return ''
+
+
+def _zap_latest_version():
+    """Query GitHub API for latest ZAP release tag. Returns version string or ''."""
+    try:
+        import urllib.request as _ureq
+        with _ureq.urlopen(
+            'https://api.github.com/repos/zaproxy/zaproxy/releases/latest',
+            timeout=10
+        ) as resp:
+            tag = _json.loads(resp.read()).get('tag_name', '')
+            return tag.lstrip('v')
+    except Exception:
+        return ''
+
+
+def zap_version_info():
+    """Return dict with installed, latest, update_available."""
+    installed = _zap_installed_version()
+    latest    = _zap_latest_version()
+    needs_update = bool(installed and latest and installed != latest)
+    return {
+        'installed':        installed or None,
+        'latest':           latest or None,
+        'update_available': needs_update,
+        'is_installed':     os.path.exists(ZAP_SH),
+    }
+
+
+def update_zap():
+    """Download and install the latest ZAP release. Returns {'ok': bool, 'version': str, 'error': str}."""
+    ok, msg = _install_zap()
+    if ok:
+        ver = _zap_installed_version()
+        return {'ok': True, 'version': ver, 'error': ''}
+    return {'ok': False, 'version': '', 'error': msg}
 
 
 def _ensure_java():
