@@ -33,7 +33,7 @@ from ..utils import (
     extract_project_zip, update_project_from_zip,
     run_pip_audit, run_django_deploy_check, run_bandit,
     run_migration_status, run_pip_outdated, run_pip_upgrade,
-    run_http_security_scan, KEYS_DIR, GLOBAL_DEPLOY_KEY,
+    run_http_security_scan, run_nuclei_scan, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     reset_project,
     remove_project,
 )
@@ -281,6 +281,33 @@ def project_http_scan(request, name):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Nuclei Scanner
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def project_nuclei_scan(request, name):
+    """
+    Run nuclei passive scan against the project's external hostname.
+    GET param: target=<hostname>  (required)
+    """
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+
+    hostname = request.GET.get('target', '').strip().lower()
+    if not hostname:
+        return JsonResponse({'error': 'Kein Scan-Ziel angegeben'}, status=400)
+
+    try:
+        addr = ipaddress.ip_address(hostname)
+        url_host = f'[{hostname}]' if isinstance(addr, ipaddress.IPv6Address) else hostname
+    except ValueError:
+        url_host = hostname
+
+    target_url = f'https://{url_host}'
+    result = run_nuclei_scan(target_url)
+    return JsonResponse(result)
+
+
 # Log viewer
 # ──────────────────────────────────────────────────────────────────────────────
 

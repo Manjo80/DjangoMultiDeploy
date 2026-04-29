@@ -785,3 +785,108 @@ def run_port_scan(host, mode='common', port_start=1, port_end=1024, timeout=1.0,
     else:
         logger.info('Port-Scan abgeschlossen: %s — %d offene Port(s)', host, len(open_ports))
     return result
+
+
+# ── Nuclei Scanner ────────────────────────────────────────────────────────────
+
+import subprocess as _subprocess
+import json as _json
+import platform as _platform
+import tempfile as _tempfile
+import zipfile as _zipfile
+import shutil as _shutil
+
+NUCLEI_BIN = '/usr/local/bin/nuclei'
+NUCLEI_TEMPLATES = '/opt/nuclei-templates'
+
+# Safe template categories for production scans (no fuzzing/injection)
+NUCLEI_SAFE_TEMPLATES = [
+    'http/technologies',
+    'http/misconfiguration',
+    'http/exposures',
+    'http/headers',
+    'http/takeovers',
+]
+
+
+def _install_nuclei():
+    """Download and install nuclei binary from GitHub releases."""
+    arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm'}
+    go_arch = arch_map.get(_platform.machine(), 'amd64')
+    url = f'https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_{go_arch}.zip'
+    try:
+        with _tempfile.TemporaryDirectory() as tmp:
+            zip_path = os.path.join(tmp, 'nuclei.zip')
+            import urllib.request as _req
+            _req.urlretrieve(url, zip_path)
+            with _zipfile.ZipFile(zip_path) as zf:
+                zf.extract('nuclei', tmp)
+            _shutil.copy2(os.path.join(tmp, 'nuclei'), NUCLEI_BIN)
+            os.chmod(NUCLEI_BIN, 0o755)
+        return True
+    except Exception as e:
+        logger.error('nuclei install failed: %s', e)
+        return False
+
+
+def _ensure_nuclei_templates():
+    """Update nuclei templates (idempotent)."""
+    try:
+        _subprocess.run(
+            [NUCLEI_BIN, '-update-templates', '-silent'],
+            capture_output=True, timeout=120,
+        )
+    except Exception:
+        pass
+
+
+def run_nuclei_scan(target_url, templates=None):
+    """
+    Run a passive nuclei scan against target_url.
+    Returns {'ok': bool, 'findings': [...], 'installed': bool, 'error': str}
+    """
+    installed = os.path.exists(NUCLEI_BIN)
+    if not installed:
+        installed = _install_nuclei()
+        if not installed:
+            return {'ok': False, 'findings': [], 'installed': False,
+                    'error': 'nuclei konnte nicht installiert werden — Internet-Verbindung prüfen'}
+
+    _ensure_nuclei_templates()
+
+    tpl_args = []
+    for t in (templates or NUCLEI_SAFE_TEMPLATES):
+        tpl_path = os.path.join(NUCLEI_TEMPLATES, t) if not t.startswith('/') else t
+        # nuclei also accepts relative template names without full path
+        tpl_args += ['-t', t]
+
+    cmd = [NUCLEI_BIN, '-u', target_url, '-jsonl', '-silent', '-no-color',
+           '-rate-limit', '20', '-timeout', '10'] + tpl_args
+
+    try:
+        result = _subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        findings = []
+        severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = _json.loads(line)
+                info = d.get('info', {})
+                findings.append({
+                    'template':    d.get('template-id', ''),
+                    'name':        info.get('name', ''),
+                    'severity':    info.get('severity', 'info').lower(),
+                    'matched':     d.get('matched-at', d.get('host', '')),
+                    'description': (info.get('description') or '')[:200],
+                    'tags':        ', '.join(info.get('tags', [])),
+                })
+            except _json.JSONDecodeError:
+                pass
+        findings.sort(key=lambda x: severity_order.get(x['severity'], 5))
+        return {'ok': True, 'findings': findings, 'installed': True, 'error': ''}
+    except _subprocess.TimeoutExpired:
+        return {'ok': False, 'findings': [], 'installed': True, 'error': 'Timeout (180s)'}
+    except Exception as e:
+        return {'ok': False, 'findings': [], 'installed': True, 'error': str(e)}

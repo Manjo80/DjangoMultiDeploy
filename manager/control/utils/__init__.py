@@ -83,6 +83,7 @@ from .scanning import (
     run_http_security_scan,
     get_public_ip,
     run_port_scan,
+    run_nuclei_scan,
 )
 
 __all__ = [
@@ -111,5 +112,5 @@ __all__ = [
     'run_migration_status', 'run_pip_outdated', 'run_pip_upgrade',
     'run_bandit',
     # scanning
-    'run_http_security_scan', 'get_public_ip', 'run_port_scan',
+    'run_http_security_scan', 'get_public_ip', 'run_port_scan', 'run_nuclei_scan',
 ]

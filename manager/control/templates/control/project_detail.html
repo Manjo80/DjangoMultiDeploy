@@ -493,6 +493,37 @@
     </div>
   </div>
 
+  <!-- Nuclei Scanner (lazy-loaded) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-radioactive me-1"></i>Nuclei — Vulnerability Scanner</span>
+        <span class="badge bg-secondary">passiv / produktionssicher</span>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">
+          Scannt auf bekannte Fehlkonfigurationen, exponierte Dateien und Technologien.
+          Nur passiv — keine Formulare, kein Fuzzing.
+        </p>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          {% for h in extern_scan_hosts %}
+          <button class="btn btn-sm btn-outline-warning"
+                  data-action="runNucleiScan" data-host="{{ h }}">
+            <i class="bi bi-radioactive me-1"></i>{{ h }}
+          </button>
+          {% empty %}
+          <span class="text-muted small">Kein externer Hostname konfiguriert</span>
+          {% endfor %}
+        </div>
+        <div id="nuclei-loading" class="d-none text-muted small mb-2">
+          <span class="spinner-border spinner-border-sm me-1"></span>
+          Scanne… (kann 60–120s dauern, nuclei wird ggf. automatisch installiert)
+        </div>
+        <div id="nuclei-output"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Migration-Status (lazy-loaded) -->
   <div class="col-12">
     <div class="card">
@@ -1576,6 +1607,53 @@ function renderHttpScanResult(d) {
 }
 </script>
 
+<!-- Nuclei Scan JS -->
+<script nonce="{{ csp_nonce }}">
+const SEV_COLOR = {critical:'danger', high:'danger', medium:'warning', low:'info', info:'secondary', unknown:'secondary'};
+const SEV_LABEL = {critical:'KRITISCH', high:'HOCH', medium:'MITTEL', low:'NIEDRIG', info:'INFO', unknown:'?'};
+
+async function runNucleiScan(host) {
+  const loading = document.getElementById('nuclei-loading');
+  const output  = document.getElementById('nuclei-output');
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+  try {
+    const r = await fetch(`{% url "project_nuclei_scan" name %}?target=${encodeURIComponent(host)}`);
+    const d = await r.json();
+    loading.classList.add('d-none');
+    if (!d.ok) {
+      output.innerHTML = `<div class="alert alert-danger small">${d.error}</div>`;
+      return;
+    }
+    if (!d.findings || d.findings.length === 0) {
+      output.innerHTML = '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Findings — sieht gut aus.</div>';
+      return;
+    }
+    const critical = d.findings.filter(f => f.severity === 'critical' || f.severity === 'high').length;
+    const alertCls = critical > 0 ? 'alert-danger' : 'alert-warning';
+    let html = `<div class="alert ${alertCls} small mb-2"><i class="bi bi-radioactive me-1"></i>${d.findings.length} Finding(s) — davon ${critical} kritisch/hoch</div>`;
+    html += '<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
+    html += '<thead><tr><th>Schwere</th><th>Name</th><th>Ziel</th><th>Tags</th></tr></thead><tbody>';
+    d.findings.forEach(f => {
+      const c = SEV_COLOR[f.severity] || 'secondary';
+      const l = SEV_LABEL[f.severity] || f.severity;
+      const desc = f.description ? `<br><span class="text-muted" style="font-size:.75rem">${f.description}</span>` : '';
+      html += `<tr>
+        <td><span class="badge bg-${c}">${l}</span></td>
+        <td>${f.name}${desc}</td>
+        <td class="font-monospace text-muted" style="font-size:.75rem;word-break:break-all">${f.matched}</td>
+        <td class="text-muted" style="font-size:.75rem">${f.tags}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+    output.innerHTML = html;
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+  }
+}
+</script>
+
 <!-- Security Scan JS -->
 <script nonce="{{ csp_nonce }}">
 // Django security warning codes: source category + hint
@@ -1741,6 +1819,7 @@ document.addEventListener('click', function (e) {
     case 'deleteBackup':          deleteBackup(el.dataset.name, el); break;
     case 'runSecurityScan':       runSecurityScan(); break;
     case 'runHttpScan':           runHttpScan(el.dataset.host); break;
+    case 'runNucleiScan':         runNucleiScan(el.dataset.host); break;
     case 'loadMigrations':        loadMigrations(); break;
     case 'loadOutdated':          loadOutdated(); break;
     case 'loadStats':             loadStats(); break;
