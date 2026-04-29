@@ -870,10 +870,25 @@ def _install_nuclei():
                 pass
             return True
 
-    # 4. GitHub release download (needs internet)
-    arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm'}
+    # 5. GitHub release download (needs internet) — v3.x uses nuclei_VERSION_linux_ARCH.zip
+    arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm', 'i386': '386', 'i686': '386'}
     go_arch = arch_map.get(_platform.machine(), 'amd64')
-    url = f'https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_{go_arch}.zip'
+
+    # Resolve latest version tag via GitHub API (so URL includes version number)
+    version = 'v3.8.0'  # safe fallback
+    try:
+        import urllib.request as _ureq2
+        with _ureq2.urlopen(
+            'https://api.github.com/repos/projectdiscovery/nuclei/releases/latest',
+            timeout=10
+        ) as _resp:
+            version = _json.loads(_resp.read()).get('tag_name', version)
+    except Exception:
+        pass
+    ver_num = version.lstrip('v')  # "3.8.0"
+
+    # New v3 filename format: nuclei_3.8.0_linux_amd64.zip
+    url = f'https://github.com/projectdiscovery/nuclei/releases/download/{version}/nuclei_{ver_num}_linux_{go_arch}.zip'
     try:
         with _tempfile.TemporaryDirectory() as tmp:
             zip_path = os.path.join(tmp, 'nuclei.zip')
@@ -900,12 +915,14 @@ def _install_nuclei():
                 r = type('R', (), {'returncode': 0})()
 
             if r.returncode != 0:
-                logger.error('nuclei download failed (exit %d)', r.returncode)
+                logger.error('nuclei download failed (exit %d) url=%s', r.returncode, url)
                 return False
 
             with _zipfile.ZipFile(zip_path) as zf:
+                # Binary is at root of zip (no subdirectory in v3)
                 binary = next((n for n in zf.namelist()
-                               if n.lower().startswith('nuclei') and '/' not in n), None)
+                               if n.lower() == 'nuclei' or
+                               (n.lower().startswith('nuclei') and '/' not in n and not n.endswith('.txt'))), None)
                 if not binary:
                     logger.error('nuclei binary not found in zip: %s', zf.namelist())
                     return False
