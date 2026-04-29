@@ -821,7 +821,7 @@ def _install_nuclei():
         except Exception:
             return True  # already usable at sys_bin, caller checks NUCLEI_BIN path
 
-    # 2. Try apt (Debian/Ubuntu repos sometimes carry nuclei)
+    # 2. Try apt (nuclei not in standard repos, but worth a try)
     if _shutil.which('apt-get'):
         r = _subprocess.run(
             ['apt-get', 'install', '-y', '--no-install-recommends', 'nuclei'],
@@ -835,7 +835,28 @@ def _install_nuclei():
                 pass
             return True
 
-    # 3. Try snap
+    # 3. Try via Go (apt install golang-go + go install)
+    go_bin = _shutil.which('go')
+    if not go_bin and _shutil.which('apt-get'):
+        _subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'golang-go'],
+                        capture_output=True, timeout=120)
+        go_bin = _shutil.which('go')
+    if go_bin:
+        go_env = os.environ.copy()
+        go_env.setdefault('GOPATH', '/root/go')
+        go_env['PATH'] = go_env['PATH'] + ':/root/go/bin:/usr/local/go/bin'
+        r = _subprocess.run(
+            [go_bin, 'install', 'github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'],
+            capture_output=True, timeout=300, env=go_env,
+        )
+        if r.returncode == 0:
+            for candidate in ('/root/go/bin/nuclei', '/usr/local/go/bin/nuclei'):
+                if os.path.exists(candidate):
+                    _shutil.copy2(candidate, NUCLEI_BIN)
+                    os.chmod(NUCLEI_BIN, 0o755)
+                    return True
+
+    # 4. Try snap
     if _shutil.which('snap'):
         r = _subprocess.run(
             ['snap', 'install', 'nuclei', '--classic'],
@@ -920,8 +941,11 @@ def run_nuclei_scan(target_url, templates=None):
             return {'ok': False, 'findings': [], 'installed': False,
                     'error': (
                         'nuclei konnte nicht automatisch installiert werden. '
-                        'Manuell installieren: apt install nuclei '
-                        'oder: go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'
+                        'Falls der Server kein GitHub-Zugang hat: auf dem Proxmox-Host ausführen: '
+                        'curl -fsSL https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip '
+                        '-o /tmp/n.zip && unzip -o /tmp/n.zip nuclei -d /tmp/nb && '
+                        'pct push <LXC-ID> /tmp/nb/nuclei /usr/local/bin/nuclei && '
+                        'pct exec <LXC-ID> -- chmod +x /usr/local/bin/nuclei'
                     )}
 
     _ensure_nuclei_templates()
