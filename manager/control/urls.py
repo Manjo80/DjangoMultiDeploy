@@ -114,4 +114,7 @@ urlpatterns = [
     # In-memory scan log
     path('security-scanner/log/', views.scan_log_view, name='scan_log'),
     path('security-scanner/log/clear/', views.clear_scan_log, name='clear_scan_log'),
+
+    # Background job poll (nuclei, ZAP, updates — bypasses Cloudflare timeout)
+    path('jobs/<str:job_id>/', views.job_poll_view, name='job_poll'),
 ]

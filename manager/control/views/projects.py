@@ -37,6 +37,7 @@ from ..utils import (
     run_zap_scan, zap_version_info, update_zap, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     reset_project,
     remove_project,
+    start_job,
 )
 from ._helpers import (
     admin_required, operator_required, _get_role,
@@ -305,8 +306,12 @@ def project_nuclei_scan(request, name):
         url_host = hostname
 
     target_url = f'https://{url_host}'
-    result = run_nuclei_scan(target_url)
-    return JsonResponse(result)
+
+    def _run():
+        return run_nuclei_scan(target_url)
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 @login_required
@@ -323,9 +328,14 @@ def nuclei_update_view(request, name):
     """Download and install the latest nuclei release."""
     if not request.user.is_staff:
         return JsonResponse({'error': 'Nur Admins'}, status=403)
-    result = update_nuclei()
-    AuditLog.log(request, f'nuclei update: {result.get("version","?")}', project=name, success=result['ok'])
-    return JsonResponse(result)
+
+    def _run():
+        result = update_nuclei()
+        AuditLog.log(request, f'nuclei update: {result.get("version","?")}', project=name, success=result['ok'])
+        return result
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 # ZAP Scanner
@@ -345,9 +355,14 @@ def zap_update_view(request, name):
     """Download and install the latest ZAP release."""
     if not request.user.is_staff:
         return JsonResponse({'error': 'Nur Admins'}, status=403)
-    result = update_zap()
-    AuditLog.log(request, f'ZAP update: {result.get("version","?")}', project=name, success=result['ok'])
-    return JsonResponse(result)
+
+    def _run():
+        result = update_zap()
+        AuditLog.log(request, f'ZAP update: {result.get("version","?")}', project=name, success=result['ok'])
+        return result
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 @login_required
@@ -392,10 +407,15 @@ def project_zap_scan(request, name):
                 'logged_in_indicator': request.POST.get('logged_in_indicator', '').strip(),
             }
 
-    result = run_zap_scan(target_url, scan_type=scan_type, auth=auth)
     suffix = ' (authentifiziert)' if auth else ''
-    AuditLog.log(request, f'ZAP {scan_type} scan{suffix}: {hostname}', project=name, success=result['ok'])
-    return JsonResponse(result)
+
+    def _run():
+        result = run_zap_scan(target_url, scan_type=scan_type, auth=auth)
+        AuditLog.log(request, f'ZAP {scan_type} scan{suffix}: {hostname}', project=name, success=result['ok'])
+        return result
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 # Log viewer

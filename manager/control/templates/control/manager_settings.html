@@ -390,15 +390,35 @@ async function mgrSecurityScan() {
 }
 
 // ── Nuclei scan ───────────────────────────────────────────────────────────────
+// Shared async job poller (same pattern as project_detail.html)
+async function mgrPollJob(jobId, onTick) {
+  const base = '{% url "job_poll" "REPLACEME" %}'.replace('REPLACEME', jobId);
+  const t0 = Date.now();
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000));
+    const pr = await fetch(base);
+    if (!pr.ok) throw new Error(`Poll HTTP ${pr.status}`);
+    const pd = await pr.json();
+    if (pd.status === 'done')  return pd.result;
+    if (pd.status === 'error') throw new Error(pd.result?.error || 'Unbekannter Fehler');
+    if (onTick) onTick(Math.round((Date.now() - t0) / 1000));
+  }
+}
+
 async function mgrNucleiScan(host) {
   const loading = document.getElementById('mgr-nuclei-loading');
   const output  = document.getElementById('mgr-nuclei-output');
   loading.classList.remove('d-none');
+  loading.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Nuclei läuft… <span id="mgr-nuclei-elapsed"></span>';
   output.innerHTML = '';
   try {
     const r = await fetch(`{% url "manager_nuclei_scan" %}?target=${encodeURIComponent(host)}`);
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
-    const d = await r.json();
+    const start = await r.json();
+    const d = await mgrPollJob(start.job_id, s => {
+      const el = document.getElementById('mgr-nuclei-elapsed');
+      if (el) el.textContent = `(${s}s)`;
+    });
     loading.classList.add('d-none');
     _mgrScanResults.nuclei = d;
     document.getElementById('mgr-report-btn')?.removeAttribute('disabled');
@@ -433,10 +453,13 @@ async function mgrUpdateNuclei() {
   try {
     const fd = new FormData(); fd.append('csrfmiddlewaretoken', _csrfToken());
     const r = await fetch('{% url "manager_nuclei_update" %}', {method:'POST', body:fd});
-    const d = await r.json();
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}`); }
+    const start = await r.json();
+    if (msg) msg.textContent = 'Installiere… (läuft im Hintergrund)';
+    const d = await mgrPollJob(start.job_id, s => { if (msg) msg.textContent = `Installiere… ${s}s`; });
     if (d.ok) { document.getElementById('mgr-nuclei-version-badge').textContent=`v${d.version}`; bar.classList.add('d-none'); }
-    else { msg.textContent=d.error; if(btn){btn.disabled=false;btn.innerHTML='Retry';} }
-  } catch(e) { msg.textContent=`Fehler: ${e.message}`; if(btn)btn.disabled=false; }
+    else { if(msg)msg.textContent=d.error; if(btn){btn.disabled=false;btn.innerHTML='Retry';} }
+  } catch(e) { if(msg)msg.textContent=`Fehler: ${e.message}`; if(btn)btn.disabled=false; }
 }
 
 // ── ZAP scan ──────────────────────────────────────────────────────────────────
@@ -444,6 +467,7 @@ async function mgrZapScan(host, scanType) {
   const loading = document.getElementById('mgr-zap-loading');
   const output  = document.getElementById('mgr-zap-output');
   loading.classList.remove('d-none');
+  loading.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>ZAP läuft… Spider + Passiv-Scan kann 2–5 Minuten dauern. <span id="mgr-zap-elapsed"></span>';
   output.innerHTML = '';
   try {
     const loginUrl = document.getElementById('mgr-zap-login-url')?.value.trim()||'';
@@ -466,7 +490,11 @@ async function mgrZapScan(host, scanType) {
       r = await fetch(`${baseUrl}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`);
     }
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
-    const d = await r.json();
+    const start = await r.json();
+    const d = await mgrPollJob(start.job_id, s => {
+      const el = document.getElementById('mgr-zap-elapsed');
+      if (el) el.textContent = `(${s}s)`;
+    });
     loading.classList.add('d-none');
     _mgrScanResults.zap = d;
     document.getElementById('mgr-report-btn')?.removeAttribute('disabled');
@@ -505,10 +533,13 @@ async function mgrUpdateZap() {
   try {
     const fd = new FormData(); fd.append('csrfmiddlewaretoken', _csrfToken());
     const r = await fetch('{% url "manager_zap_update" %}', {method:'POST', body:fd});
-    const d = await r.json();
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}`); }
+    const start = await r.json();
+    if (msg) msg.textContent = 'Installiere… (läuft im Hintergrund)';
+    const d = await mgrPollJob(start.job_id, s => { if (msg) msg.textContent = `Installiere… ${s}s (~200 MB)`; });
     if (d.ok) { document.getElementById('mgr-zap-version-badge').textContent=`v${d.version}`; bar.classList.add('d-none'); }
-    else { msg.textContent=d.error; if(btn){btn.disabled=false;btn.innerHTML='Retry';} }
-  } catch(e) { msg.textContent=`Fehler: ${e.message}`; if(btn)btn.disabled=false; }
+    else { if(msg)msg.textContent=d.error; if(btn){btn.disabled=false;btn.innerHTML='Retry';} }
+  } catch(e) { if(msg)msg.textContent=`Fehler: ${e.message}`; if(btn)btn.disabled=false; }
 }
 
 // ── Pip outdated ──────────────────────────────────────────────────────────────
