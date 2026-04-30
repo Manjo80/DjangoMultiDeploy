@@ -1758,6 +1758,21 @@ const SEV_LABEL = {critical:'KRITISCH', high:'HOCH', medium:'MITTEL', low:'NIEDR
   } catch(e) {}
 })();
 
+// Shared async job poller — polls /jobs/<id>/ every 2s until done/error
+async function pollJob(jobId, onTick) {
+  const base = '{% url "job_poll" "REPLACEME" %}'.replace('REPLACEME', jobId);
+  const t0 = Date.now();
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000));
+    const pr = await fetch(base);
+    if (!pr.ok) throw new Error(`Poll HTTP ${pr.status}`);
+    const pd = await pr.json();
+    if (pd.status === 'done')  return pd.result;
+    if (pd.status === 'error') throw new Error(pd.result?.error || 'Unbekannter Fehler');
+    if (onTick) onTick(Math.round((Date.now() - t0) / 1000));
+  }
+}
+
 async function updateNuclei() {
   const bar = document.getElementById('nuclei-update-bar');
   const msg = document.getElementById('nuclei-update-msg');
@@ -1767,16 +1782,19 @@ async function updateNuclei() {
     const fd = new FormData();
     fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
     const r = await fetch('{% url "nuclei_update" name %}', {method: 'POST', body: fd});
-    const d = await r.json();
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}`); }
+    const start = await r.json();
+    if (msg) msg.textContent = 'Installiere… (läuft im Hintergrund)';
+    const d = await pollJob(start.job_id, s => { if (msg) msg.textContent = `Installiere… ${s}s`; });
     if (d.ok) {
       document.getElementById('nuclei-version-badge').textContent = `v${d.version}`;
       bar.classList.add('d-none');
     } else {
-      msg.textContent = d.error;
+      if (msg) msg.textContent = d.error;
       if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-up-circle me-1"></i>Retry'; }
     }
   } catch(e) {
-    msg.textContent = `Fehler: ${e.message}`;
+    if (msg) msg.textContent = `Fehler: ${e.message}`;
     if (btn) { btn.disabled = false; }
   }
 }
@@ -1785,11 +1803,16 @@ async function runNucleiScan(host) {
   const loading = document.getElementById('nuclei-loading');
   const output  = document.getElementById('nuclei-output');
   loading.classList.remove('d-none');
+  loading.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Nuclei läuft… <span id="nuclei-elapsed"></span>';
   output.innerHTML = '';
   try {
     const r = await fetch(`{% url "project_nuclei_scan" name %}?target=${encodeURIComponent(host)}`);
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status} — ${t.slice(0,200)}`); }
-    const d = await r.json();
+    const start = await r.json();
+    const d = await pollJob(start.job_id, s => {
+      const el = document.getElementById('nuclei-elapsed');
+      if (el) el.textContent = `(${s}s)`;
+    });
     loading.classList.add('d-none');
     window._scanResults = window._scanResults || {};
     window._scanResults.nuclei = d;
@@ -1861,16 +1884,19 @@ async function updateZap() {
     const fd = new FormData();
     fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
     const r = await fetch('{% url "zap_update" name %}', {method: 'POST', body: fd});
-    const d = await r.json();
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}`); }
+    const start = await r.json();
+    if (msg) msg.textContent = 'Installiere… (läuft im Hintergrund)';
+    const d = await pollJob(start.job_id, s => { if (msg) msg.textContent = `Installiere… ${s}s (~200 MB)`; });
     if (d.ok) {
       document.getElementById('zap-version-badge').textContent = `v${d.version}`;
       bar.classList.add('d-none');
     } else {
-      msg.textContent = d.error;
+      if (msg) msg.textContent = d.error;
       if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-up-circle me-1"></i>Retry'; }
     }
   } catch(e) {
-    msg.textContent = `Fehler: ${e.message}`;
+    if (msg) msg.textContent = `Fehler: ${e.message}`;
     if (btn) { btn.disabled = false; }
   }
 }
@@ -1879,16 +1905,16 @@ async function runZapScan(host, scanType) {
   const loading = document.getElementById('zap-loading');
   const output  = document.getElementById('zap-output');
   loading.classList.remove('d-none');
+  loading.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>ZAP läuft… Spider + Passiv-Scan kann 2–5 Minuten dauern. <span id="zap-elapsed"></span>';
   output.innerHTML = '';
   try {
-    // Collect optional auth credentials
     const loginUrl  = document.getElementById('zap-login-url')?.value.trim() || '';
     const username  = document.getElementById('zap-username')?.value.trim() || '';
     const password  = document.getElementById('zap-password')?.value || '';
     const useAuth   = loginUrl && username && password;
 
-    let r;
     const baseUrl = `{% url "project_zap_scan" name %}`;
+    let r;
     if (useAuth) {
       const fd = new FormData();
       fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
@@ -1905,7 +1931,11 @@ async function runZapScan(host, scanType) {
       r = await fetch(`${baseUrl}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`);
     }
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status} — ${t.slice(0,200)}`); }
-    const d = await r.json();
+    const start = await r.json();
+    const d = await pollJob(start.job_id, s => {
+      const el = document.getElementById('zap-elapsed');
+      if (el) el.textContent = `(${s}s)`;
+    });
     loading.classList.add('d-none');
     window._scanResults = window._scanResults || {};
     window._scanResults.zap = d;

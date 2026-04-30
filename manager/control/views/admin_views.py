@@ -25,6 +25,7 @@ from ..utils import (
     run_nuclei_scan, nuclei_version_info, update_nuclei,
     run_zap_scan, zap_version_info, update_zap,
     run_bandit,
+    start_job, get_job,
 )
 from ._helpers import admin_required, operator_required, _check_project_access
 
@@ -589,6 +590,21 @@ def _manager_scan_hosts():
     return result
 
 
+# ── Background job poll (shared by all async scan/update views) ───────────────
+
+@login_required
+def job_poll_view(request, job_id):
+    """Return current status of a background job."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    state = get_job(job_id)
+    if state is None:
+        return JsonResponse({'error': 'Job nicht gefunden'}, status=404)
+    return JsonResponse(state)
+
+
+# ── Manager Nuclei ────────────────────────────────────────────────────────────
+
 @login_required
 def manager_nuclei_scan(request):
     if not request.user.is_staff:
@@ -602,9 +618,15 @@ def manager_nuclei_scan(request):
         url_host = f'[{hostname}]' if isinstance(addr, _ipa.IPv6Address) else hostname
     except ValueError:
         url_host = hostname
-    result = run_nuclei_scan(f'https://{url_host}')
-    AuditLog.log(request, f'Manager nuclei scan: {hostname}', success=result['ok'])
-    return JsonResponse(result)
+    target_url = f'https://{url_host}'
+
+    def _run():
+        result = run_nuclei_scan(target_url)
+        AuditLog.log(request, f'Manager nuclei scan: {hostname}', success=result['ok'])
+        return result
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 @login_required
@@ -617,10 +639,16 @@ def manager_nuclei_version(request):
 @require_POST
 @admin_required
 def manager_nuclei_update(request):
-    result = update_nuclei()
-    AuditLog.log(request, f'Manager nuclei update: {result.get("version","?")}', success=result['ok'])
-    return JsonResponse(result)
+    def _run():
+        result = update_nuclei()
+        AuditLog.log(request, f'Manager nuclei update: {result.get("version","?")}', success=result['ok'])
+        return result
 
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
+
+
+# ── Manager ZAP ───────────────────────────────────────────────────────────────
 
 @login_required
 def manager_zap_scan(request):
@@ -652,10 +680,16 @@ def manager_zap_scan(request):
                 'password':            password,
                 'logged_in_indicator': request.POST.get('logged_in_indicator', '').strip(),
             }
-    result = run_zap_scan(f'https://{url_host}', scan_type=scan_type, auth=auth)
+    target_url = f'https://{url_host}'
     suffix = ' (auth)' if auth else ''
-    AuditLog.log(request, f'Manager ZAP {scan_type}{suffix}: {hostname}', success=result['ok'])
-    return JsonResponse(result)
+
+    def _run():
+        result = run_zap_scan(target_url, scan_type=scan_type, auth=auth)
+        AuditLog.log(request, f'Manager ZAP {scan_type}{suffix}: {hostname}', success=result['ok'])
+        return result
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 @login_required
@@ -668,8 +702,12 @@ def manager_zap_version(request):
 @require_POST
 @admin_required
 def manager_zap_update(request):
-    result = update_zap()
-    AuditLog.log(request, f'Manager ZAP update: {result.get("version","?")}', success=result['ok'])
-    return JsonResponse(result)
+    def _run():
+        result = update_zap()
+        AuditLog.log(request, f'Manager ZAP update: {result.get("version","?")}', success=result['ok'])
+        return result
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 

@@ -91,6 +91,8 @@ from .scanning import (
     update_zap,
 )
 
+from .jobs import start_job, get_job
+
 __all__ = [
     # registry
     '_parse_conf', 'get_all_projects', 'get_project', 'get_service_status',
