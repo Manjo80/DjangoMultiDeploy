@@ -363,16 +363,16 @@ async function mgrSecurityScan() {
     loading.classList.add('d-none');
     output.classList.remove('d-none');
     let html = '';
-    const pip = d.pip_audit || [];
+    const pip = d.pip_audit?.vulnerabilities || [];
     if (pip.length === 0) {
       html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>pip-audit: keine bekannten Schwachstellen</div>';
     } else {
       html += `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>pip-audit: ${pip.length} Schwachstelle(n)</div>`;
       html += '<div class="table-responsive"><table class="table table-sm table-dark small mb-2"><thead><tr><th>Paket</th><th>Version</th><th>CVE</th></tr></thead><tbody>';
-      pip.forEach(p => { html += `<tr><td>${p.name}</td><td>${p.version}</td><td>${p.id}</td></tr>`; });
+      pip.forEach(p => { html += `<tr><td>${p.package}</td><td>${p.version}</td><td>${p.id}</td></tr>`; });
       html += '</tbody></table></div>';
     }
-    const dep = d.deploy_check || [];
+    const dep = d.deploy_check?.issues || [];
     if (dep.length === 0) {
       html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Django deploy check: keine Warnungen</div>';
     } else {

@@ -1016,26 +1016,13 @@ def run_nuclei_scan(target_url, templates=None):
     Run a passive nuclei scan against target_url.
     Returns {'ok': bool, 'findings': [...], 'installed': bool, 'error': str}
     """
-    try:
-        installed = os.path.exists(NUCLEI_BIN)
-    except Exception:
-        installed = False
+    installed = os.path.exists(NUCLEI_BIN)
     if not installed:
-        try:
-            installed = _install_nuclei()
-        except Exception as _ie:
-            logger.error('nuclei install exception: %s', _ie)
-            installed = False
-        if not installed:
-            return {'ok': False, 'findings': [], 'installed': False,
-                    'error': (
-                        'nuclei konnte nicht automatisch installiert werden. '
-                        'Falls der Server kein GitHub-Zugang hat: auf dem Proxmox-Host ausführen: '
-                        'curl -fsSL https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_linux_amd64.zip '
-                        '-o /tmp/n.zip && unzip -o /tmp/n.zip nuclei -d /tmp/nb && '
-                        'pct push <LXC-ID> /tmp/nb/nuclei /usr/local/bin/nuclei && '
-                        'pct exec <LXC-ID> -- chmod +x /usr/local/bin/nuclei'
-                    )}
+        return {'ok': False, 'findings': [], 'installed': False,
+                'error': (
+                    'nuclei ist nicht installiert. '
+                    'Bitte den "Jetzt updaten" Button verwenden um nuclei zu installieren.'
+                )}
 
     _ensure_nuclei_templates()
 
