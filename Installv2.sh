@@ -2991,7 +2991,7 @@ if [ -f "/etc/nginx/sites-available/djmanager" ] && [ -f "\$_ENV_FILE_NG" ]; the
     printf '        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;\n'
     printf '        proxy_set_header X-Forwarded-Proto https;\n'
     printf '        proxy_connect_timeout 30s;\n'
-    printf '        proxy_read_timeout 300s;\n'
+    printf '        proxy_read_timeout 420s;\n'
     printf '    }\n}\n'
     if [ -n "\${_NG_DOMAIN:-}" ]; then
       printf '# Unbekannte Domains abweisen (verhindert DisallowedHost an Django)\n'
@@ -3090,7 +3090,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind ${_MGR_DEFAULT_IP}:${_MANAGER_PORT} --workers 1 --timeout 120
+ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind ${_MGR_DEFAULT_IP}:${_MANAGER_PORT} --workers 1 --timeout 360
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
