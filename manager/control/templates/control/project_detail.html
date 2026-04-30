@@ -2426,7 +2426,10 @@ ${nginxContent ? `<h2>nginx Konfiguration</h2>
     try {
       const fd = new FormData();
       fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
-      fd.append('content', ta.value);
+      // Strip iOS Safari URL auto-link: <http://...> → http://...
+      const cleanedContent = ta.value.replace(/<(https?:\/\/[^>\s]+)>/g, '$1');
+      if (cleanedContent !== ta.value) ta.value = cleanedContent;
+      fd.append('content', cleanedContent);
       const r = await fetch(NGINX_URL, { method: 'POST', body: fd });
       const d = await r.json();
       if (d.ok) {
