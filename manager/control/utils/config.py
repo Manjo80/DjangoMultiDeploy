@@ -137,6 +137,88 @@ def update_allowed_hosts(name, hosts):
     return True, ' | '.join(msgs)
 
 
+# ── nginx config editor ────────────────────────────────────────────────────────
+
+_NGINX_SITES = '/etc/nginx/sites-available'
+
+_CSP_DEFAULT = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data: https://cdn.jsdelivr.net; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
+)
+
+
+def get_project_nginx_config(name):
+    """
+    Read the nginx sites-available config for project `name`.
+    Returns (content: str, error: str|None).
+    """
+    path = os.path.join(_NGINX_SITES, name)
+    if not os.path.exists(path):
+        return '', f'Keine nginx-Konfiguration gefunden: {path}'
+    try:
+        with open(path) as f:
+            return f.read(), None
+    except OSError as e:
+        return '', str(e)
+
+
+def save_project_nginx_config(name, content):
+    """
+    Validate + save nginx config for project `name`.
+    - Backs up the old config before writing.
+    - Runs `nginx -t` — if it fails, restores the backup.
+    - Reloads nginx on success.
+    Returns (ok: bool, message: str).
+    """
+    import shutil
+    path = os.path.join(_NGINX_SITES, name)
+    backup = path + '.bak'
+
+    if not os.path.exists(path):
+        return False, f'Konfigurationsdatei nicht gefunden: {path}'
+
+    # Basic safety check — must still be a server block
+    if 'server {' not in content and 'server{' not in content:
+        return False, 'Ungültig: "server {" Block fehlt — Konfiguration nicht gespeichert.'
+
+    # Backup
+    try:
+        shutil.copy2(path, backup)
+    except OSError as e:
+        return False, f'Backup fehlgeschlagen: {e}'
+
+    # Write new config
+    try:
+        with open(path, 'w') as f:
+            f.write(content)
+    except OSError as e:
+        return False, f'Schreiben fehlgeschlagen: {e}'
+
+    # Validate
+    try:
+        r = subprocess.run(['nginx', '-t'], capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            # Restore backup
+            shutil.copy2(backup, path)
+            err = (r.stderr or r.stdout).strip()
+            return False, f'nginx -t fehlgeschlagen — alte Konfiguration wiederhergestellt:\n{err}'
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        shutil.copy2(backup, path)
+        return False, f'nginx -t konnte nicht ausgeführt werden: {e}'
+
+    # Reload
+    try:
+        subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, timeout=15)
+    except Exception as e:
+        return True, f'Gespeichert — nginx reload: {e}'
+
+    return True, 'nginx-Konfiguration gespeichert und nginx neu geladen.'
+
+
 def sync_env_to_conf(name, env_content):
     """
     Parse MODE and DEBUG from .env content and write them back into

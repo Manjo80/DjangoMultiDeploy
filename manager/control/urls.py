@@ -46,6 +46,7 @@ urlpatterns = [
     path('project/<str:name>/pip-upgrade/', views.project_pip_upgrade, name='project_pip_upgrade'),
     path('project/<str:name>/clone/', views.project_clone_form, name='project_clone_form'),
     path('project/<str:name>/clone/run/', views.project_clone_run, name='project_clone_run'),
+    path('project/<str:name>/nginx/', views.project_nginx_config, name='project_nginx_config'),
     path('project/<str:name>/logs/', views.log_viewer, name='log_viewer'),
     path('project/<str:name>/reset/', views.reset_confirm, name='reset_confirm'),
     path('project/<str:name>/reset/run/', views.reset_run, name='reset_run'),
