@@ -278,7 +278,7 @@ const MGR_RISK_LABEL = {High:'HOCH',Medium:'MITTEL',Low:'NIEDRIG',Informational:
 const _mgrScanResults = {};
 
 function _csrfToken() {
-  return document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+  return '{{ csrf_token }}';
 }
 
 // ── Version checks on load ────────────────────────────────────────────────────

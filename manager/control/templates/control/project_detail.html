@@ -1821,7 +1821,7 @@ async function updateNuclei() {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Installiere…'; }
   try {
     const fd = new FormData();
-    fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+    fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
     const r = await fetch('{% url "nuclei_update" name %}', {method: 'POST', body: fd});
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}`); }
     const start = await r.json();
@@ -1923,7 +1923,7 @@ async function updateZap() {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Installiere… (~200 MB)'; }
   try {
     const fd = new FormData();
-    fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+    fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
     const r = await fetch('{% url "zap_update" name %}', {method: 'POST', body: fd});
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}`); }
     const start = await r.json();
@@ -1958,7 +1958,7 @@ async function runZapScan(host, scanType) {
     let r;
     if (useAuth) {
       const fd = new FormData();
-      fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+      fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
       fd.append('target', host);
       fd.append('type', scanType);
       fd.append('login_url', loginUrl);
@@ -2425,7 +2425,7 @@ ${nginxContent ? `<h2>nginx Konfiguration</h2>
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Speichere…'; }
     try {
       const fd = new FormData();
-      fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+      fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
       fd.append('content', ta.value);
       const r = await fetch(NGINX_URL, { method: 'POST', body: fd });
       const d = await r.json();
