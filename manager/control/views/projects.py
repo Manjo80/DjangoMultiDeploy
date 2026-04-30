@@ -38,6 +38,7 @@ from ..utils import (
     reset_project,
     remove_project,
     start_job,
+    get_project_nginx_config, save_project_nginx_config, _CSP_DEFAULT,
 )
 from ._helpers import (
     admin_required, operator_required, _get_role,
@@ -103,6 +104,31 @@ def project_allowed_hosts(request, name):
     AuditLog.log(request, f'ALLOWED_HOSTS geändert', project=name,
                  details=f'Aktion: {action}', success=ok)
     return JsonResponse({'ok': ok, 'message': msg, 'hosts': current})
+
+
+@login_required
+def project_nginx_config(request, name):
+    """Read (GET) or save (POST) the nginx sites-available config for a project."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Nur Admins'}, status=403)
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+
+    if request.method == 'POST':
+        content = request.POST.get('content', '')
+        if not content.strip():
+            return JsonResponse({'ok': False, 'error': 'Inhalt darf nicht leer sein'})
+        ok, msg = save_project_nginx_config(name, content)
+        if ok:
+            AuditLog.log(request, 'nginx config gespeichert', project=name, success=True)
+        return JsonResponse({'ok': ok, 'message': msg})
+
+    content, error = get_project_nginx_config(name)
+    return JsonResponse({
+        'content': content,
+        'error': error,
+        'csp_default': _CSP_DEFAULT,
+    })
 
 
 @require_POST

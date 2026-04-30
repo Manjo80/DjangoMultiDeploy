@@ -402,6 +402,47 @@
     </div>
   </div>
 
+  {% if request.user.is_staff %}
+  <!-- nginx Config Editor (admin only) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#nginx-editor-body">
+        <span><i class="bi bi-file-earmark-code me-1"></i>nginx Konfiguration</span>
+        <span class="text-muted small">Security Headers, CSP, Rewrites — <i class="bi bi-chevron-down"></i></span>
+      </div>
+      <div id="nginx-editor-body" class="collapse">
+        <div class="card-body p-3">
+          <div id="nginx-editor-info" class="alert alert-info small d-none"></div>
+          <div id="nginx-editor-error" class="alert alert-danger small d-none"></div>
+
+          <div class="d-flex gap-2 mb-2 flex-wrap">
+            <button class="btn btn-sm btn-outline-secondary" data-action="nginxLoad">
+              <i class="bi bi-arrow-clockwise me-1"></i>Laden
+            </button>
+            <button class="btn btn-sm btn-outline-warning" id="nginx-csp-btn" data-action="nginxAddCsp" disabled>
+              <i class="bi bi-shield-plus me-1"></i>CSP Header hinzufügen
+            </button>
+            <button class="btn btn-sm btn-outline-success ms-auto" id="nginx-save-btn" data-action="nginxSave" disabled>
+              <i class="bi bi-floppy me-1"></i>Speichern &amp; nginx neu laden
+            </button>
+          </div>
+
+          <div class="text-muted small mb-2">
+            <i class="bi bi-info-circle me-1"></i>
+            Syntax wird vor dem Speichern mit <code>nginx -t</code> geprüft. Bei Fehler wird die alte Konfiguration automatisch wiederhergestellt.
+          </div>
+
+          <textarea id="nginx-config-editor"
+            class="form-control font-monospace bg-dark text-light border-secondary"
+            rows="22" spellcheck="false"
+            placeholder="Konfiguration wird geladen…"
+            style="font-size:.8rem;resize:vertical"></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Sicherheitsscan (pip-audit + Deploy + HTTP/TLS) -->
   <div class="col-12">
     <div class="card">
@@ -2155,6 +2196,9 @@ document.addEventListener('click', function (e) {
     case 'upgradePkg':            upgradePkg(el.dataset.pkg, el); break;
     case 'downloadReport':        downloadReport(window._lastScanData); break;
     case 'downloadScanReport':    downloadScanReport(); break;
+    case 'nginxLoad':             nginxLoad(); break;
+    case 'nginxSave':             nginxSave(); break;
+    case 'nginxAddCsp':           nginxAddCsp(); break;
     case 'copyToClipboard': {
       e.preventDefault();
       const target = document.getElementById(el.dataset.target);
@@ -2307,6 +2351,112 @@ ${zapSection(results.zap)}
   a.click();
   URL.revokeObjectURL(a.href);
 }
+</script>
+
+{% if request.user.is_staff %}
+<!-- nginx Config Editor JS -->
+<script nonce="{{ csp_nonce }}">
+(function() {
+  const NGINX_URL = '{% url "project_nginx_config" name %}';
+  const editor    = () => document.getElementById('nginx-config-editor');
+  const saveBtn   = () => document.getElementById('nginx-save-btn');
+  const cspBtn    = () => document.getElementById('nginx-csp-btn');
+  const infoEl    = () => document.getElementById('nginx-editor-info');
+  const errEl     = () => document.getElementById('nginx-editor-error');
+
+  let _cspDefault = '';
+
+  function showInfo(msg) {
+    const el = infoEl(); if (!el) return;
+    el.textContent = msg; el.classList.remove('d-none');
+    setTimeout(() => el.classList.add('d-none'), 5000);
+  }
+  function showErr(msg) {
+    const el = errEl(); if (!el) return;
+    el.textContent = msg; el.classList.remove('d-none');
+  }
+  function clearErr() { errEl()?.classList.add('d-none'); }
+
+  window.nginxLoad = async function() {
+    clearErr();
+    const ta = editor(); if (!ta) return;
+    ta.value = 'Lade…'; ta.disabled = true;
+    try {
+      const r = await fetch(NGINX_URL);
+      const d = await r.json();
+      if (d.error) { showErr(d.error); ta.value = ''; return; }
+      ta.value = d.content;
+      _cspDefault = d.csp_default || '';
+      ta.disabled = false;
+      saveBtn()?.removeAttribute('disabled');
+      // Show CSP button only if CSP is missing
+      if (_cspDefault && !d.content.includes('Content-Security-Policy')) {
+        cspBtn()?.removeAttribute('disabled');
+      } else {
+        cspBtn()?.setAttribute('disabled', '');
+      }
+      showInfo('Konfiguration geladen.');
+    } catch(e) {
+      showErr('Fehler beim Laden: ' + e.message);
+      ta.disabled = false;
+    }
+  };
+
+  window.nginxSave = async function() {
+    clearErr();
+    const ta = editor(); if (!ta) return;
+    const btn = saveBtn();
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Speichere…'; }
+    try {
+      const fd = new FormData();
+      fd.append('csrfmiddlewaretoken', document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '');
+      fd.append('content', ta.value);
+      const r = await fetch(NGINX_URL, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.ok) {
+        showInfo('✓ ' + d.message);
+        // Re-check if CSP now present
+        if (!ta.value.includes('Content-Security-Policy')) {
+          cspBtn()?.removeAttribute('disabled');
+        } else {
+          cspBtn()?.setAttribute('disabled', '');
+        }
+      } else {
+        showErr(d.error || d.message);
+      }
+    } catch(e) {
+      showErr('Fehler beim Speichern: ' + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-floppy me-1"></i>Speichern & nginx neu laden'; }
+    }
+  };
+
+  window.nginxAddCsp = function() {
+    const ta = editor(); if (!ta || !_cspDefault) return;
+    const cspLine = `    add_header Content-Security-Policy "${_cspDefault}" always;`;
+    // Insert after last existing add_header line, or before closing }
+    const lines = ta.value.split('\n');
+    let insertIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].trim().startsWith('add_header')) { insertIdx = i; break; }
+    }
+    if (insertIdx >= 0) {
+      lines.splice(insertIdx + 1, 0, cspLine);
+    } else {
+      // Fallback: insert before last closing }
+      const lastBrace = lines.lastIndexOf('}');
+      lines.splice(lastBrace > 0 ? lastBrace : lines.length, 0, cspLine);
+    }
+    ta.value = lines.join('\n');
+    cspBtn()?.setAttribute('disabled', '');
+    showInfo('CSP Header eingefügt — bitte mit "Speichern" übernehmen.');
+  };
+
+  // Auto-load when card is expanded for the first time
+  document.getElementById('nginx-editor-body')?.addEventListener('shown.bs.collapse', function() {
+    if (editor()?.value === '') nginxLoad();
+  }, { once: true });
+})();
 </script>
 {% endif %}
 {% endblock %}
