@@ -131,6 +131,54 @@ def project_nginx_config(request, name):
     })
 
 
+@login_required
+def project_config_export(request, name):
+    """
+    Return .env (secrets masked) + nginx config as JSON for inclusion in scan report.
+    Admin only — never logs this view to avoid leaking sensitive keys via audit trail.
+    """
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Nur Admins'}, status=403)
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+
+    conf   = get_project(name)
+    appdir = conf.get('APPDIR', f'/srv/{name}') if conf else f'/srv/{name}'
+
+    import re as _re
+
+    # Mask secret values: KEY=value, PASSWORD=value, SECRET=value, TOKEN=value
+    _SECRET_RE = _re.compile(
+        r'^(\s*(?:[A-Z_]*(?:PASSWORD|SECRET|TOKEN|AUTH_KEY|PRIVATE_KEY|API_KEY|DB_PASS|PASS)[A-Z_]*)\s*=\s*)(.+)$',
+        _re.IGNORECASE | _re.MULTILINE,
+    )
+
+    def mask(text):
+        return _SECRET_RE.sub(r'\1xxxx', text)
+
+    # .env
+    env_path = os.path.join(appdir, '.env')
+    try:
+        with open(env_path) as f:
+            env_content = mask(f.read())
+        env_error = None
+    except OSError as e:
+        env_content = ''
+        env_error = str(e)
+
+    # nginx config (no secrets expected but mask just in case)
+    nginx_content, nginx_error = get_project_nginx_config(name)
+    if nginx_content:
+        nginx_content = mask(nginx_content)
+
+    return JsonResponse({
+        'env':          env_content,
+        'env_error':    env_error,
+        'nginx':        nginx_content,
+        'nginx_error':  nginx_error,
+    })
+
+
 @require_POST
 @operator_required
 def project_action(request, name):
