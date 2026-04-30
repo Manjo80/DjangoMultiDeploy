@@ -2219,10 +2219,21 @@ document.getElementById('new-host-input')?.addEventListener('keydown', function 
 
 <!-- Scan-Report Download JS -->
 <script nonce="{{ csp_nonce }}">
-function downloadScanReport() {
+async function downloadScanReport() {
   const results = window._scanResults || {};
   const project = '{{ name }}';
   const now = new Date().toLocaleString('de-DE');
+
+  // Fetch .env + nginx config with secrets masked
+  let envContent = '', nginxContent = '';
+  try {
+    const cr = await fetch('{% url "project_config_export" name %}');
+    if (cr.ok) {
+      const cd = await cr.json();
+      envContent   = cd.env   || (cd.env_error   ? `Fehler: ${cd.env_error}`   : '');
+      nginxContent = cd.nginx || (cd.nginx_error ? `Fehler: ${cd.nginx_error}` : '');
+    }
+  } catch(e) { /* config export optional */ }
 
   const riskColor = {High:'#dc3545', Medium:'#ffc107', Low:'#17a2b8', Informational:'#6c757d'};
   const sevColor  = {critical:'#dc3545', high:'#dc3545', medium:'#ffc107', low:'#17a2b8', info:'#6c757d'};
@@ -2342,6 +2353,10 @@ ${securitySection(results.security)}
 ${nucleiSection(results.nuclei)}
 <h2>OWASP ZAP — Web Application Scanner</h2>
 ${zapSection(results.zap)}
+${envContent ? `<h2>.env Konfiguration <small style="color:#888;font-size:13px">(Passwörter durch xxxx ersetzt)</small></h2>
+<pre style="background:#111;color:#ccc;padding:12px;border-radius:4px;font-size:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-all">${esc(envContent)}</pre>` : ''}
+${nginxContent ? `<h2>nginx Konfiguration</h2>
+<pre style="background:#111;color:#ccc;padding:12px;border-radius:4px;font-size:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-all">${esc(nginxContent)}</pre>` : ''}
 </body></html>`;
 
   const blob = new Blob([html], {type: 'text/html'});
