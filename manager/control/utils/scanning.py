@@ -812,63 +812,75 @@ NUCLEI_SAFE_TEMPLATES = [
 def _install_nuclei():
     """Install nuclei binary — tries system package managers first, then GitHub release."""
     # 1. Check if already in PATH at a different location
-    sys_bin = _shutil.which('nuclei')
-    if sys_bin:
-        try:
-            _shutil.copy2(sys_bin, NUCLEI_BIN)
-            os.chmod(NUCLEI_BIN, 0o755)
-            return True
-        except Exception:
-            return True  # already usable at sys_bin, caller checks NUCLEI_BIN path
-
-    # 2. Try apt (nuclei not in standard repos, but worth a try)
-    if _shutil.which('apt-get'):
-        r = _subprocess.run(
-            ['apt-get', 'install', '-y', '--no-install-recommends', 'nuclei'],
-            capture_output=True, timeout=60,
-        )
-        if r.returncode == 0 and _shutil.which('nuclei'):
+    try:
+        sys_bin = _shutil.which('nuclei')
+        if sys_bin:
             try:
-                _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
+                _shutil.copy2(sys_bin, NUCLEI_BIN)
                 os.chmod(NUCLEI_BIN, 0o755)
             except Exception:
                 pass
             return True
+    except Exception:
+        pass
+
+    # 2. Try apt
+    try:
+        if _shutil.which('apt-get'):
+            r = _subprocess.run(
+                ['apt-get', 'install', '-y', '--no-install-recommends', 'nuclei'],
+                capture_output=True, timeout=60,
+            )
+            if r.returncode == 0 and _shutil.which('nuclei'):
+                try:
+                    _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
+                    os.chmod(NUCLEI_BIN, 0o755)
+                except Exception:
+                    pass
+                return True
+    except Exception:
+        pass
 
     # 3. Try via Go (apt install golang-go + go install)
-    go_bin = _shutil.which('go')
-    if not go_bin and _shutil.which('apt-get'):
-        _subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'golang-go'],
-                        capture_output=True, timeout=120)
+    try:
         go_bin = _shutil.which('go')
-    if go_bin:
-        go_env = os.environ.copy()
-        go_env.setdefault('GOPATH', '/root/go')
-        go_env['PATH'] = go_env['PATH'] + ':/root/go/bin:/usr/local/go/bin'
-        r = _subprocess.run(
-            [go_bin, 'install', 'github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'],
-            capture_output=True, timeout=300, env=go_env,
-        )
-        if r.returncode == 0:
-            for candidate in ('/root/go/bin/nuclei', '/usr/local/go/bin/nuclei'):
-                if os.path.exists(candidate):
-                    _shutil.copy2(candidate, NUCLEI_BIN)
-                    os.chmod(NUCLEI_BIN, 0o755)
-                    return True
+        if not go_bin and _shutil.which('apt-get'):
+            _subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'golang-go'],
+                            capture_output=True, timeout=120)
+            go_bin = _shutil.which('go')
+        if go_bin:
+            go_env = os.environ.copy()
+            go_env.setdefault('GOPATH', '/root/go')
+            go_env['PATH'] = go_env['PATH'] + ':/root/go/bin:/usr/local/go/bin'
+            r = _subprocess.run(
+                [go_bin, 'install', 'github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'],
+                capture_output=True, timeout=300, env=go_env,
+            )
+            if r.returncode == 0:
+                for candidate in ('/root/go/bin/nuclei', '/usr/local/go/bin/nuclei'):
+                    if os.path.exists(candidate):
+                        _shutil.copy2(candidate, NUCLEI_BIN)
+                        os.chmod(NUCLEI_BIN, 0o755)
+                        return True
+    except Exception:
+        pass
 
     # 4. Try snap
-    if _shutil.which('snap'):
-        r = _subprocess.run(
-            ['snap', 'install', 'nuclei', '--classic'],
-            capture_output=True, timeout=120,
-        )
-        if r.returncode == 0 and _shutil.which('nuclei'):
-            try:
-                _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
-                os.chmod(NUCLEI_BIN, 0o755)
-            except Exception:
-                pass
-            return True
+    try:
+        if _shutil.which('snap'):
+            r = _subprocess.run(
+                ['snap', 'install', 'nuclei', '--classic'],
+                capture_output=True, timeout=120,
+            )
+            if r.returncode == 0 and _shutil.which('nuclei'):
+                try:
+                    _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
+                    os.chmod(NUCLEI_BIN, 0o755)
+                except Exception:
+                    pass
+                return True
+    except Exception:
+        pass
 
     # 5. GitHub release download (needs internet) — v3.x uses nuclei_VERSION_linux_ARCH.zip
     arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm', 'i386': '386', 'i686': '386'}
@@ -1004,9 +1016,16 @@ def run_nuclei_scan(target_url, templates=None):
     Run a passive nuclei scan against target_url.
     Returns {'ok': bool, 'findings': [...], 'installed': bool, 'error': str}
     """
-    installed = os.path.exists(NUCLEI_BIN)
+    try:
+        installed = os.path.exists(NUCLEI_BIN)
+    except Exception:
+        installed = False
     if not installed:
-        installed = _install_nuclei()
+        try:
+            installed = _install_nuclei()
+        except Exception as _ie:
+            logger.error('nuclei install exception: %s', _ie)
+            installed = False
         if not installed:
             return {'ok': False, 'findings': [], 'installed': False,
                     'error': (

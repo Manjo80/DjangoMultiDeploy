@@ -1788,6 +1788,7 @@ async function runNucleiScan(host) {
   output.innerHTML = '';
   try {
     const r = await fetch(`{% url "project_nuclei_scan" name %}?target=${encodeURIComponent(host)}`);
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status} — ${t.slice(0,200)}`); }
     const d = await r.json();
     loading.classList.add('d-none');
     window._scanResults = window._scanResults || {};
@@ -1903,6 +1904,7 @@ async function runZapScan(host, scanType) {
     } else {
       r = await fetch(`${baseUrl}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`);
     }
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status} — ${t.slice(0,200)}`); }
     const d = await r.json();
     loading.classList.add('d-none');
     window._scanResults = window._scanResults || {};

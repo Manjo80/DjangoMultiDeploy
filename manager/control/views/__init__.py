@@ -9,6 +9,8 @@ from .admin_views import (
     manager_env_view, project_env_view, firewall_view,
     manager_action, manager_update, manager_security_scan, manager_http_scan,
     manager_pip_outdated, manager_pip_upgrade_view,
+    manager_nuclei_scan, manager_nuclei_version, manager_nuclei_update,
+    manager_zap_scan, manager_zap_version, manager_zap_update,
 )
 from .dashboard import dashboard
 from .install import (
@@ -45,6 +47,8 @@ __all__ = [
     'manager_env_view', 'project_env_view', 'firewall_view',
     'manager_action', 'manager_update', 'manager_security_scan', 'manager_http_scan',
     'manager_pip_outdated', 'manager_pip_upgrade_view',
+    'manager_nuclei_scan', 'manager_nuclei_version', 'manager_nuclei_update',
+    'manager_zap_scan', 'manager_zap_version', 'manager_zap_update',
     # dashboard
     'dashboard',
     # install

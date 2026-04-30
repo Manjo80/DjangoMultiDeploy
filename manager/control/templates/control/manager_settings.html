@@ -1,14 +1,14 @@
 {% extends "control/base.html" %}
-{% block title %}Allowed Hosts — DjangoMultiDeploy{% endblock %}
+{% block title %}Manager — Einstellungen{% endblock %}
 {% block content %}
-<div class="row">
-<div class="col-lg-8">
-
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Manager — Allowed Hosts</h4>
+  <h4 class="mb-0"><i class="bi bi-hdd-network me-2"></i>djmanager — Einstellungen</h4>
   <div class="d-flex gap-2">
     <a href="{% url 'manager_env' %}" class="btn btn-outline-warning btn-sm">
-      <i class="bi bi-file-earmark-code me-1"></i>.env bearbeiten
+      <i class="bi bi-file-earmark-code me-1"></i>.env
+    </a>
+    <a href="{% url 'log_viewer' 'djmanager' %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-journal-text me-1"></i>Logs
     </a>
     <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
   </div>
@@ -17,100 +17,605 @@
 {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 {% if success_msg %}<div class="alert alert-success">{{ success_msg }}</div>{% endif %}
 
-<div class="alert alert-info py-2 small">
-  <i class="bi bi-info-circle me-1"></i>
-  Änderungen werden in der <code>.env</code>-Datei gespeichert und der Manager-Service wird
-  automatisch neu gestartet (~2 Sekunden), damit alle Worker die neuen Hosts übernehmen.
-  Beim Hinzufügen eines Hosts werden automatisch
-  <code>http://hostname</code> und <code>https://hostname</code> in die CSRF_TRUSTED_ORIGINS aufgenommen.
-</div>
+<div class="row g-3">
 
-<!-- Aktuell konfigurierte Hosts -->
-<div class="card mb-4">
-  <div class="card-header"><i class="bi bi-list-check me-2"></i>Aktuelle ALLOWED_HOSTS</div>
-  <div class="card-body p-0">
-    {% if allowed_hosts %}
-    <table class="table table-sm table-dark mb-0">
-      <thead>
-        <tr>
-          <th>Hostname / IP</th>
-          <th class="text-end" style="width:100px">Aktion</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for h in allowed_hosts %}
-        <tr>
-          <td class="font-monospace align-middle">{{ h }}</td>
-          <td class="text-end">
-            <form method="post" style="display:inline"
-                  data-confirm="Host '{{ h }}' wirklich entfernen?">
-              {% csrf_token %}
-              <input type="hidden" name="action" value="remove">
-              <input type="hidden" name="host"   value="{{ h }}">
-              <button type="submit" class="btn btn-sm btn-outline-danger">
-                <i class="bi bi-trash"></i>
-              </button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <div class="p-3 text-muted small">Keine Hosts konfiguriert.</div>
-    {% endif %}
-  </div>
-</div>
-
-<!-- Host hinzufügen -->
-<div class="card mb-4">
-  <div class="card-header"><i class="bi bi-plus-circle me-2"></i>Host hinzufügen</div>
-  <div class="card-body">
-    <form method="post" class="row g-2 align-items-end">
-      {% csrf_token %}
-      <input type="hidden" name="action" value="add">
-      <div class="col">
-        <label class="form-label small">Hostname oder IP-Adresse</label>
-        <input type="text" name="host" class="form-control font-monospace"
-               placeholder="z.B.  meinserver.example.com  oder  10.0.0.5"
-               autocomplete="off" required>
-        <div class="form-text">
-          Nur den Hostnamen ohne <code>http://</code> oder Pfad eingeben.<br>
-          Für den externen Reverse Proxy: den öffentlichen Domainnamen eintragen.
-        </div>
+  <!-- ALLOWED_HOSTS -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-list-check me-2"></i>ALLOWED_HOSTS</div>
+      <div class="card-body p-0">
+        {% if allowed_hosts %}
+        <table class="table table-sm table-dark mb-0">
+          <thead><tr><th>Hostname / IP</th><th class="text-end" style="width:100px">Aktion</th></tr></thead>
+          <tbody>
+            {% for h in allowed_hosts %}
+            <tr>
+              <td class="font-monospace align-middle">{{ h }}</td>
+              <td class="text-end">
+                <form method="post" data-confirm="Host '{{ h }}' wirklich entfernen?">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="remove">
+                  <input type="hidden" name="host" value="{{ h }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="p-3 text-muted small">Keine Hosts konfiguriert.</div>
+        {% endif %}
       </div>
-      <div class="col-auto">
-        <button type="submit" class="btn btn-primary">
-          <i class="bi bi-plus-lg me-1"></i>Hinzufügen
+      <div class="card-footer">
+        <form method="post" class="row g-2 align-items-end">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="add">
+          <div class="col">
+            <input type="text" name="host" class="form-control form-control-sm font-monospace"
+                   placeholder="z.B. deploy.example.com" autocomplete="off" required>
+          </div>
+          <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Hinzufügen</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- CSRF_TRUSTED_ORIGINS -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-shield-check"></i>CSRF_TRUSTED_ORIGINS
+        <span class="badge bg-secondary ms-auto">{{ csrf_origins|length }}</span>
+      </div>
+      <div class="card-body py-2">
+        {% if csrf_origins %}
+        <div class="d-flex flex-wrap gap-1">
+          {% for c in csrf_origins %}
+          <span class="badge bg-dark font-monospace border" style="font-size:.75rem">{{ c }}</span>
+          {% endfor %}
+        </div>
+        {% else %}
+        <span class="text-muted small">Keine Einträge.</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- HTTP / TLS Security Scan -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-globe me-1"></i>HTTP / TLS Security Scan</span>
+        <span class="text-muted small">Headers, TLS, Cookies, Konfigurationslecks</span>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">Scan-Ziel auswählen:</p>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          <button class="btn btn-sm btn-outline-secondary" data-action="mgr-http-scan" data-target="internal">
+            <i class="bi bi-server me-1"></i>Intern (Gunicorn Port 8888)
+          </button>
+          {% for h in extern_scan_hosts %}
+          <button class="btn btn-sm btn-outline-info" data-action="mgr-http-scan" data-target="{{ h }}">
+            <i class="bi bi-globe me-1"></i>{{ h }}
+          </button>
+          {% endfor %}
+        </div>
+        <div id="mgr-http-loading" class="d-none text-muted small mb-2">
+          <span class="spinner-border spinner-border-sm me-1"></span>Scanne…
+        </div>
+        <div id="mgr-http-output"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Security Scan (Pip-Audit + Deploy-Check) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-lock me-1"></i>Sicherheits-Scan</span>
+        <button class="btn btn-sm btn-outline-warning" data-action="mgr-security-scan">
+          <i class="bi bi-play me-1"></i>Scan starten
         </button>
       </div>
-    </form>
-  </div>
-</div>
-
-<!-- CSRF_TRUSTED_ORIGINS (read-only Übersicht) -->
-<div class="card">
-  <div class="card-header d-flex align-items-center gap-2">
-    <i class="bi bi-shield-check"></i>
-    CSRF_TRUSTED_ORIGINS
-    <span class="badge bg-secondary ms-auto">{{ csrf_origins|length }}</span>
-  </div>
-  <div class="card-body py-2">
-    {% if csrf_origins %}
-    <div class="d-flex flex-wrap gap-1">
-      {% for c in csrf_origins %}
-      <span class="badge bg-dark font-monospace border" style="font-size:.75rem">{{ c }}</span>
-      {% endfor %}
+      <div id="mgr-sec-container" class="card-body d-none">
+        <div id="mgr-sec-loading" class="text-muted small">
+          <span class="spinner-border spinner-border-sm me-1"></span>Lade…
+        </div>
+        <div id="mgr-sec-output" class="d-none"></div>
+      </div>
     </div>
-    <div class="form-text mt-2">
-      Wird automatisch gepflegt wenn Hosts oben hinzugefügt / entfernt werden.
-    </div>
-    {% else %}
-    <span class="text-muted small">Keine Einträge.</span>
-    {% endif %}
   </div>
-</div>
 
-</div>
-</div>
+  <!-- Nuclei Scanner -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-radioactive me-1"></i>Nuclei — Vulnerability Scanner</span>
+        <div class="d-flex align-items-center gap-2">
+          <span id="mgr-nuclei-version-badge" class="text-muted small"></span>
+          <span class="badge bg-secondary">passiv / produktionssicher</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="mgr-nuclei-update-bar" class="d-none alert alert-warning py-1 px-2 small mb-2 d-flex justify-content-between align-items-center">
+          <span id="mgr-nuclei-update-msg"></span>
+          <button class="btn btn-sm btn-warning ms-2" data-action="mgr-update-nuclei">
+            <i class="bi bi-arrow-up-circle me-1"></i>Jetzt updaten
+          </button>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          {% for h in extern_scan_hosts %}
+          <button class="btn btn-sm btn-outline-warning" data-action="mgr-nuclei-scan" data-host="{{ h }}">
+            <i class="bi bi-radioactive me-1"></i>{{ h }}
+          </button>
+          {% empty %}
+          <span class="text-muted small">Kein externer Hostname in ALLOWED_HOSTS konfiguriert</span>
+          {% endfor %}
+        </div>
+        <div id="mgr-nuclei-loading" class="d-none text-muted small mb-2">
+          <span class="spinner-border spinner-border-sm me-1"></span>
+          Scanne… (kann 60–120s dauern, nuclei wird ggf. automatisch installiert)
+        </div>
+        <div id="mgr-nuclei-output"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OWASP ZAP -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-shaded me-1"></i>OWASP ZAP — Web Application Scanner</span>
+        <div class="d-flex align-items-center gap-2">
+          <span id="mgr-zap-version-badge" class="text-muted small"></span>
+          <span class="badge bg-warning text-dark">Auto-Spider + Passiv-Scan</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="mgr-zap-update-bar" class="d-none alert alert-warning py-1 px-2 small mb-2 d-flex justify-content-between align-items-center">
+          <span id="mgr-zap-update-msg"></span>
+          <button class="btn btn-sm btn-warning ms-2" data-action="mgr-update-zap">
+            <i class="bi bi-arrow-up-circle me-1"></i>Jetzt updaten
+          </button>
+        </div>
+        <div class="mb-2">
+          <button class="btn btn-sm btn-outline-secondary" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#mgr-zap-auth-form">
+            <i class="bi bi-key me-1"></i>Anmeldedaten (optional — Authenticated Scan)
+          </button>
+          <div class="collapse mt-2" id="mgr-zap-auth-form">
+            <div class="card card-body bg-dark border-secondary p-2">
+              <div class="row g-2">
+                <div class="col-12 col-md-6">
+                  <label class="form-label small text-muted mb-0">Login-URL</label>
+                  <input type="url" id="mgr-zap-login-url" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="https://deploy.example.com/login/">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small text-muted mb-0">Username-Feld</label>
+                  <input type="text" id="mgr-zap-user-field" class="form-control form-control-sm bg-dark text-light border-secondary" value="username">
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label small text-muted mb-0">Password-Feld</label>
+                  <input type="text" id="mgr-zap-pass-field" class="form-control form-control-sm bg-dark text-light border-secondary" value="password">
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label small text-muted mb-0">Benutzername</label>
+                  <input type="text" id="mgr-zap-username" class="form-control form-control-sm bg-dark text-light border-secondary" autocomplete="off">
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label small text-muted mb-0">Passwort</label>
+                  <input type="password" id="mgr-zap-password" class="form-control form-control-sm bg-dark text-light border-secondary" autocomplete="off">
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label small text-muted mb-0">Eingeloggt-Indikator</label>
+                  <input type="text" id="mgr-zap-logged-in" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="Logout">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          {% for h in extern_scan_hosts %}
+          <button class="btn btn-sm btn-outline-info" data-action="mgr-zap-scan" data-host="{{ h }}" data-type="baseline">
+            <i class="bi bi-shield-check me-1"></i>{{ h }} (Baseline)
+          </button>
+          <button class="btn btn-sm btn-outline-danger" data-action="mgr-zap-scan" data-host="{{ h }}" data-type="full">
+            <i class="bi bi-shield-exclamation me-1"></i>{{ h }} (Full)
+          </button>
+          {% empty %}
+          <span class="text-muted small">Kein externer Hostname konfiguriert</span>
+          {% endfor %}
+        </div>
+        <div id="mgr-zap-loading" class="d-none text-muted small mb-2">
+          <span class="spinner-border spinner-border-sm me-1"></span>
+          ZAP läuft… kann 2–5 Minuten dauern.
+        </div>
+        <div id="mgr-zap-output"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scan-Bericht -->
+  <div class="col-12">
+    <div class="card border-secondary">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-file-earmark-text me-1"></i>Scan-Bericht</span>
+        <button id="mgr-report-btn" class="btn btn-sm btn-outline-light" data-action="mgr-download-report" disabled>
+          <i class="bi bi-download me-1"></i>Alle Ergebnisse als HTML herunterladen
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pip outdated -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-box-arrow-up me-1"></i>Veraltete Pakete (pip outdated)</span>
+        <button class="btn btn-sm btn-outline-warning" data-action="mgr-load-outdated">
+          <i class="bi bi-arrow-clockwise me-1"></i>Pakete prüfen
+        </button>
+      </div>
+      <div id="mgr-outdated-container" class="card-body d-none">
+        <div id="mgr-outdated-loading" class="text-muted small">
+          <span class="spinner-border spinner-border-sm me-1"></span>Lade…
+        </div>
+        <div id="mgr-outdated-content" class="d-none"></div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /row -->
+
+<script nonce="{{ csp_nonce }}">
+const MGR_SEV_COLOR = {critical:'danger',high:'danger',medium:'warning',low:'info',info:'secondary',unknown:'secondary'};
+const MGR_SEV_LABEL = {critical:'KRITISCH',high:'HOCH',medium:'MITTEL',low:'NIEDRIG',info:'INFO',unknown:'?'};
+const MGR_RISK_COLOR = {High:'danger',Medium:'warning',Low:'info',Informational:'secondary'};
+const MGR_RISK_LABEL = {High:'HOCH',Medium:'MITTEL',Low:'NIEDRIG',Informational:'INFO'};
+const _mgrScanResults = {};
+
+function _csrfToken() {
+  return document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+}
+
+// ── Version checks on load ────────────────────────────────────────────────────
+(async function() {
+  try {
+    const r = await fetch('{% url "manager_nuclei_version" %}');
+    if (!r.ok) return;
+    const d = await r.json();
+    const badge = document.getElementById('mgr-nuclei-version-badge');
+    const bar   = document.getElementById('mgr-nuclei-update-bar');
+    const msg   = document.getElementById('mgr-nuclei-update-msg');
+    if (d.installed) {
+      badge.textContent = `v${d.installed}`;
+      if (d.update_available) { bar.classList.remove('d-none'); msg.textContent = `Update: v${d.installed} → v${d.latest}`; }
+    } else {
+      badge.innerHTML = '<span class="badge bg-danger">nicht installiert</span>';
+    }
+  } catch(e) {}
+})();
+
+(async function() {
+  try {
+    const r = await fetch('{% url "manager_zap_version" %}');
+    if (!r.ok) return;
+    const d = await r.json();
+    const badge = document.getElementById('mgr-zap-version-badge');
+    const bar   = document.getElementById('mgr-zap-update-bar');
+    const msg   = document.getElementById('mgr-zap-update-msg');
+    if (d.is_installed && d.installed) {
+      badge.textContent = `v${d.installed}`;
+      if (d.update_available) { bar.classList.remove('d-none'); msg.textContent = `Update: v${d.installed} → v${d.latest}`; }
+    } else if (!d.is_installed) {
+      badge.innerHTML = '<span class="badge bg-secondary">nicht installiert</span>';
+    }
+  } catch(e) {}
+})();
+
+// ── HTTP scan ─────────────────────────────────────────────────────────────────
+async function mgrHttpScan(target) {
+  const loading = document.getElementById('mgr-http-loading');
+  const output  = document.getElementById('mgr-http-output');
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+  try {
+    const r = await fetch(`{% url "manager_http_scan" %}?target=${encodeURIComponent(target)}`);
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
+    const d = await r.json();
+    loading.classList.add('d-none');
+    _mgrScanResults.http = d;
+    document.getElementById('mgr-report-btn')?.removeAttribute('disabled');
+    if (d.error && !d.headers?.length) {
+      output.innerHTML = `<div class="alert alert-danger small">${d.error}</div>`; return;
+    }
+    let html = '<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
+    html += '<thead><tr><th>Check</th><th>Status</th><th>Wert</th><th>Empfehlung</th></tr></thead><tbody>';
+    (d.headers || []).forEach(h => {
+      const c = MGR_SEV_COLOR[h.severity] || 'secondary';
+      html += `<tr><td>${h.name}</td><td><span class="badge bg-${c}">${(h.severity||'').toUpperCase()}</span></td>
+               <td class="font-monospace" style="font-size:.72rem">${h.value||'–'}</td>
+               <td class="text-muted" style="font-size:.72rem">${h.hint||''}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    output.innerHTML = html;
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+  }
+}
+
+// ── Security scan ─────────────────────────────────────────────────────────────
+async function mgrSecurityScan() {
+  const container = document.getElementById('mgr-sec-container');
+  const loading   = document.getElementById('mgr-sec-loading');
+  const output    = document.getElementById('mgr-sec-output');
+  container.classList.remove('d-none');
+  loading.classList.remove('d-none');
+  output.classList.add('d-none');
+  try {
+    const r = await fetch('{% url "manager_security_scan" %}');
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
+    const d = await r.json();
+    loading.classList.add('d-none');
+    output.classList.remove('d-none');
+    let html = '';
+    const pip = d.pip_audit || [];
+    if (pip.length === 0) {
+      html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>pip-audit: keine bekannten Schwachstellen</div>';
+    } else {
+      html += `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>pip-audit: ${pip.length} Schwachstelle(n)</div>`;
+      html += '<div class="table-responsive"><table class="table table-sm table-dark small mb-2"><thead><tr><th>Paket</th><th>Version</th><th>CVE</th></tr></thead><tbody>';
+      pip.forEach(p => { html += `<tr><td>${p.name}</td><td>${p.version}</td><td>${p.id}</td></tr>`; });
+      html += '</tbody></table></div>';
+    }
+    const dep = d.deploy_check || [];
+    if (dep.length === 0) {
+      html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Django deploy check: keine Warnungen</div>';
+    } else {
+      html += `<div class="alert alert-warning small"><i class="bi bi-exclamation-circle me-1"></i>Django deploy check: ${dep.length} Warnung(en)</div>`;
+      html += '<ul class="small text-muted mb-0">';
+      dep.forEach(w => { html += `<li>${w}</li>`; });
+      html += '</ul>';
+    }
+    output.innerHTML = html;
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+    output.classList.remove('d-none');
+  }
+}
+
+// ── Nuclei scan ───────────────────────────────────────────────────────────────
+async function mgrNucleiScan(host) {
+  const loading = document.getElementById('mgr-nuclei-loading');
+  const output  = document.getElementById('mgr-nuclei-output');
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+  try {
+    const r = await fetch(`{% url "manager_nuclei_scan" %}?target=${encodeURIComponent(host)}`);
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
+    const d = await r.json();
+    loading.classList.add('d-none');
+    _mgrScanResults.nuclei = d;
+    document.getElementById('mgr-report-btn')?.removeAttribute('disabled');
+    if (!d.ok) { output.innerHTML = `<div class="alert alert-danger small">${d.error}</div>`; return; }
+    if (!d.findings?.length) {
+      output.innerHTML = '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Findings</div>'; return;
+    }
+    const crit = d.findings.filter(f => f.severity==='critical'||f.severity==='high').length;
+    let html = `<div class="alert ${crit>0?'alert-danger':'alert-warning'} small">${d.findings.length} Finding(s) — davon ${crit} kritisch/hoch</div>`;
+    html += '<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
+    html += '<thead><tr><th>Schwere</th><th>Name</th><th>Ziel</th><th>Tags</th></tr></thead><tbody>';
+    d.findings.forEach(f => {
+      const c = MGR_SEV_COLOR[f.severity]||'secondary';
+      const l = MGR_SEV_LABEL[f.severity]||f.severity;
+      html += `<tr><td><span class="badge bg-${c}">${l}</span></td><td>${f.name}</td>
+               <td class="font-monospace text-muted" style="font-size:.72rem;word-break:break-all">${f.matched}</td>
+               <td class="text-muted" style="font-size:.72rem">${f.tags}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    output.innerHTML = html;
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML = `<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+  }
+}
+
+async function mgrUpdateNuclei() {
+  const bar = document.getElementById('mgr-nuclei-update-bar');
+  const msg = document.getElementById('mgr-nuclei-update-msg');
+  const btn = bar?.querySelector('[data-action="mgr-update-nuclei"]');
+  if (btn) { btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Installiere…'; }
+  try {
+    const fd = new FormData(); fd.append('csrfmiddlewaretoken', _csrfToken());
+    const r = await fetch('{% url "manager_nuclei_update" %}', {method:'POST', body:fd});
+    const d = await r.json();
+    if (d.ok) { document.getElementById('mgr-nuclei-version-badge').textContent=`v${d.version}`; bar.classList.add('d-none'); }
+    else { msg.textContent=d.error; if(btn){btn.disabled=false;btn.innerHTML='Retry';} }
+  } catch(e) { msg.textContent=`Fehler: ${e.message}`; if(btn)btn.disabled=false; }
+}
+
+// ── ZAP scan ──────────────────────────────────────────────────────────────────
+async function mgrZapScan(host, scanType) {
+  const loading = document.getElementById('mgr-zap-loading');
+  const output  = document.getElementById('mgr-zap-output');
+  loading.classList.remove('d-none');
+  output.innerHTML = '';
+  try {
+    const loginUrl = document.getElementById('mgr-zap-login-url')?.value.trim()||'';
+    const username = document.getElementById('mgr-zap-username')?.value.trim()||'';
+    const password = document.getElementById('mgr-zap-password')?.value||'';
+    const useAuth  = loginUrl && username && password;
+    const baseUrl  = `{% url "manager_zap_scan" %}`;
+    let r;
+    if (useAuth) {
+      const fd = new FormData();
+      fd.append('csrfmiddlewaretoken', _csrfToken());
+      fd.append('target', host); fd.append('type', scanType);
+      fd.append('login_url', loginUrl);
+      fd.append('username_field', document.getElementById('mgr-zap-user-field')?.value.trim()||'username');
+      fd.append('password_field', document.getElementById('mgr-zap-pass-field')?.value.trim()||'password');
+      fd.append('auth_username', username); fd.append('auth_password', password);
+      fd.append('logged_in_indicator', document.getElementById('mgr-zap-logged-in')?.value.trim()||'');
+      r = await fetch(`${baseUrl}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`, {method:'POST',body:fd});
+    } else {
+      r = await fetch(`${baseUrl}?target=${encodeURIComponent(host)}&type=${encodeURIComponent(scanType)}`);
+    }
+    if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
+    const d = await r.json();
+    loading.classList.add('d-none');
+    _mgrScanResults.zap = d;
+    document.getElementById('mgr-report-btn')?.removeAttribute('disabled');
+    if (!d.ok) { output.innerHTML=`<div class="alert alert-danger small">${d.error}</div>`; return; }
+    const alerts = d.alerts||[];
+    if (!alerts.length) {
+      output.innerHTML='<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Keine Alerts</div>'; return;
+    }
+    const hi = alerts.filter(a=>a.risk==='High'||a.risk==='Medium').length;
+    const cls = alerts.some(a=>a.risk==='High')?'alert-danger':(hi>0?'alert-warning':'alert-info');
+    const tl = scanType==='full'?'Full (aktiv)':'Baseline (passiv)';
+    const ab = d.authenticated?'<span class="badge bg-success ms-1">auth</span>':'';
+    let html=`<div class="alert ${cls} small">ZAP ${tl}${ab}: ${alerts.length} Alert(s) — ${hi} hoch/mittel</div>`;
+    html+='<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
+    html+='<thead><tr><th>Risiko</th><th>Alert</th><th>URL</th><th>Lösung</th></tr></thead><tbody>';
+    alerts.forEach(a=>{
+      const c=MGR_RISK_COLOR[a.risk]||'secondary';
+      const l=MGR_RISK_LABEL[a.risk]||a.risk;
+      html+=`<tr><td><span class="badge bg-${c}">${l}</span></td><td>${a.name}</td>
+             <td class="font-monospace text-muted" style="font-size:.72rem;word-break:break-all">${a.url||'–'}</td>
+             <td class="text-muted" style="font-size:.72rem">${(a.solution||'').substring(0,120)}</td></tr>`;
+    });
+    html+='</tbody></table></div>';
+    output.innerHTML=html;
+  } catch(e) {
+    loading.classList.add('d-none');
+    output.innerHTML=`<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+  }
+}
+
+async function mgrUpdateZap() {
+  const bar = document.getElementById('mgr-zap-update-bar');
+  const msg = document.getElementById('mgr-zap-update-msg');
+  const btn = bar?.querySelector('[data-action="mgr-update-zap"]');
+  if (btn) { btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm"></span> Installiere… (~200 MB)'; }
+  try {
+    const fd = new FormData(); fd.append('csrfmiddlewaretoken', _csrfToken());
+    const r = await fetch('{% url "manager_zap_update" %}', {method:'POST', body:fd});
+    const d = await r.json();
+    if (d.ok) { document.getElementById('mgr-zap-version-badge').textContent=`v${d.version}`; bar.classList.add('d-none'); }
+    else { msg.textContent=d.error; if(btn){btn.disabled=false;btn.innerHTML='Retry';} }
+  } catch(e) { msg.textContent=`Fehler: ${e.message}`; if(btn)btn.disabled=false; }
+}
+
+// ── Pip outdated ──────────────────────────────────────────────────────────────
+async function mgrLoadOutdated() {
+  const container = document.getElementById('mgr-outdated-container');
+  const loading   = document.getElementById('mgr-outdated-loading');
+  const content   = document.getElementById('mgr-outdated-content');
+  container.classList.remove('d-none');
+  loading.classList.remove('d-none');
+  content.classList.add('d-none');
+  try {
+    const r = await fetch('{% url "manager_pip_outdated" %}');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    loading.classList.add('d-none');
+    content.classList.remove('d-none');
+    if (!d.outdated?.length) {
+      content.innerHTML='<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Alle Pakete aktuell</div>'; return;
+    }
+    let html='<div class="table-responsive"><table class="table table-sm table-dark table-hover small mb-0">';
+    html+='<thead><tr><th>Paket</th><th>Installiert</th><th>Aktuell</th><th></th></tr></thead><tbody>';
+    d.outdated.forEach(p=>{
+      html+=`<tr><td>${p.name}</td><td class="text-muted">${p.version}</td><td class="text-success">${p.latest_version}</td>
+             <td><button class="btn btn-xs btn-outline-success" style="font-size:.75rem;padding:1px 6px"
+                 data-action="mgr-upgrade-pkg" data-pkg="${p.name}">Update</button></td></tr>`;
+    });
+    html+='</tbody></table></div>';
+    content.innerHTML=html;
+  } catch(e) {
+    loading.classList.add('d-none');
+    content.innerHTML=`<div class="alert alert-danger small">Fehler: ${e.message}</div>`;
+    content.classList.remove('d-none');
+  }
+}
+
+async function mgrUpgradePkg(pkg, btn) {
+  if (btn) { btn.disabled=true; btn.textContent='…'; }
+  try {
+    const fd = new FormData(); fd.append('csrfmiddlewaretoken', _csrfToken()); fd.append('package', pkg);
+    const r = await fetch('{% url "manager_pip_upgrade" %}', {method:'POST', body:fd});
+    const d = await r.json();
+    if (d.ok) { btn?.closest('tr')?.remove(); }
+    else { if(btn){btn.disabled=false;btn.textContent='Fehler';} }
+  } catch(e) { if(btn){btn.disabled=false;btn.textContent='Fehler';} }
+}
+
+// ── Report download ───────────────────────────────────────────────────────────
+function mgrDownloadReport() {
+  function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  const now = new Date().toLocaleString('de-DE');
+  let html=`<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<title>Manager Scan-Report</title>
+<style>body{background:#1a1a1a;color:#ddd;font-family:Arial,sans-serif;padding:24px}
+h1{color:#fff;border-bottom:1px solid #555;padding-bottom:8px}
+h2{color:#ccc;margin-top:32px;border-left:4px solid #555;padding-left:10px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+th,td{padding:6px 10px;border:1px solid #444;vertical-align:top;text-align:left}
+th{background:#2a2a2a;color:#aaa}tr:nth-child(even)td{background:#202020}
+.meta{color:#888;font-size:13px}</style></head><body>
+<h1>Manager Sicherheits-Scan-Report</h1><p class="meta">Erstellt: ${esc(now)}</p>`;
+  if (_mgrScanResults.http) {
+    html+='<h2>HTTP / TLS Scan</h2><table><thead><tr><th>Check</th><th>Status</th><th>Wert</th><th>Empfehlung</th></tr></thead><tbody>';
+    (_mgrScanResults.http.headers||[]).forEach(h=>{html+=`<tr><td>${esc(h.name)}</td><td>${esc(h.severity?.toUpperCase())}</td><td>${esc(h.value)}</td><td>${esc(h.hint)}</td></tr>`;});
+    html+='</tbody></table>';
+  }
+  if (_mgrScanResults.nuclei) {
+    const d=_mgrScanResults.nuclei;
+    html+='<h2>Nuclei</h2>';
+    if(d.ok&&d.findings?.length){
+      html+='<table><thead><tr><th>Schwere</th><th>Name</th><th>Ziel</th></tr></thead><tbody>';
+      d.findings.forEach(f=>{html+=`<tr><td>${esc(f.severity?.toUpperCase())}</td><td>${esc(f.name)}</td><td>${esc(f.matched)}</td></tr>`;});
+      html+='</tbody></table>';
+    } else { html+=`<p style="color:#4caf50">✓ Keine Findings${d.error?' — '+esc(d.error):''}</p>`; }
+  }
+  if (_mgrScanResults.zap) {
+    const d=_mgrScanResults.zap;
+    html+='<h2>OWASP ZAP</h2>';
+    if(d.ok&&d.alerts?.length){
+      html+='<table><thead><tr><th>Risiko</th><th>Alert</th><th>URL</th><th>Lösung</th></tr></thead><tbody>';
+      d.alerts.forEach(a=>{html+=`<tr><td>${esc(a.risk)}</td><td>${esc(a.name)}</td><td>${esc(a.url)}</td><td>${esc(a.solution)}</td></tr>`;});
+      html+='</tbody></table>';
+    } else { html+=`<p style="color:#4caf50">✓ Keine Alerts${d.error?' — '+esc(d.error):''}</p>`; }
+  }
+  html+='</body></html>';
+  const blob=new Blob([html],{type:'text/html'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`manager-scan-report-${new Date().toISOString().slice(0,10)}.html`;
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ── Event delegation ──────────────────────────────────────────────────────────
+document.addEventListener('click', function(e) {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  e.preventDefault();
+  switch(el.dataset.action) {
+    case 'mgr-http-scan':       mgrHttpScan(el.dataset.target); break;
+    case 'mgr-security-scan':   mgrSecurityScan(); break;
+    case 'mgr-nuclei-scan':     mgrNucleiScan(el.dataset.host); break;
+    case 'mgr-update-nuclei':   mgrUpdateNuclei(); break;
+    case 'mgr-zap-scan':        mgrZapScan(el.dataset.host, el.dataset.type); break;
+    case 'mgr-update-zap':      mgrUpdateZap(); break;
+    case 'mgr-load-outdated':   mgrLoadOutdated(); break;
+    case 'mgr-upgrade-pkg':     mgrUpgradePkg(el.dataset.pkg, el); break;
+    case 'mgr-download-report': mgrDownloadReport(); break;
+  }
+});
+</script>
 {% endblock %}
