@@ -1033,10 +1033,11 @@ def run_nuclei_scan(target_url, templates=None):
         tpl_args += ['-t', t]
 
     cmd = [NUCLEI_BIN, '-u', target_url, '-jsonl', '-silent', '-no-color',
-           '-rate-limit', '20', '-timeout', '10'] + tpl_args
+           '-rate-limit', '50', '-timeout', '5',
+           '-c', '25', '-bulk-size', '25'] + tpl_args
 
     try:
-        result = _subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        result = _subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         findings = []
         severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
         for line in result.stdout.splitlines():
@@ -1059,7 +1060,7 @@ def run_nuclei_scan(target_url, templates=None):
         findings.sort(key=lambda x: severity_order.get(x['severity'], 5))
         return {'ok': True, 'findings': findings, 'installed': True, 'error': ''}
     except _subprocess.TimeoutExpired:
-        return {'ok': False, 'findings': [], 'installed': True, 'error': 'Timeout (180s)'}
+        return {'ok': False, 'findings': [], 'installed': True, 'error': 'Timeout (300s) — zu viele Templates oder langsame Verbindung'}
     except Exception as e:
         return {'ok': False, 'findings': [], 'installed': True, 'error': str(e)}
 
