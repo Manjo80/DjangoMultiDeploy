@@ -2030,6 +2030,9 @@ async function runSecurityScan() {
   try {
     const r = await fetch('{% url "project_security_scan" name %}');
     const d = await r.json();
+    window._scanResults = window._scanResults || {};
+    window._scanResults.security = d;
+    document.getElementById('report-btn')?.removeAttribute('disabled');
     let html = '';
 
     // pip-audit results
@@ -2186,11 +2189,59 @@ function downloadScanReport() {
     if (!d) return '<p style="color:#888">Kein HTTP/TLS-Scan durchgeführt.</p>';
     let rows = '';
     (d.headers || []).forEach(h => {
-      rows += `<tr><td>${esc(h.name)}</td><td style="color:${sevColor[h.severity]||'#aaa'}">${esc(h.severity?.toUpperCase())}</td><td>${esc(h.value||'–')}</td><td>${esc(h.hint||'')}</td></tr>`;
+      const sev = h.severity || '';
+      const clr = sev === 'ok' ? '#4caf50' : (sevColor[sev] || '#aaa');
+      rows += `<tr><td>${esc(h.header)}</td><td style="color:${clr}">${esc(sev.toUpperCase())}</td><td>${esc(h.value||'–')}</td><td>${esc(h.msg||'')}</td></tr>`;
     });
     return `<table border="1" cellpadding="4" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead style="background:#333"><tr><th>Header / Check</th><th>Schwere</th><th>Wert</th><th>Empfehlung</th></tr></thead>
+      <thead style="background:#333"><tr><th>Header / Check</th><th>Schwere</th><th>Wert</th><th>Hinweis</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
+  }
+
+  function securitySection(d) {
+    if (!d) return '<p style="color:#888">Kein Sicherheitsscan durchgeführt.</p>';
+    let html = '';
+    // pip-audit
+    const vulns = d.pip_audit?.vulnerabilities || [];
+    if (d.pip_audit?.error) {
+      html += `<p style="color:#888">pip-audit: ${esc(d.pip_audit.error)}</p>`;
+    } else if (vulns.length > 0) {
+      html += `<p style="color:#dc3545">pip-audit: ${vulns.length} Sicherheitslücke(n)</p>`;
+      html += '<table border="1" cellpadding="4" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px"><thead style="background:#333"><tr><th>Paket</th><th>Version</th><th>CVE/ID</th><th>Fix</th></tr></thead><tbody>';
+      vulns.forEach(v => { html += `<tr><td>${esc(v.package)}</td><td>${esc(v.version)}</td><td>${esc(v.id)}</td><td>${esc((v.fix||[]).join(', '))}</td></tr>`; });
+      html += '</tbody></table>';
+    } else {
+      html += '<p style="color:#4caf50">pip-audit: ✓ Keine bekannten Sicherheitslücken</p>';
+    }
+    // deploy check
+    const issues = d.deploy_check?.issues || [];
+    if (d.deploy_check?.error) {
+      html += `<p style="color:#888">Django deploy check: ${esc(d.deploy_check.error)}</p>`;
+    } else if (issues.length > 0) {
+      html += `<p style="color:#ffc107">Django deploy check: ${issues.length} Warnung(en)</p><ul>`;
+      issues.forEach(i => { html += `<li style="font-size:13px">${esc(i)}</li>`; });
+      html += '</ul>';
+    } else {
+      html += '<p style="color:#4caf50">Django deploy check: ✓ Keine Warnungen</p>';
+    }
+    // bandit
+    const findings = d.bandit?.findings || [];
+    if (!d.bandit) {
+      html += '<p style="color:#888">Bandit: nicht ausgeführt</p>';
+    } else if (d.bandit.error) {
+      html += `<p style="color:#888">Bandit: ${esc(d.bandit.error)}</p>`;
+    } else if (findings.length === 0) {
+      html += '<p style="color:#4caf50">Bandit: ✓ Keine Findings</p>';
+    } else {
+      html += `<p style="color:#ffc107">Bandit: ${findings.length} Finding(s)</p>`;
+      html += '<table border="1" cellpadding="4" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px"><thead style="background:#333"><tr><th>Schwere</th><th>Beschreibung</th><th>Datei:Zeile</th><th>Test-ID</th></tr></thead><tbody>';
+      findings.forEach(f => {
+        const clr = f.severity === 'HIGH' ? '#dc3545' : (f.severity === 'MEDIUM' ? '#ffc107' : '#aaa');
+        html += `<tr><td style="color:${clr}">${esc(f.severity)}</td><td>${esc(f.text)}</td><td style="font-family:monospace;font-size:11px">${esc(f.file)}:${esc(f.line)}</td><td>${esc(f.test_id)}</td></tr>`;
+      });
+      html += '</tbody></table>';
+    }
+    return html;
   }
 
   function nucleiSection(d) {
@@ -2241,6 +2292,8 @@ function downloadScanReport() {
 <p class="meta">Erstellt: ${esc(now)}</p>
 <h2>HTTP / TLS Security Scan</h2>
 ${httpSection(results.http)}
+<h2>Sicherheitsscan (pip-audit / Django / Bandit)</h2>
+${securitySection(results.security)}
 <h2>Nuclei — Vulnerability Scanner</h2>
 ${nucleiSection(results.nuclei)}
 <h2>OWASP ZAP — Web Application Scanner</h2>

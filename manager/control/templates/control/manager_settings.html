@@ -360,6 +360,8 @@ async function mgrSecurityScan() {
     const r = await fetch('{% url "manager_security_scan" %}');
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
     const d = await r.json();
+    _mgrScanResults.security = d;
+    document.getElementById('mgr-report-btn')?.removeAttribute('disabled');
     loading.classList.add('d-none');
     output.classList.remove('d-none');
     let html = '';
@@ -601,9 +603,31 @@ th{background:#2a2a2a;color:#aaa}tr:nth-child(even)td{background:#202020}
 .meta{color:#888;font-size:13px}</style></head><body>
 <h1>Manager Sicherheits-Scan-Report</h1><p class="meta">Erstellt: ${esc(now)}</p>`;
   if (_mgrScanResults.http) {
-    html+='<h2>HTTP / TLS Scan</h2><table><thead><tr><th>Check</th><th>Status</th><th>Wert</th><th>Empfehlung</th></tr></thead><tbody>';
-    (_mgrScanResults.http.headers||[]).forEach(h=>{html+=`<tr><td>${esc(h.name)}</td><td>${esc(h.severity?.toUpperCase())}</td><td>${esc(h.value)}</td><td>${esc(h.hint)}</td></tr>`;});
+    html+='<h2>HTTP / TLS Scan</h2><table><thead><tr><th>Header / Check</th><th>Schwere</th><th>Wert</th><th>Hinweis</th></tr></thead><tbody>';
+    (_mgrScanResults.http.headers||[]).forEach(h=>{
+      const sev=h.severity||''; const clr=sev==='ok'?'#4caf50':({'critical':'#dc3545','high':'#dc3545','medium':'#ffc107','low':'#17a2b8'}[sev]||'#aaa');
+      html+=`<tr><td>${esc(h.header)}</td><td style="color:${clr}">${esc(sev.toUpperCase())}</td><td>${esc(h.value||'–')}</td><td>${esc(h.msg||'')}</td></tr>`;
+    });
     html+='</tbody></table>';
+  }
+  if (_mgrScanResults.security) {
+    const sd=_mgrScanResults.security;
+    html+='<h2>Sicherheitsscan (pip-audit / Django / Bandit)</h2>';
+    const vulns=sd.pip_audit?.vulnerabilities||[];
+    if(vulns.length){
+      html+=`<p style="color:#dc3545">pip-audit: ${vulns.length} Sicherheitslücke(n)</p><table><thead><tr><th>Paket</th><th>Version</th><th>CVE/ID</th></tr></thead><tbody>`;
+      vulns.forEach(v=>{html+=`<tr><td>${esc(v.package)}</td><td>${esc(v.version)}</td><td>${esc(v.id)}</td></tr>`;});
+      html+='</tbody></table>';
+    } else { html+=`<p style="color:#4caf50">pip-audit: ✓ Keine bekannten Lücken</p>`; }
+    const issues=sd.deploy_check?.issues||[];
+    if(issues.length){html+=`<p style="color:#ffc107">Django deploy check: ${issues.length} Warnung(en)</p><ul>`;issues.forEach(i=>{html+=`<li>${esc(i)}</li>`;});html+='</ul>';}
+    else{html+=`<p style="color:#4caf50">Django deploy check: ✓ Keine Warnungen</p>`;}
+    const bfindings=sd.bandit?.findings||[];
+    if(sd.bandit&&!sd.bandit.error&&bfindings.length){
+      html+=`<p style="color:#ffc107">Bandit: ${bfindings.length} Finding(s)</p><table><thead><tr><th>Schwere</th><th>Beschreibung</th><th>Datei:Zeile</th></tr></thead><tbody>`;
+      bfindings.forEach(f=>{html+=`<tr><td>${esc(f.severity)}</td><td>${esc(f.text)}</td><td style="font-family:monospace;font-size:11px">${esc(f.file)}:${esc(f.line)}</td></tr>`;});
+      html+='</tbody></table>';
+    } else {html+=`<p style="color:#4caf50">Bandit: ✓ Keine Findings</p>`;}
   }
   if (_mgrScanResults.nuclei) {
     const d=_mgrScanResults.nuclei;
@@ -612,7 +636,7 @@ th{background:#2a2a2a;color:#aaa}tr:nth-child(even)td{background:#202020}
       html+='<table><thead><tr><th>Schwere</th><th>Name</th><th>Ziel</th></tr></thead><tbody>';
       d.findings.forEach(f=>{html+=`<tr><td>${esc(f.severity?.toUpperCase())}</td><td>${esc(f.name)}</td><td>${esc(f.matched)}</td></tr>`;});
       html+='</tbody></table>';
-    } else { html+=`<p style="color:#4caf50">✓ Keine Findings${d.error?' — '+esc(d.error):''}</p>`; }
+    } else { html+=`<p style="color:${d.ok?'#4caf50':'#888'}">Nuclei: ${esc(d.error||'✓ Keine Findings')}</p>`; }
   }
   if (_mgrScanResults.zap) {
     const d=_mgrScanResults.zap;
@@ -621,7 +645,7 @@ th{background:#2a2a2a;color:#aaa}tr:nth-child(even)td{background:#202020}
       html+='<table><thead><tr><th>Risiko</th><th>Alert</th><th>URL</th><th>Lösung</th></tr></thead><tbody>';
       d.alerts.forEach(a=>{html+=`<tr><td>${esc(a.risk)}</td><td>${esc(a.name)}</td><td>${esc(a.url)}</td><td>${esc(a.solution)}</td></tr>`;});
       html+='</tbody></table>';
-    } else { html+=`<p style="color:#4caf50">✓ Keine Alerts${d.error?' — '+esc(d.error):''}</p>`; }
+    } else { html+=`<p style="color:${d.ok?'#4caf50':'#888'}">ZAP: ${esc(d.error||'✓ Keine Alerts')}</p>`; }
   }
   html+='</body></html>';
   const blob=new Blob([html],{type:'text/html'});
