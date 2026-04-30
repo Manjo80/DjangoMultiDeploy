@@ -18,10 +18,13 @@ from ..models import AuditLog, SecuritySettings
 from ..utils import (
     get_project, service_action,
     get_ufw_status, get_ufw_port_rules, ufw_toggle_port,
-    sync_env_to_conf,
+    sync_env_to_conf, get_allowed_hosts,
     run_manager_pip_audit, run_manager_deploy_check,
     run_manager_pip_outdated, run_manager_pip_upgrade,
     run_http_security_scan,
+    run_nuclei_scan, nuclei_version_info, update_nuclei,
+    run_zap_scan, zap_version_info, update_zap,
+    run_bandit,
 )
 from ._helpers import admin_required, operator_required, _check_project_access
 
@@ -174,10 +177,11 @@ def manager_settings_view(request):
     csrf_origins  = [c.strip() for c in env.get('CSRF_TRUSTED_ORIGINS', '').split(',') if c.strip()]
 
     return render(request, 'control/manager_settings.html', {
-        'allowed_hosts': allowed_hosts,
-        'csrf_origins':  csrf_origins,
-        'error':         error,
-        'success_msg':   success_msg,
+        'allowed_hosts':    allowed_hosts,
+        'csrf_origins':     csrf_origins,
+        'extern_scan_hosts': _manager_scan_hosts(),
+        'error':            error,
+        'success_msg':      success_msg,
     })
 
 
@@ -560,6 +564,112 @@ def manager_http_scan(request):
         result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls,
                                         local_port=_local_port)
 
+    return JsonResponse(result)
+
+
+# ── Manager Nuclei / ZAP scans ────────────────────────────────────────────────
+
+def _manager_scan_hosts():
+    """Return real domain names from manager ALLOWED_HOSTS (no wildcards/IPs/localhost)."""
+    import ipaddress as _ipa
+    raw = getattr(settings, 'ALLOWED_HOSTS', [])
+    result = []
+    for h in raw:
+        h = h.strip().lower()
+        if not h or h in ('*', 'localhost', '127.0.0.1', '::1'):
+            continue
+        if h.startswith('.') or '*' in h:
+            continue
+        try:
+            _ipa.ip_address(h)
+            continue  # skip plain IPs
+        except ValueError:
+            pass
+        result.append(h)
+    return result
+
+
+@login_required
+def manager_nuclei_scan(request):
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    hostname = request.GET.get('target', '').strip().lower()
+    if not hostname:
+        return JsonResponse({'error': 'Kein Ziel angegeben'}, status=400)
+    import ipaddress as _ipa
+    try:
+        addr = _ipa.ip_address(hostname)
+        url_host = f'[{hostname}]' if isinstance(addr, _ipa.IPv6Address) else hostname
+    except ValueError:
+        url_host = hostname
+    result = run_nuclei_scan(f'https://{url_host}')
+    AuditLog.log(request, f'Manager nuclei scan: {hostname}', success=result['ok'])
+    return JsonResponse(result)
+
+
+@login_required
+def manager_nuclei_version(request):
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    return JsonResponse(nuclei_version_info())
+
+
+@require_POST
+@admin_required
+def manager_nuclei_update(request):
+    result = update_nuclei()
+    AuditLog.log(request, f'Manager nuclei update: {result.get("version","?")}', success=result['ok'])
+    return JsonResponse(result)
+
+
+@login_required
+def manager_zap_scan(request):
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    import ipaddress as _ipa
+    hostname  = request.GET.get('target', request.POST.get('target', '')).strip().lower()
+    scan_type = request.GET.get('type', request.POST.get('type', 'baseline'))
+    if scan_type not in ('baseline', 'full'):
+        scan_type = 'baseline'
+    if not hostname:
+        return JsonResponse({'error': 'Kein Ziel angegeben'}, status=400)
+    try:
+        addr = _ipa.ip_address(hostname)
+        url_host = f'[{hostname}]' if isinstance(addr, _ipa.IPv6Address) else hostname
+    except ValueError:
+        url_host = hostname
+    auth = None
+    if request.method == 'POST':
+        login_url = request.POST.get('login_url', '').strip()
+        username  = request.POST.get('auth_username', '').strip()
+        password  = request.POST.get('auth_password', '').strip()
+        if login_url and username and password:
+            auth = {
+                'login_url':           login_url,
+                'username_field':      request.POST.get('username_field', 'username').strip(),
+                'password_field':      request.POST.get('password_field', 'password').strip(),
+                'username':            username,
+                'password':            password,
+                'logged_in_indicator': request.POST.get('logged_in_indicator', '').strip(),
+            }
+    result = run_zap_scan(f'https://{url_host}', scan_type=scan_type, auth=auth)
+    suffix = ' (auth)' if auth else ''
+    AuditLog.log(request, f'Manager ZAP {scan_type}{suffix}: {hostname}', success=result['ok'])
+    return JsonResponse(result)
+
+
+@login_required
+def manager_zap_version(request):
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    return JsonResponse(zap_version_info())
+
+
+@require_POST
+@admin_required
+def manager_zap_update(request):
+    result = update_zap()
+    AuditLog.log(request, f'Manager ZAP update: {result.get("version","?")}', success=result['ok'])
     return JsonResponse(result)
 
 

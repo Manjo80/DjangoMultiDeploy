@@ -90,6 +90,12 @@ urlpatterns = [
     path('manager/http-scan/', views.manager_http_scan, name='manager_http_scan'),
     path('manager/pip-outdated/', views.manager_pip_outdated, name='manager_pip_outdated'),
     path('manager/pip-upgrade/', views.manager_pip_upgrade_view, name='manager_pip_upgrade'),
+    path('manager/nuclei-scan/', views.manager_nuclei_scan, name='manager_nuclei_scan'),
+    path('manager/nuclei-version/', views.manager_nuclei_version, name='manager_nuclei_version'),
+    path('manager/nuclei-update/', views.manager_nuclei_update, name='manager_nuclei_update'),
+    path('manager/zap-scan/', views.manager_zap_scan, name='manager_zap_scan'),
+    path('manager/zap-version/', views.manager_zap_version, name='manager_zap_version'),
+    path('manager/zap-update/', views.manager_zap_update, name='manager_zap_update'),
 
     # HTTP/TLS security scan per project
     path('project/<str:name>/http-scan/', views.project_http_scan, name='project_http_scan'),
