@@ -1803,9 +1803,18 @@ const SEV_LABEL = {critical:'KRITISCH', high:'HOCH', medium:'MITTEL', low:'NIEDR
 async function pollJob(jobId, onTick) {
   const base = '{% url "job_poll" "REPLACEME" %}'.replace('REPLACEME', jobId);
   const t0 = Date.now();
+  let wait429 = 3000;
   while (true) {
     await new Promise(r => setTimeout(r, 2000));
-    const pr = await fetch(base);
+    let pr;
+    try { pr = await fetch(base); } catch(e) { throw new Error(`Poll-Netzwerkfehler: ${e.message}`); }
+    if (pr.status === 429) {
+      await new Promise(r => setTimeout(r, wait429));
+      wait429 = Math.min(wait429 * 2, 20000);
+      if (onTick) onTick(Math.round((Date.now() - t0) / 1000));
+      continue;
+    }
+    wait429 = 3000;
     if (!pr.ok) throw new Error(`Poll HTTP ${pr.status}`);
     const pd = await pr.json();
     if (pd.status === 'done')  return pd.result;
