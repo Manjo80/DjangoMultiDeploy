@@ -76,6 +76,7 @@ from .pip_utils import (
     run_manager_deploy_check,
     run_manager_pip_outdated,
     run_manager_pip_upgrade,
+    run_manager_bandit,
     run_migration_status,
     run_pip_outdated,
     run_pip_upgrade,

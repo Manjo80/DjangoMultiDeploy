@@ -19,7 +19,7 @@ from ..utils import (
     get_project, service_action,
     get_ufw_status, get_ufw_port_rules, ufw_toggle_port,
     sync_env_to_conf, get_allowed_hosts,
-    run_manager_pip_audit, run_manager_deploy_check,
+    run_manager_pip_audit, run_manager_deploy_check, run_manager_bandit,
     run_manager_pip_outdated, run_manager_pip_upgrade,
     run_http_security_scan,
     run_nuclei_scan, nuclei_version_info, update_nuclei,
@@ -477,15 +477,19 @@ def _patch_update_script_rsync_fallback(script_path):
 
 @login_required
 def manager_security_scan(request):
-    """Run pip-audit + manage.py check --deploy on the manager itself."""
+    """Run pip-audit + manage.py check --deploy + bandit on the manager itself."""
     if not request.user.is_staff:
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
-    pip_results   = run_manager_pip_audit()
-    deploy_issues = run_manager_deploy_check()
-    return JsonResponse({
-        'pip_audit':    pip_results,
-        'deploy_check': deploy_issues,
-    })
+
+    def _run():
+        return {
+            'pip_audit':    run_manager_pip_audit(),
+            'deploy_check': run_manager_deploy_check(),
+            'bandit':       run_manager_bandit(),
+        }
+
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 @login_required

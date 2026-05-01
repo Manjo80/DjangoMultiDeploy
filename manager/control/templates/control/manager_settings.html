@@ -396,16 +396,22 @@ async function mgrSecurityScan() {
   const output    = document.getElementById('mgr-sec-output');
   container.classList.remove('d-none');
   loading.classList.remove('d-none');
+  loading.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Scanne… <span id="mgr-sec-elapsed"></span>';
   output.classList.add('d-none');
   try {
     const r = await fetch('{% url "manager_security_scan" %}');
     if (!r.ok) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0,200)}`); }
-    const d = await r.json();
+    const start = await r.json();
+    const d = await mgrPollJob(start.job_id, s => {
+      const el = document.getElementById('mgr-sec-elapsed');
+      if (el) el.textContent = `(${s}s)`;
+    });
     _mgrScanResults.security = d;
     document.getElementById('mgr-report-btn')?.removeAttribute('disabled');
     loading.classList.add('d-none');
     output.classList.remove('d-none');
     let html = '';
+    // pip-audit
     const pip = d.pip_audit?.vulnerabilities || [];
     if (pip.length === 0) {
       html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>pip-audit: keine bekannten Schwachstellen</div>';
@@ -415,6 +421,7 @@ async function mgrSecurityScan() {
       pip.forEach(p => { html += `<tr><td>${p.package}</td><td>${p.version}</td><td>${p.id}</td></tr>`; });
       html += '</tbody></table></div>';
     }
+    // deploy check
     const dep = d.deploy_check?.issues || [];
     if (dep.length === 0) {
       html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Django deploy check: keine Warnungen</div>';
@@ -423,6 +430,25 @@ async function mgrSecurityScan() {
       html += '<ul class="small text-muted mb-0">';
       dep.forEach(w => { html += `<li>${w}</li>`; });
       html += '</ul>';
+    }
+    // bandit
+    const ban = d.bandit;
+    if (ban && !ban.error) {
+      const bf = ban.findings || [];
+      if (bf.length === 0) {
+        html += '<div class="alert small" style="background:#0d2918;border-color:#238636;color:#3fb950"><i class="bi bi-check-circle me-1"></i>Bandit: keine Findings</div>';
+      } else {
+        const highs = bf.filter(f => f.severity?.toLowerCase() === 'high').length;
+        html += `<div class="alert ${highs ? 'alert-danger' : 'alert-warning'} small"><i class="bi bi-exclamation-triangle me-1"></i>Bandit: ${bf.length} Finding(s)${highs ? ` (${highs} HIGH)` : ''}</div>`;
+        html += '<div class="table-responsive"><table class="table table-sm table-dark small mb-0"><thead><tr><th>Schwere</th><th>Beschreibung</th><th>Datei:Zeile</th></tr></thead><tbody>';
+        bf.forEach(f => {
+          const sc = {high:'danger',medium:'warning',low:'info'}[f.severity?.toLowerCase()] || 'secondary';
+          html += `<tr><td><span class="badge bg-${sc}">${(f.severity||'').toUpperCase()}</span></td><td>${f.text||''}</td><td class="font-monospace" style="font-size:.7rem">${f.file}:${f.line}</td></tr>`;
+        });
+        html += '</tbody></table></div>';
+      }
+    } else if (ban?.error) {
+      html += `<div class="alert alert-secondary small">Bandit: ${ban.error}</div>`;
     }
     output.innerHTML = html;
   } catch(e) {

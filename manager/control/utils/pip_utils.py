@@ -239,6 +239,50 @@ def run_manager_deploy_check():
         return {'ok': False, 'issues': [], 'raw': '', 'error': str(e)}
 
 
+def run_manager_bandit():
+    """Run bandit static analysis against the manager source code."""
+    appdir   = str(Path(settings.BASE_DIR))
+    pip_bin  = os.path.join(settings.MANAGER_VENV, 'bin', 'pip')
+    if not os.path.exists(pip_bin):
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'Manager-venv nicht gefunden'}
+
+    bandit_bin = os.path.join(settings.MANAGER_VENV, 'bin', 'bandit')
+    if not os.path.exists(bandit_bin):
+        subprocess.run([pip_bin, 'install', '--quiet', 'bandit'],
+                       capture_output=True, timeout=60)
+
+    if not os.path.exists(bandit_bin):
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'bandit konnte nicht installiert werden'}
+
+    try:
+        result = subprocess.run(
+            [bandit_bin, '-r', appdir,
+             '--exclude', os.path.join(appdir, 'venv') + ',' + os.path.join(appdir, '.venv'),
+             '-f', 'json', '-q'],
+            capture_output=True, text=True, timeout=120,
+        )
+        output = result.stdout.strip()
+        if not output:
+            return {'ok': True, 'findings': [], 'metrics': {}, 'error': ''}
+        data = json.loads(output)
+        findings = []
+        for r in data.get('results', []):
+            filepath = r.get('filename', '')
+            rel = filepath.replace(appdir + '/', '') if filepath.startswith(appdir) else filepath
+            findings.append({
+                'severity': r.get('issue_severity', ''),
+                'confidence': r.get('issue_confidence', ''),
+                'text': r.get('issue_text', ''),
+                'file': rel,
+                'line': r.get('line_number', ''),
+            })
+        return {'ok': True, 'findings': findings, 'metrics': data.get('metrics', {}), 'error': ''}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'Timeout (bandit)'}
+    except Exception as e:
+        return {'ok': False, 'findings': [], 'metrics': {}, 'error': str(e)}
+
+
 def run_migration_status(name):
     """
     Run 'manage.py showmigrations --list' for the given project.
