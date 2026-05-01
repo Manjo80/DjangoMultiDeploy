@@ -255,9 +255,17 @@ def run_manager_bandit():
         return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'bandit konnte nicht installiert werden'}
 
     try:
+        # Exclude venvs and legacy monolithic files (superseded by control/utils/ package)
+        exclude = ','.join([
+            os.path.join(appdir, 'venv'),
+            os.path.join(appdir, '.venv'),
+            os.path.join(appdir, 'control', 'utils_legacy.py'),
+            os.path.join(appdir, 'control', 'utils.py'),
+            os.path.join(appdir, 'control', 'views.py'),
+        ])
         result = subprocess.run(
             [bandit_bin, '-r', appdir,
-             '--exclude', os.path.join(appdir, 'venv') + ',' + os.path.join(appdir, '.venv'),
+             '--exclude', exclude,
              '-f', 'json', '-q'],
             capture_output=True, text=True, timeout=120,
         )
