@@ -509,7 +509,7 @@ def manager_pip_upgrade_view(request):
 
 @login_required
 def manager_http_scan(request):
-    """HTTP/TLS security scan for the manager itself."""
+    """HTTP/TLS security scan for the manager itself — runs in background job."""
     import ipaddress
     if not request.user.is_staff:
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
@@ -539,7 +539,8 @@ def manager_http_scan(request):
             url  = f'http://{host}/'
         else:
             url = f'http://127.0.0.1:{manager_port}/'
-        result = run_http_security_scan(url, hostname=None, check_tls=False)
+        def _run():
+            return run_http_security_scan(url, hostname=None, check_tls=False)
     else:
         hostname = target
         try:
@@ -554,18 +555,17 @@ def manager_http_scan(request):
         else:
             url       = f'https://{url_host}/'
             check_tls = True
-        # Use local nginx port to avoid hairpin-NAT timeouts (server cannot reach
-        # its own public domain from within). Only bypass when port is non-standard
-        # (i.e. the per-project nginx port, not 80/443 which are the public ports).
         _local_port = (
             int(nginx_port)
             if nginx_port not in ('80', '443') and manager_nginx_port
             else None
         )
-        result = run_http_security_scan(url, hostname=hostname, check_tls=check_tls,
-                                        local_port=_local_port)
+        def _run():
+            return run_http_security_scan(url, hostname=hostname, check_tls=check_tls,
+                                          local_port=_local_port)
 
-    return JsonResponse(result)
+    job_id = start_job(_run)
+    return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
 # ── Manager Nuclei / ZAP scans ────────────────────────────────────────────────
@@ -748,3 +748,24 @@ def manager_config_export(request):
         'nginx': nginx_content,
         'nginx_error': nginx_error,
     })
+
+
+@login_required
+def manager_nginx_config(request):
+    """Read (GET) or save (POST) the nginx config for the manager itself."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Nur Admins'}, status=403)
+
+    from ..utils.config import get_project_nginx_config, save_project_nginx_config, _CSP_DEFAULT
+
+    if request.method == 'POST':
+        content = request.POST.get('content', '')
+        if not content.strip():
+            return JsonResponse({'ok': False, 'error': 'Inhalt darf nicht leer sein'})
+        ok, msg = save_project_nginx_config('djmanager', content)
+        if ok:
+            AuditLog.log(request, 'Manager nginx config gespeichert', success=True)
+        return JsonResponse({'ok': ok, 'message': msg, 'error': msg if not ok else ''})
+
+    content, error = get_project_nginx_config('djmanager')
+    return JsonResponse({'content': content, 'error': error, 'csp_default': _CSP_DEFAULT})
