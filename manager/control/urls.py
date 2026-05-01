@@ -99,6 +99,7 @@ urlpatterns = [
     path('manager/zap-version/', views.manager_zap_version, name='manager_zap_version'),
     path('manager/zap-update/', views.manager_zap_update, name='manager_zap_update'),
     path('manager/config-export/', views.manager_config_export, name='manager_config_export'),
+    path('manager/nginx/', views.manager_nginx_config, name='manager_nginx_config'),
 
     # HTTP/TLS security scan per project
     path('project/<str:name>/http-scan/', views.project_http_scan, name='project_http_scan'),

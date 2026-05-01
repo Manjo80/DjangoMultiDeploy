@@ -12,6 +12,7 @@ from .admin_views import (
     manager_nuclei_scan, manager_nuclei_version, manager_nuclei_update,
     manager_zap_scan, manager_zap_version, manager_zap_update,
     manager_config_export,
+    manager_nginx_config,
     job_poll_view,
 )
 from .dashboard import dashboard
