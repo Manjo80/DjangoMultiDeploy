@@ -181,6 +181,12 @@ def save_project_nginx_config(name, content):
     if not os.path.exists(path):
         return False, f'Konfigurationsdatei nicht gefunden: {path}'
 
+    # Strip angle-bracket URL wrapping (Markdown/RFC format, iOS Safari auto-link)
+    # Handles: <http://...>, <https://...>, <hostname.tld>
+    import re as _re
+    content = _re.sub(r'<(https?://[^>\s]+)>', r'\1', content)      # <http://...>
+    content = _re.sub(r'<([a-zA-Z0-9][\w.\-]+\.[a-zA-Z]{2,})>', r'\1', content)  # <domain.tld>
+
     # Basic safety check — must still be a server block
     if 'server {' not in content and 'server{' not in content:
         return False, 'Ungültig: "server {" Block fehlt — Konfiguration nicht gespeichert.'

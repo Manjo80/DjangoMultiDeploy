@@ -589,7 +589,7 @@ async function mgrUpgradePkg(pkg, btn) {
 }
 
 // ── Report download ───────────────────────────────────────────────────────────
-function mgrDownloadReport() {
+async function mgrDownloadReport() {
   function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   const now = new Date().toLocaleString('de-DE');
   let html=`<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
@@ -647,6 +647,25 @@ th{background:#2a2a2a;color:#aaa}tr:nth-child(even)td{background:#202020}
       html+='</tbody></table>';
     } else { html+=`<p style="color:${d.ok?'#4caf50':'#888'}">ZAP: ${esc(d.error||'✓ Keine Alerts')}</p>`; }
   }
+  // Append manager .env + nginx config (secrets masked)
+  try {
+    const cr = await fetch('{% url "manager_config_export" %}');
+    if (cr.ok) {
+      const cd = await cr.json();
+      html += '<h2>Manager .env (Passwörter maskiert)</h2>';
+      if (cd.env_error) {
+        html += `<p style="color:#888">Nicht verfügbar: ${esc(cd.env_error)}</p>`;
+      } else {
+        html += `<pre style="background:#111;color:#ccc;padding:12px;border-radius:4px;overflow:auto;font-size:11px">${esc(cd.env)}</pre>`;
+      }
+      html += '<h2>Manager nginx-Konfiguration (Passwörter maskiert)</h2>';
+      if (cd.nginx_error) {
+        html += `<p style="color:#888">Nicht verfügbar: ${esc(cd.nginx_error)}</p>`;
+      } else {
+        html += `<pre style="background:#111;color:#ccc;padding:12px;border-radius:4px;overflow:auto;font-size:11px">${esc(cd.nginx)}</pre>`;
+      }
+    }
+  } catch(_) {}
   html+='</body></html>';
   const blob=new Blob([html],{type:'text/html'});
   const a=document.createElement('a');
