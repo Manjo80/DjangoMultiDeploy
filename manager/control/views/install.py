@@ -7,11 +7,18 @@ Contains: install_form, install_run, install_progress, install_poll,
 """
 import os
 import glob
+import shutil
 import signal
 import logging
 import uuid
 import datetime
+import tempfile
 from pathlib import Path
+
+_INSTALL_DIR = os.path.join(tempfile.gettempdir(), 'djmanager_installs')
+_UPLOAD_DIR  = os.path.join(tempfile.gettempdir(), 'dmd_uploads')
+_BASH        = shutil.which('bash')     or '/bin/bash'
+_HOSTNAME    = shutil.which('hostname') or '/usr/bin/hostname'
 
 from django.shortcuts import render, redirect
 from django.http import HttpResponse, Http404, JsonResponse
@@ -43,7 +50,7 @@ def install_form(request):
     used_ports = {p.get('GUNICORN_PORT') for p in get_all_projects() if p.get('GUNICORN_PORT')}
     next_port  = next((str(p) for p in range(8000, 9000) if str(p) not in used_ports), '8000')
     try:
-        raw     = _sp.check_output(['hostname', '-I'], text=True).strip()
+        raw     = _sp.check_output([_HOSTNAME, '-I'], text=True).strip()
         all_ips = [ip for ip in raw.split() if not ip.startswith('127.')]
     except Exception:
         all_ips = []
@@ -119,7 +126,7 @@ def install_run(request):
         if not zip_file.name.endswith('.zip'):
             return render(request, 'control/install_form.html',
                           {'error': 'Nur .zip Dateien erlaubt.'})
-        upload_dir = '/tmp/dmd_uploads'
+        upload_dir = _UPLOAD_DIR
         os.makedirs(upload_dir, exist_ok=True)
         zip_path = os.path.join(upload_dir, f'{project}.zip')
         with open(zip_path, 'wb') as f:
@@ -156,17 +163,17 @@ def install_run(request):
     env['NONINTERACTIVE'] = 'true'
 
     os.makedirs(log_dir, exist_ok=True)
-    os.makedirs('/tmp/djmanager_installs', exist_ok=True)
+    os.makedirs(_INSTALL_DIR, exist_ok=True)
     with open(log_path, 'w') as log_f:
         proc = subprocess.Popen(
-            ['bash', settings.INSTALL_SCRIPT],
+            [_BASH, settings.INSTALL_SCRIPT],
             env=env,
             stdout=log_f,
             stderr=subprocess.STDOUT,
             start_new_session=True,
             close_fds=True,
         )
-    pid_path = f'/tmp/djmanager_installs/{project}_{run_id}.pid'
+    pid_path = os.path.join(_INSTALL_DIR, f'{project}_{run_id}.pid')
     Path(pid_path).write_text(str(proc.pid))
 
     AuditLog.log(request, f'Projekt-Installation gestartet: {project}',
@@ -233,7 +240,7 @@ def _install_finished(log_path, current_size):
 def install_manager(request):
     """Listet alle laufenden/abgeschlossenen Installationen auf."""
     log_dir = settings.INSTALL_LOG_DIR
-    tmp_dir = '/tmp/djmanager_installs'
+    tmp_dir = _INSTALL_DIR
     installs = []
 
     try:
@@ -314,7 +321,7 @@ def install_manager(request):
 @require_POST
 def install_kill(request, project, run_id):
     """Bricht eine laufende Installation ab und räumt auf."""
-    tmp_dir = '/tmp/djmanager_installs'
+    tmp_dir = _INSTALL_DIR
     log_dir = settings.INSTALL_LOG_DIR
     killed  = False
 
@@ -381,8 +388,8 @@ def ssh_key_download(request, project):
 @require_POST
 @login_required
 def ssh_key_confirm(request, project):
-    confirm_file = f'/tmp/djmanager_installs/{project}_github_confirm'
-    os.makedirs('/tmp/djmanager_installs', exist_ok=True)
+    confirm_file = os.path.join(_INSTALL_DIR, f'{project}_github_confirm')
+    os.makedirs(_INSTALL_DIR, exist_ok=True)
     Path(confirm_file).touch()
     return JsonResponse({'ok': True})
 

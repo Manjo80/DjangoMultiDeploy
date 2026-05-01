@@ -1,8 +1,11 @@
 """Dashboard view and manager self-info helper."""
 import logging
+import shutil
 import subprocess
 import traceback
 from pathlib import Path
+
+_GIT = shutil.which('git') or '/usr/bin/git'
 
 from django.shortcuts import render
 from django.conf import settings
@@ -41,13 +44,13 @@ def _get_manager_info():
     git_branch = git_hash = github_url = ''
     try:
         git_hash   = subprocess.check_output(
-            ['git', '-C', mgr_dir, 'rev-parse', '--short', 'HEAD'],
+            [_GIT, '-C', mgr_dir, 'rev-parse', '--short', 'HEAD'],
             text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
         git_branch = subprocess.check_output(
-            ['git', '-C', mgr_dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+            [_GIT, '-C', mgr_dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
             text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
         github_url = subprocess.check_output(
-            ['git', '-C', mgr_dir, 'remote', 'get-url', 'origin'],
+            [_GIT, '-C', mgr_dir, 'remote', 'get-url', 'origin'],
             text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
     except Exception:
         pass

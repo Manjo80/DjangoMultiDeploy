@@ -4,9 +4,14 @@ Admin-only views: audit log, security settings, manager settings,
 """
 import os
 import re
+import shutil
 import subprocess
 import logging
+import tempfile
 from pathlib import Path
+
+_NGINX     = shutil.which('nginx')     or '/usr/sbin/nginx'
+_SYSTEMCTL = shutil.which('systemctl') or '/usr/bin/systemctl'
 
 from django.shortcuts import render, redirect
 from django.http import JsonResponse, Http404
@@ -112,8 +117,8 @@ def manager_settings_view(request):
             content = re.sub(r'server_name\s+[^;]+;', f'server_name {new_names};', content)
             with open(nginx_path, 'w') as f:
                 f.write(content)
-            subprocess.run(['nginx', '-t'], check=True, capture_output=True)
-            subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, timeout=10)
+            subprocess.run([_NGINX, '-t'], check=True, capture_output=True)
+            subprocess.run([_SYSTEMCTL, 'reload', 'nginx'], capture_output=True, timeout=10)
         except Exception:
             pass
 
@@ -136,7 +141,7 @@ def manager_settings_view(request):
             def _schedule_restart():
                 svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
                 subprocess.Popen(
-                    ['bash', '-c', f'sleep 2 && systemctl restart {svc}'],
+                    ['bash', '-c', f'sleep 2 && {_SYSTEMCTL} restart {svc}'],
                     close_fds=True, start_new_session=True,
                 )
 
@@ -299,8 +304,8 @@ def _set_manager_bind(host):
             return
         with open(_SERVICE_FILE, 'w') as fh:
             fh.write(new_content)
-        subprocess.run(['systemctl', 'daemon-reload'], check=False, timeout=10)
-        subprocess.run(['systemctl', 'restart', 'djmanager'], check=False, timeout=15)
+        subprocess.run([_SYSTEMCTL, 'daemon-reload'], check=False, timeout=10)
+        subprocess.run([_SYSTEMCTL, 'restart', 'djmanager'], check=False, timeout=15)
     except Exception:
         pass
 
@@ -390,7 +395,7 @@ def manager_update(request):
 
     _patch_update_script_rsync_fallback(script)
 
-    log_path = f'/tmp/{svc}_update_{int(time.time())}.log'
+    log_path = os.path.join(tempfile.gettempdir(), f'{svc}_update_{int(time.time())}.log')
     try:
         with open(log_path, 'w') as logf:
             subprocess.Popen(

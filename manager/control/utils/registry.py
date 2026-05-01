@@ -3,8 +3,13 @@ Registry and service utility functions for DjangoMultiDeploy.
 """
 import os
 import glob
+import shutil
 import subprocess
 from django.conf import settings
+
+_SYSTEMCTL  = shutil.which('systemctl')  or '/usr/bin/systemctl'
+_JOURNALCTL = shutil.which('journalctl') or '/usr/bin/journalctl'
+_TAIL       = shutil.which('tail')       or '/usr/bin/tail'
 
 
 def _parse_conf(path):
@@ -52,7 +57,7 @@ def get_service_status(name):
     """Return 'active', 'inactive', 'failed', or 'unknown'."""
     try:
         result = subprocess.run(
-            ['systemctl', 'is-active', name],
+            [_SYSTEMCTL, 'is-active', name],
             capture_output=True, text=True, timeout=5
         )
         return result.stdout.strip() or 'unknown'
@@ -66,7 +71,7 @@ def service_action(name, action):
         return False, 'Invalid action'
     try:
         result = subprocess.run(
-            ['systemctl', action, name],
+            [_SYSTEMCTL, action, name],
             capture_output=True, text=True, timeout=30
         )
         ok = result.returncode == 0
@@ -79,7 +84,7 @@ def get_journal_logs(name, lines=100):
     """Return last N lines of journalctl output for a service."""
     try:
         result = subprocess.run(
-            ['journalctl', '-u', name, '-n', str(lines), '--no-pager', '--output=short-iso'],
+            [_JOURNALCTL, '-u', name, '-n', str(lines), '--no-pager', '--output=short-iso'],
             capture_output=True, text=True, timeout=10
         )
         return result.stdout
@@ -100,7 +105,7 @@ def get_nginx_log(name, log_type='access', lines=100):
         if os.path.exists(log_path):
             try:
                 result = subprocess.run(
-                    ['tail', '-n', str(lines), log_path],
+                    [_TAIL, '-n', str(lines), log_path],
                     capture_output=True, text=True, timeout=10
                 )
                 return result.stdout or f'(Datei leer: {log_path})'

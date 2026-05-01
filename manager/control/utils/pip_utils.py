@@ -3,9 +3,12 @@ pip and Django management command utility functions for DjangoMultiDeploy.
 """
 import os
 import json
+import shutil
 import subprocess
 import shlex
 from pathlib import Path
+
+_BASH = shutil.which('bash') or '/bin/bash'
 from django.conf import settings
 
 from .registry import get_project, _parse_conf
@@ -314,7 +317,7 @@ def run_migration_status(name):
         f'{shlex.quote(venv_python)} manage.py showmigrations --list'
     )
     run_args = (['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd]
-                if appuser else ['bash', '-c', full_cmd])
+                if appuser else [_BASH, '-c', full_cmd])
     try:
         result = subprocess.run(run_args, capture_output=True, text=True, timeout=60)
         output = (result.stdout + result.stderr).strip()
@@ -358,7 +361,7 @@ def run_pip_outdated(name):
 
     full_cmd = f'{shlex.quote(venv_python)} -m pip list --outdated --format=json'
     run_args = (['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd]
-                if appuser else ['bash', '-c', full_cmd])
+                if appuser else [_BASH, '-c', full_cmd])
     try:
         result = subprocess.run(run_args, capture_output=True, text=True, timeout=120)
         raw = result.stdout.strip()
@@ -402,7 +405,7 @@ def run_pip_upgrade(name, package_name):
 
     full_cmd = f'{shlex.quote(venv_python)} -m pip install --upgrade {shlex.quote(package_name)}'
     run_args = (['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd]
-                if appuser else ['bash', '-c', full_cmd])
+                if appuser else [_BASH, '-c', full_cmd])
     try:
         result = subprocess.run(run_args, capture_output=True, text=True, timeout=180)
         output = (result.stdout + result.stderr).strip()
