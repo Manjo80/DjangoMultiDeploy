@@ -229,6 +229,145 @@ def save_project_nginx_config(name, content):
     return True, 'nginx-Konfiguration gespeichert und nginx neu geladen.'
 
 
+# Security headers that Django's SecurityMiddleware sets — having them in
+# nginx too produces duplicate headers flagged by ZAP and Lighthouse.
+_DUPLICATE_SECURITY_HEADERS = (
+    'x-frame-options',
+    'x-content-type-options',
+    'x-xss-protection',
+    'referrer-policy',
+    'permissions-policy',
+    'strict-transport-security',
+    'cross-origin-opener-policy',
+    'cross-origin-embedder-policy',
+    'cross-origin-resource-policy',
+    'content-security-policy',
+)
+
+_JOBS_LOCATION_TEMPLATE = '''\
+    # Job-poll endpoint: low-cost in-memory lookup — no rate limiting.
+    location /jobs/ {{
+        proxy_pass {upstream};
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+    }}
+
+'''
+
+
+def patch_manager_nginx_config():
+    """
+    Read the current djmanager nginx config and apply two idempotent fixes:
+    1. Remove top-level add_header security directives that Django's middleware
+       already sets (avoids duplicate headers).
+    2. Add a location /jobs/ block (without rate limiting) before location /.
+
+    Returns (ok: bool, message: str).
+    """
+    import re as _re
+    import shutil as _shutil
+
+    path   = os.path.join(_NGINX_SITES, 'djmanager')
+    backup = path + '.bak'
+
+    if not os.path.exists(path):
+        return False, f'Nginx-Config nicht gefunden: {path}'
+
+    try:
+        with open(path) as f:
+            original = f.read()
+    except OSError as e:
+        return False, f'Lesen fehlgeschlagen: {e}'
+
+    content = original
+    changes = []
+
+    # ── 1. Remove duplicate security add_header lines ─────────────────────────
+    # Match lines like: add_header X-Frame-Options "DENY" always;
+    # Only at the server block level — i.e. lines that are NOT inside a
+    # location { } block.  We detect "inside location" by tracking braces.
+    def _strip_server_level_headers(text):
+        out_lines = []
+        depth = 0          # brace depth; 0 = nginx top-level, 1 = server block
+        in_server = False
+        removed = 0
+        for line in text.splitlines(keepends=True):
+            stripped = line.strip()
+            # Track depth changes
+            depth += stripped.count('{') - stripped.count('}')
+            # We enter a server block when depth transitions 0→1
+            if stripped.startswith('server') and '{' in stripped:
+                in_server = True
+            if in_server and depth <= 0:
+                in_server = False
+
+            # depth==1 inside server block = server level (not inside location)
+            if in_server and depth == 1 and stripped.lower().startswith('add_header '):
+                # Check if header name matches a duplicate security header
+                m = _re.match(r'add_header\s+([^\s"]+)', stripped, _re.IGNORECASE)
+                if m and m.group(1).lower() in _DUPLICATE_SECURITY_HEADERS:
+                    removed += 1
+                    continue   # drop this line
+            out_lines.append(line)
+        return ''.join(out_lines), removed
+
+    patched, n_removed = _strip_server_level_headers(content)
+    if n_removed:
+        content = patched
+        changes.append(f'{n_removed} doppelte Security-Header entfernt')
+
+    # ── 2. Add location /jobs/ before location / ──────────────────────────────
+    if 'location /jobs/' not in content:
+        # Find the proxy_pass URL used in location / so we can copy it
+        m = _re.search(
+            r'location\s+/\s*\{[^}]*proxy_pass\s+(https?://[^\s;]+)',
+            content, _re.DOTALL
+        )
+        upstream = m.group(1) if m else 'http://127.0.0.1:8888'
+
+        jobs_block = _JOBS_LOCATION_TEMPLATE.format(upstream=upstream)
+        # Insert before the first "location /" line
+        content = _re.sub(
+            r'([ \t]*location\s+/\s*\{)',
+            jobs_block + r'\1',
+            content,
+            count=1,
+        )
+        changes.append('location /jobs/ hinzugefügt')
+
+    if not changes:
+        return True, 'Keine Änderungen nötig — Config ist bereits aktuell.'
+
+    # ── Backup + write ────────────────────────────────────────────────────────
+    try:
+        _shutil.copy2(path, backup)
+        with open(path, 'w') as f:
+            f.write(content)
+    except OSError as e:
+        return False, f'Schreiben fehlgeschlagen: {e}'
+
+    # ── Validate + reload ─────────────────────────────────────────────────────
+    try:
+        r = subprocess.run([_NGINX, '-t'], capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            _shutil.copy2(backup, path)
+            return False, f'nginx -t fehlgeschlagen — wiederhergestellt:\n{(r.stderr or r.stdout).strip()}'
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        _shutil.copy2(backup, path)
+        return False, f'nginx -t konnte nicht ausgeführt werden: {e}'
+
+    try:
+        subprocess.run([_SYSTEMCTL, 'reload', 'nginx'], capture_output=True, timeout=15)
+    except Exception as e:
+        return True, f'Gespeichert — nginx reload: {e}'
+
+    return True, 'Angewendet: ' + ', '.join(changes) + '. nginx neu geladen.'
+
+
 def sync_env_to_conf(name, env_content):
     """
     Parse MODE and DEBUG from .env content and write them back into
