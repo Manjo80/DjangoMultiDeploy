@@ -11,6 +11,7 @@ from .admin_views import (
     manager_pip_outdated, manager_pip_upgrade_view,
     manager_nuclei_scan, manager_nuclei_version, manager_nuclei_update,
     manager_zap_scan, manager_zap_version, manager_zap_update,
+    manager_config_export,
     job_poll_view,
 )
 from .dashboard import dashboard

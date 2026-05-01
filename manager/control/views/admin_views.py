@@ -692,6 +692,7 @@ def manager_zap_scan(request):
     return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
+
 @login_required
 def manager_zap_version(request):
     if not request.user.is_staff:
@@ -711,3 +712,39 @@ def manager_zap_update(request):
     return JsonResponse({'job_id': job_id, 'status': 'running'})
 
 
+@login_required
+def manager_config_export(request):
+    """Return manager .env (secrets masked) + nginx config for scan report. Admin only."""
+    if not request.user.is_staff:
+        return JsonResponse({'error': 'Nur Admins'}, status=403)
+
+    _SECRET_RE = re.compile(
+        r'^(\s*(?:[A-Z_]*(?:PASSWORD|SECRET|TOKEN|AUTH_KEY|PRIVATE_KEY|API_KEY|DB_PASS|PASS)[A-Z_]*)\s*=\s*)(.+)$',
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    def mask(text):
+        return _SECRET_RE.sub(r'\1xxxx', text)
+
+    env_path = Path(settings.BASE_DIR) / '.env'
+    try:
+        env_content = mask(env_path.read_text())
+        env_error = None
+    except OSError as e:
+        env_content = ''
+        env_error = str(e)
+
+    nginx_path = '/etc/nginx/sites-available/djmanager'
+    try:
+        nginx_content = mask(open(nginx_path).read())
+        nginx_error = None
+    except OSError as e:
+        nginx_content = ''
+        nginx_error = str(e)
+
+    return JsonResponse({
+        'env': env_content,
+        'env_error': env_error,
+        'nginx': nginx_content,
+        'nginx_error': nginx_error,
+    })
