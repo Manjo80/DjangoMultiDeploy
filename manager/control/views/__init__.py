@@ -13,6 +13,7 @@ from .admin_views import (
     manager_zap_scan, manager_zap_version, manager_zap_update,
     manager_config_export,
     manager_nginx_config,
+    manager_nginx_patch,
     job_poll_view,
 )
 from .dashboard import dashboard

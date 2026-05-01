@@ -30,6 +30,7 @@ from ..utils import (
     run_nuclei_scan, nuclei_version_info, update_nuclei,
     run_zap_scan, zap_version_info, update_zap,
     run_bandit,
+    patch_manager_nginx_config,
     start_job, get_job,
 )
 from ._helpers import admin_required, operator_required, _check_project_access
@@ -778,3 +779,15 @@ def manager_nginx_config(request):
 
     content, error = get_project_nginx_config('djmanager')
     return JsonResponse({'content': content, 'error': error, 'csp_default': _CSP_DEFAULT})
+
+
+@login_required
+@require_POST
+def manager_nginx_patch(request):
+    """Auto-patch the manager nginx config: remove duplicate headers, add /jobs/ location."""
+    if not request.user.is_staff:
+        return JsonResponse({'ok': False, 'error': 'Nur Admins'}, status=403)
+    ok, msg = patch_manager_nginx_config()
+    if ok:
+        AuditLog.log(request, 'Manager nginx config auto-gepatcht', success=True, details=msg)
+    return JsonResponse({'ok': ok, 'message': msg, 'error': msg if not ok else ''})

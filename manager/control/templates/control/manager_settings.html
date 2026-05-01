@@ -129,6 +129,9 @@
             <button class="btn btn-sm btn-outline-warning" id="mgr-nginx-csp-btn" data-action="mgr-nginx-add-csp" disabled>
               <i class="bi bi-shield-plus me-1"></i>CSP Header hinzufügen
             </button>
+            <button class="btn btn-sm btn-outline-info" id="mgr-nginx-patch-btn" data-action="mgr-nginx-patch">
+              <i class="bi bi-wrench me-1"></i>Nginx reparieren
+            </button>
             <button class="btn btn-sm btn-outline-success ms-auto" id="mgr-nginx-save-btn" data-action="mgr-nginx-save" disabled>
               <i class="bi bi-floppy me-1"></i>Speichern &amp; nginx neu laden
             </button>
@@ -136,6 +139,7 @@
           <div class="text-muted small mb-2">
             <i class="bi bi-info-circle me-1"></i>
             Syntax wird vor dem Speichern mit <code>nginx -t</code> geprüft. Bei Fehler wird die alte Konfiguration automatisch wiederhergestellt.
+            &nbsp;·&nbsp;<b>Nginx reparieren</b>: entfernt doppelte Security-Header, fügt <code>location /jobs/</code> hinzu.
           </div>
           <textarea id="mgr-nginx-config-editor"
             class="form-control font-monospace bg-dark text-light border-secondary"
@@ -829,6 +833,27 @@ th{background:#2a2a2a;color:#aaa}tr:nth-child(even)td{background:#202020}
     cspBtn()?.setAttribute('disabled', '');
     showInfo('CSP Header eingefügt — bitte mit "Speichern" übernehmen.');
   };
+
+  window.mgrNginxPatch = async function() {
+    clearErr();
+    const btn = document.getElementById('mgr-nginx-patch-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Repariere…'; }
+    try {
+      const fd = new FormData();
+      fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+      const r = await fetch('{% url "manager_nginx_patch" %}', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.ok) {
+        showInfo('✓ ' + d.message);
+        await mgrNginxLoad();   // reload editor to show patched content
+      } else {
+        showErr(d.error || d.message);
+      }
+    } catch(e) { showErr('Fehler: ' + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-wrench me-1"></i>Nginx reparieren'; }
+    }
+  };
 })();
 
 // ── Event delegation ──────────────────────────────────────────────────────────
@@ -849,6 +874,7 @@ document.addEventListener('click', function(e) {
     case 'mgr-nginx-load':      mgrNginxLoad(); break;
     case 'mgr-nginx-save':      mgrNginxSave(); break;
     case 'mgr-nginx-add-csp':   mgrNginxAddCsp(); break;
+    case 'mgr-nginx-patch':     mgrNginxPatch(); break;
   }
 });
 </script>

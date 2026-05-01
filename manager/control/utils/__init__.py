@@ -54,6 +54,7 @@ from .config import (
     sync_env_to_conf,
     get_project_nginx_config,
     save_project_nginx_config,
+    patch_manager_nginx_config,
     _CSP_DEFAULT,
 )
 
