@@ -1114,7 +1114,10 @@ def _install_zap():
                 return False, 'curl oder wget nicht gefunden'
 
             with _tar.open(tar_path, 'r:gz') as tf:
-                tf.extractall(tmp)
+                # Validate members: reject absolute paths and path traversal
+                safe = [m for m in tf.getmembers()
+                        if not os.path.isabs(m.name) and '..' not in m.name.split('/')]
+                tf.extractall(tmp, members=safe)
 
             # Find extracted directory
             extracted = [d for d in os.listdir(tmp)
