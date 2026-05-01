@@ -2,14 +2,28 @@
 HTTP/TLS Security Scanner and Port Scanner utilities for DjangoMultiDeploy.
 """
 import os
+import shutil
 import ssl
+import tempfile
 import socket
 import ipaddress
+
+_CURL = shutil.which('curl') or '/usr/bin/curl'
+_WGET = shutil.which('wget') or '/usr/bin/wget'
 import datetime
 import logging
 import concurrent.futures
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse as _urlparse_scheme
+
+
+def _safe_urlopen(url, **kwargs):
+    """Open a URL only if scheme is http or https — rejects file:/, custom schemes."""
+    scheme = _urlparse_scheme(url).scheme
+    if scheme not in ('http', 'https'):
+        raise ValueError(f'Disallowed URL scheme: {scheme!r}')
+    return urllib.request.urlopen(url, **kwargs)  # scheme already validated
 
 # Import scan_log to register the in-memory log handler on first import.
 from . import scan_log as _scan_log  # noqa: F401
@@ -641,7 +655,7 @@ def get_public_ip():
     for url in services_v4:
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'DjManager/1.0'})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with _safe_urlopen(req.full_url, headers=dict(req.headers), timeout=5) as resp:
                 ip = resp.read().decode().strip()
                 if ip:
                     ipv4 = ip
@@ -651,7 +665,7 @@ def get_public_ip():
     for url in services_v6:
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'DjManager/1.0'})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with _safe_urlopen(req.full_url, headers=dict(req.headers), timeout=5) as resp:
                 ip = resp.read().decode().strip()
                 if ip:
                     ipv6 = ip
@@ -890,7 +904,7 @@ def _install_nuclei():
     version = 'v3.8.0'  # safe fallback
     try:
         import urllib.request as _ureq2
-        with _ureq2.urlopen(
+        with _safe_urlopen(
             'https://api.github.com/repos/projectdiscovery/nuclei/releases/latest',
             timeout=10
         ) as _resp:
@@ -907,12 +921,12 @@ def _install_nuclei():
 
             if _shutil.which('curl'):
                 r = _subprocess.run(
-                    ['curl', '-fsSL', '--connect-timeout', '15', '-o', zip_path, url],
+                    [_CURL, '-fsSL', '--connect-timeout', '15', '-o', zip_path, url],
                     timeout=120, capture_output=True,
                 )
             elif _shutil.which('wget'):
                 r = _subprocess.run(
-                    ['wget', '-q', '--timeout=15', '-O', zip_path, url],
+                    [_WGET, '-q', '--timeout=15', '-O', zip_path, url],
                     timeout=120, capture_output=True,
                 )
             else:
@@ -921,7 +935,7 @@ def _install_nuclei():
                 ctx = _ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = _ssl.CERT_NONE
-                with _req.urlopen(url, context=ctx, timeout=30) as resp:
+                with _safe_urlopen(url, context=ctx, timeout=30) as resp:
                     with open(zip_path, 'wb') as f:
                         f.write(resp.read())
                 r = type('R', (), {'returncode': 0})()
@@ -969,7 +983,7 @@ def _nuclei_latest_version():
     """Query GitHub API for latest nuclei release tag. Returns version string or ''."""
     try:
         import urllib.request as _ureq
-        with _ureq.urlopen(
+        with _safe_urlopen(
             'https://api.github.com/repos/projectdiscovery/nuclei/releases/latest',
             timeout=10
         ) as resp:
@@ -1074,7 +1088,7 @@ ZAP_DIR     = '/opt/zaproxy'
 ZAP_SH      = '/opt/zaproxy/zap.sh'
 ZAP_PORT    = 8090
 ZAP_API_KEY = 'djmanager-zap-key'
-ZAP_PID_FILE = '/tmp/djmanager-zap.pid'
+ZAP_PID_FILE = os.path.join(tempfile.gettempdir(), 'djmanager-zap.pid')
 
 
 def _install_zap():
@@ -1084,7 +1098,7 @@ def _install_zap():
 
     # Get latest ZAP release version from GitHub API
     try:
-        with _ureq.urlopen(
+        with _safe_urlopen(
             'https://api.github.com/repos/zaproxy/zaproxy/releases/latest',
             timeout=15
         ) as resp:
@@ -1101,12 +1115,12 @@ def _install_zap():
         with _tempfile.TemporaryDirectory() as tmp:
             tar_path = os.path.join(tmp, tar_name)
             if _shutil.which('curl'):
-                r = _subprocess.run(['curl', '-fsSL', '-o', tar_path, url],
+                r = _subprocess.run([_CURL, '-fsSL', '-o', tar_path, url],
                                     timeout=300, capture_output=True)
                 if r.returncode != 0:
                     return False, f'curl download failed: {r.stderr.decode()[:200]}'
             elif _shutil.which('wget'):
-                r = _subprocess.run(['wget', '-q', '-O', tar_path, url],
+                r = _subprocess.run([_WGET, '-q', '-O', tar_path, url],
                                     timeout=300, capture_output=True)
                 if r.returncode != 0:
                     return False, 'wget download failed'
@@ -1162,7 +1176,7 @@ def _zap_latest_version():
     """Query GitHub API for latest ZAP release tag. Returns version string or ''."""
     try:
         import urllib.request as _ureq
-        with _ureq.urlopen(
+        with _safe_urlopen(
             'https://api.github.com/repos/zaproxy/zaproxy/releases/latest',
             timeout=10
         ) as resp:
@@ -1233,7 +1247,7 @@ def _zap_start():
         _time.sleep(1)
         try:
             import urllib.request as _ureq
-            _ureq.urlopen(
+            _safe_urlopen(
                 f'http://127.0.0.1:{ZAP_PORT}/JSON/core/view/version/?apikey={ZAP_API_KEY}',
                 timeout=2
             )
@@ -1247,7 +1261,7 @@ def _zap_stop():
     """Stop ZAP daemon."""
     try:
         import urllib.request as _ureq
-        _ureq.urlopen(
+        _safe_urlopen(
             f'http://127.0.0.1:{ZAP_PORT}/JSON/core/action/shutdown/?apikey={ZAP_API_KEY}',
             timeout=5
         )
@@ -1271,7 +1285,7 @@ def _zap_api(path, params=None):
     import urllib.request as _ureq
     qs = _up.urlencode({**(params or {}), 'apikey': ZAP_API_KEY})
     url = f'http://127.0.0.1:{ZAP_PORT}/JSON/{path}/?{qs}'
-    with _ureq.urlopen(url, timeout=30) as r:
+    with _safe_urlopen(url, timeout=30) as r:
         return _json.loads(r.read())
 
 

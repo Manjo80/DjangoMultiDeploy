@@ -3,9 +3,12 @@ Deploy key management utilities for DjangoMultiDeploy.
 """
 import os
 import json
+import shutil
 import subprocess
 
 from .registry import get_all_projects, get_project
+
+_SSH_KEYGEN = shutil.which('ssh-keygen') or '/usr/bin/ssh-keygen'
 
 
 GLOBAL_DEPLOY_KEY = '/root/.ssh/djmanager_github_ed25519'
@@ -48,7 +51,7 @@ def create_deploy_key(label):
         comment = f'djmanager-{key_id}@{socket.getfqdn()}'
         os.makedirs(KEYS_DIR, mode=0o700, exist_ok=True)
         subprocess.run(
-            ['ssh-keygen', '-t', 'ed25519', '-C', comment, '-f', priv, '-N', ''],
+            [_SSH_KEYGEN, '-t', 'ed25519', '-C', comment, '-f', priv, '-N', ''],
             check=True, capture_output=True,
         )
         os.chmod(priv, 0o600)
@@ -58,7 +61,7 @@ def create_deploy_key(label):
     # Get fingerprint
     try:
         fp_result = subprocess.run(
-            ['ssh-keygen', '-lf', pub], capture_output=True, text=True
+            [_SSH_KEYGEN, '-lf', pub], capture_output=True, text=True
         )
         fingerprint = fp_result.stdout.split()[1] if fp_result.returncode == 0 else ''
     except Exception:
@@ -205,7 +208,7 @@ def get_global_deploy_key():
             comment = f'djmanager@{socket.getfqdn()}'
             os.makedirs('/root/.ssh', mode=0o700, exist_ok=True)
             subprocess.run(
-                ['ssh-keygen', '-t', 'ed25519', '-C', comment,
+                [_SSH_KEYGEN, '-t', 'ed25519', '-C', comment,
                  '-f', GLOBAL_DEPLOY_KEY, '-N', ''],
                 check=True, capture_output=True
             )

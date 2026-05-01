@@ -2,9 +2,12 @@
 Statistics utility functions for DjangoMultiDeploy.
 """
 import os
+import shutil
 import subprocess
 import datetime
 from collections import defaultdict
+
+_JOURNALCTL = shutil.which('journalctl') or '/usr/bin/journalctl'
 
 
 def get_nginx_stats(name, max_lines=20000):
@@ -110,7 +113,7 @@ def get_service_restarts(name, days=14):
     result = {'available': False, 'events': [], 'starts': 0, 'failures': 0, 'stops': 0}
     try:
         r = subprocess.run(
-            ['journalctl', '-u', name, '--since', since, '--no-pager',
+            [_JOURNALCTL, '-u', name, '--since', since, '--no-pager',
              '-o', 'short-iso', '--grep',
              'Started|Failed|Stopped|Restarting|Main process exited'],
             capture_output=True, text=True, timeout=10

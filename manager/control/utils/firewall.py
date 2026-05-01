@@ -1,7 +1,10 @@
 """
 Firewall (UFW) utility functions for DjangoMultiDeploy.
 """
+import shutil
 import subprocess
+
+_UFW = shutil.which('ufw') or '/usr/sbin/ufw'
 
 
 def get_ufw_status(gunicorn_port=None):
@@ -11,7 +14,7 @@ def get_ufw_status(gunicorn_port=None):
     """
     result = {'enabled': False, 'rules': [], 'port_blocked': None, 'available': False}
     try:
-        r = subprocess.run(['ufw', 'status', 'numbered'],
+        r = subprocess.run([_UFW, 'status', 'numbered'],
                            capture_output=True, text=True, timeout=5)
         if r.returncode != 0 and 'not found' in r.stderr:
             return result
@@ -87,7 +90,7 @@ def get_ufw_port_rules():
     import re
     rules = []
     try:
-        r = subprocess.run(['ufw', 'status', 'verbose'],
+        r = subprocess.run([_UFW, 'status', 'verbose'],
                            capture_output=True, text=True, timeout=5)
         if r.returncode != 0:
             return rules
@@ -130,11 +133,11 @@ def ufw_toggle_port(port, proto, action):
 
     try:
         r = subprocess.run(
-            ['ufw', action, f'{port}/{proto}'],
+            [_UFW, action, f'{port}/{proto}'],
             capture_output=True, text=True, timeout=10
         )
         if r.returncode == 0:
-            subprocess.run(['ufw', 'reload'], capture_output=True, timeout=10)
+            subprocess.run([_UFW, 'reload'], capture_output=True, timeout=10)
             verb = 'geöffnet' if action == 'allow' else 'gesperrt'
             return True, f'Port {port}/{proto} {verb}.'
         return False, (r.stderr or r.stdout).strip()

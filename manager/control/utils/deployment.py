@@ -2,9 +2,16 @@
 Deployment utility functions for DjangoMultiDeploy.
 """
 import os
+import shutil
 import subprocess
 import shlex
+import tempfile
 from django.conf import settings
+
+_GIT       = shutil.which('git')       or '/usr/bin/git'
+_SYSTEMCTL = shutil.which('systemctl') or '/usr/bin/systemctl'
+
+_INSTALL_DIR = os.path.join(tempfile.gettempdir(), 'djmanager_installs')
 
 from .registry import get_project, set_project_conf_value
 from .deploy_keys import KEYS_DIR
@@ -26,15 +33,15 @@ def _record_version(name):
         return
     try:
         short_hash = subprocess.run(
-            ['git', '-C', appdir, 'rev-parse', '--short', 'HEAD'],
+            [_GIT, '-C', appdir, 'rev-parse', '--short', 'HEAD'],
             capture_output=True, text=True, timeout=10,
         ).stdout.strip()
         commit_msg = subprocess.run(
-            ['git', '-C', appdir, 'log', '-1', '--format=%s'],
+            [_GIT, '-C', appdir, 'log', '-1', '--format=%s'],
             capture_output=True, text=True, timeout=10,
         ).stdout.strip()
         branch = subprocess.run(
-            ['git', '-C', appdir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+            [_GIT, '-C', appdir, 'rev-parse', '--abbrev-ref', 'HEAD'],
             capture_output=True, text=True, timeout=10,
         ).stdout.strip()
     except Exception:
@@ -280,7 +287,7 @@ def update_project_from_zip(name, uploaded_file):
         )
         output_lines.append(f'📁 collectstatic {"✅" if rc == 0 else "⚠️"}\n{out[-200:]}')
 
-        r = subprocess.run(['systemctl', 'restart', name],
+        r = subprocess.run([_SYSTEMCTL, 'restart', name],
                            capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
             output_lines.append('✅ Service neu gestartet')
@@ -643,11 +650,11 @@ def start_install(params):
     env['NONINTERACTIVE'] = 'true'
 
     # SSH key pause mechanism: web UI shows key then confirms continue
-    wait_file = f'/tmp/djmanager_installs/{project}_github_wait'
-    confirm_file = f'/tmp/djmanager_installs/{project}_github_confirm'
+    wait_file = os.path.join(_INSTALL_DIR, f'{project}_github_wait')
+    confirm_file = os.path.join(_INSTALL_DIR, f'{project}_github_confirm')
     env['GITHUB_KEY_WAIT_FILE'] = wait_file
     env['GITHUB_KEY_CONFIRM_FILE'] = confirm_file
-    os.makedirs('/tmp/djmanager_installs', exist_ok=True)
+    os.makedirs(_INSTALL_DIR, exist_ok=True)
 
     with open(log_path, 'w') as log_f:
         proc = subprocess.Popen(

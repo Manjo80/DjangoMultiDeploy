@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -131,7 +132,7 @@ SILENCED_SYSTEM_CHECKS = ['security.W008', 'security.W021']
 
 INSTALL_SCRIPT  = os.getenv('INSTALL_SCRIPT',  '/opt/DjangoMultiDeploy/Installv2.sh')
 REGISTRY_DIR    = os.getenv('REGISTRY_DIR',    '/etc/django-servers.d')
-INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', '/tmp/djmanager_logs')
+INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', os.path.join(tempfile.gettempdir(), 'djmanager_logs'))
 MANAGER_VENV    = os.getenv('MANAGER_VENV',    '/srv/djmanager/venv')
 
 os.makedirs(INSTALL_LOG_DIR, exist_ok=True)

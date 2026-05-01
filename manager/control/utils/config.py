@@ -2,8 +2,12 @@
 Configuration utility functions for DjangoMultiDeploy.
 """
 import os
+import shutil
 import subprocess
 from django.conf import settings
+
+_NGINX     = shutil.which('nginx')     or '/usr/sbin/nginx'
+_SYSTEMCTL = shutil.which('systemctl') or '/usr/bin/systemctl'
 
 from .registry import get_project, set_project_conf_value, service_action
 
@@ -128,8 +132,8 @@ def update_allowed_hosts(name, hosts):
     msgs.append(f'Service: {"OK" if ok1 else out1}')
 
     try:
-        subprocess.run(['nginx', '-t'], check=True, capture_output=True)
-        subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, timeout=10)
+        subprocess.run([_NGINX, '-t'], check=True, capture_output=True)
+        subprocess.run([_SYSTEMCTL, 'reload', 'nginx'], capture_output=True, timeout=10)
         msgs.append('nginx: neu geladen')
     except Exception as e:
         msgs.append(f'nginx reload: {e}')
@@ -206,7 +210,7 @@ def save_project_nginx_config(name, content):
 
     # Validate
     try:
-        r = subprocess.run(['nginx', '-t'], capture_output=True, text=True, timeout=15)
+        r = subprocess.run([_NGINX, '-t'], capture_output=True, text=True, timeout=15)
         if r.returncode != 0:
             # Restore backup
             shutil.copy2(backup, path)
@@ -218,7 +222,7 @@ def save_project_nginx_config(name, content):
 
     # Reload
     try:
-        subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, timeout=15)
+        subprocess.run([_SYSTEMCTL, 'reload', 'nginx'], capture_output=True, timeout=15)
     except Exception as e:
         return True, f'Gespeichert — nginx reload: {e}'
 

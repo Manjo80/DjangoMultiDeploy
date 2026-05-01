@@ -15,6 +15,7 @@ import secrets
 import string
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 from django.shortcuts import render, redirect
@@ -814,7 +815,7 @@ def project_clone_run(request, name):
     else:
         # No GitHub → create a ZIP of the existing project
         appdir   = conf.get('APPDIR', f'/srv/{name}')
-        zip_path = f'/tmp/djmanager_clone_{staging_name}.zip'
+        zip_path = os.path.join(tempfile.gettempdir(), f'djmanager_clone_{staging_name}.zip')
         try:
             import zipfile
             excludes = {'.venv', 'venv', '__pycache__', 'staticfiles', 'media', '.git'}
