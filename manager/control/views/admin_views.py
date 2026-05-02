@@ -12,6 +12,7 @@ from pathlib import Path
 
 _NGINX     = shutil.which('nginx')     or '/usr/sbin/nginx'
 _SYSTEMCTL = shutil.which('systemctl') or '/usr/bin/systemctl'
+_BASH      = shutil.which('bash')      or '/bin/bash'
 
 from django.shortcuts import render, redirect
 from django.http import JsonResponse, Http404
@@ -142,7 +143,7 @@ def manager_settings_view(request):
             def _schedule_restart():
                 svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
                 subprocess.Popen(
-                    ['bash', '-c', f'sleep 2 && {_SYSTEMCTL} restart {svc}'],
+                    [_BASH, '-c', f'sleep 2 && {_SYSTEMCTL} restart {svc}'],
                     close_fds=True, start_new_session=True,
                 )
 
@@ -209,7 +210,7 @@ def manager_env_view(request):
             os.chmod(env_path, 0o600)
             svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
             subprocess.Popen(
-                ['bash', '-c', f'sleep 2 && systemctl restart {svc}'],
+                [_BASH, '-c', f'sleep 2 && {_SYSTEMCTL} restart {svc}'],
                 close_fds=True, start_new_session=True,
             )
             AuditLog.log(request, 'Manager: .env bearbeitet')
@@ -328,7 +329,7 @@ def firewall_view(request):
                 AuditLog.log(request, f'Firewall: Port {port}/{proto} → {toggle}')
                 success_msg = msg
                 if port == '8888' and proto == 'tcp':
-                    _set_manager_bind('0.0.0.0' if toggle == 'allow' else '127.0.0.1')
+                    _set_manager_bind('0.0.0.0' if toggle == 'allow' else '127.0.0.1')  # nosec B104
             else:
                 error = msg
 
@@ -338,7 +339,7 @@ def firewall_view(request):
                 AuditLog.log(request, f'Firewall: Port {port}/{proto} → {action}')
                 success_msg = msg
                 if port == '8888' and proto == 'tcp':
-                    _set_manager_bind('0.0.0.0' if action == 'allow' else '127.0.0.1')
+                    _set_manager_bind('0.0.0.0' if action == 'allow' else '127.0.0.1')  # nosec B104
             else:
                 error = msg
 
@@ -373,7 +374,7 @@ def manager_action(request):
     svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
     if action in ('restart', 'stop'):
         subprocess.Popen(
-            ['bash', '-c', f'sleep 1 && systemctl {action} {svc}'],
+            [_BASH, '-c', f'sleep 1 && {_SYSTEMCTL} {action} {svc}'],
             close_fds=True, start_new_session=True,
         )
         AuditLog.log(request, f'Manager-Service {action}', success=True)
@@ -400,7 +401,7 @@ def manager_update(request):
     try:
         with open(log_path, 'w') as logf:
             subprocess.Popen(
-                ['bash', script], stdout=logf, stderr=logf,
+                [_BASH, script], stdout=logf, stderr=logf,
                 close_fds=True, start_new_session=True,
             )
         AuditLog.log(request, 'Manager-Update gestartet', success=True)

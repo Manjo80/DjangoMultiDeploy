@@ -10,6 +10,12 @@ from django.conf import settings
 
 _GIT       = shutil.which('git')       or '/usr/bin/git'
 _SYSTEMCTL = shutil.which('systemctl') or '/usr/bin/systemctl'
+_BASH      = shutil.which('bash')      or '/bin/bash'
+_SU        = shutil.which('su')        or '/bin/su'
+_CHOWN     = shutil.which('chown')     or '/usr/bin/chown'
+_CRONTAB   = shutil.which('crontab')   or '/usr/bin/crontab'
+_DELUSER   = shutil.which('deluser')   or '/usr/sbin/deluser'
+_USERDEL   = shutil.which('userdel')   or '/usr/sbin/userdel'
 
 _INSTALL_DIR = os.path.join(tempfile.gettempdir(), 'djmanager_installs')
 
@@ -256,7 +262,7 @@ def update_project_from_zip(name, uploaded_file):
         )
         output_lines.append(f'✅ {extracted} Dateien extrahiert, {skipped} geschützte Pfade übersprungen')
 
-        subprocess.run(['chown', '-R', f'{appuser}:{appuser}', appdir],
+        subprocess.run([_CHOWN, '-R', f'{appuser}:{appuser}', appdir],
                        check=True, capture_output=True)
 
         venv_activate = os.path.join(appdir, '.venv', 'bin', 'activate')
@@ -264,7 +270,7 @@ def update_project_from_zip(name, uploaded_file):
 
         def _run_as(cmd, timeout=300):
             r = subprocess.run(
-                ['su', '-', appuser, '-s', '/bin/bash', '-c', cmd],
+                [_SU, '-', appuser, '-s', _BASH, '-c', cmd],
                 capture_output=True, text=True, timeout=timeout
             )
             return r.returncode, (r.stdout + r.stderr).strip()[-800:]
@@ -331,7 +337,7 @@ def reset_project(name):
 
     def _run_as(cmd, timeout=300):
         r = subprocess.run(
-            ['su', '-', appuser, '-s', '/bin/bash', '-c', cmd],
+            [_SU, '-', appuser, '-s', _BASH, '-c', cmd],
             capture_output=True, text=True, timeout=timeout,
         )
         return r.returncode, (r.stdout + r.stderr).strip()[-800:]
@@ -558,12 +564,12 @@ def remove_project(name, opts):
 
     # ── Cron ──────────────────────────────────────────────────────────────────
     try:
-        res = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
+        res = subprocess.run([_CRONTAB, '-l'], capture_output=True, text=True)
         if res.returncode == 0:
             new_cron = '\n'.join(
                 l for l in res.stdout.splitlines() if f'{name}_backup.sh' not in l
             )
-            subprocess.run(['crontab', '-'], input=new_cron, text=True,
+            subprocess.run([_CRONTAB, '-'], input=new_cron, text=True,
                            capture_output=True)
     except Exception:
         pass
@@ -611,11 +617,11 @@ def remove_project(name, opts):
     if opts.get('remove_user') and appuser:
         try:
             result = subprocess.run(
-                ['deluser', '--remove-home', appuser],
+                [_DELUSER, '--remove-home', appuser],
                 capture_output=True, timeout=30
             )
             if result.returncode != 0:
-                subprocess.run(['userdel', '-r', appuser], capture_output=True)
+                subprocess.run([_USERDEL, '-r', appuser], capture_output=True)
             log.append(f'✅ Linux-User {appuser} entfernt')
         except Exception as e:
             log.append(f'⚠️  User entfernen: {e}')
@@ -658,7 +664,7 @@ def start_install(params):
 
     with open(log_path, 'w') as log_f:
         proc = subprocess.Popen(
-            ['bash', install_script],
+            [_BASH, install_script],
             env=env,
             stdout=log_f,
             stderr=subprocess.STDOUT,
@@ -711,7 +717,7 @@ def run_management_command(name, raw_cmd):
     )
     try:
         result = subprocess.run(
-            ['su', '-', appuser, '-s', '/bin/bash', '-c', full_cmd],
+            [_SU, '-', appuser, '-s', _BASH, '-c', full_cmd],
             capture_output=True, text=True, timeout=300,
         )
         output = (result.stdout + result.stderr).strip()

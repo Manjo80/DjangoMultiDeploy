@@ -15,8 +15,11 @@ import secrets
 import string
 import re
 import subprocess
+import shutil
 import tempfile
 from pathlib import Path
+
+_BASH = shutil.which('bash') or '/bin/bash'
 
 from django.shortcuts import render, redirect
 from django.http import JsonResponse, Http404
@@ -850,7 +853,7 @@ def project_clone_run(request, name):
     os.makedirs(log_dir, exist_ok=True)
     with open(log_path, 'w') as log_f:
         subprocess.Popen(
-            ['bash', settings.INSTALL_SCRIPT],
+            [_BASH, settings.INSTALL_SCRIPT],
             env=env,
             stdout=log_f,
             stderr=subprocess.STDOUT,
