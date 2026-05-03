@@ -41,7 +41,7 @@ def _build_csp(nonce: str) -> str:
         # breaking Bootstrap. The nonce covers our own <style nonce="..."> blocks.
         f"style-src 'self' 'nonce-{nonce}' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "img-src 'self' data: blob:; "
-        "font-src 'self' data:; "
+        "font-src 'self' https://cdn.jsdelivr.net data:; "
         "object-src 'none'; "
         "base-uri 'self'; "
         "form-action 'self'; "
