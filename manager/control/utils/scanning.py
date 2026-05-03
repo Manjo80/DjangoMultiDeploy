@@ -23,7 +23,7 @@ def _safe_urlopen(url, **kwargs):
     scheme = _urlparse_scheme(url).scheme
     if scheme not in ('http', 'https'):
         raise ValueError(f'Disallowed URL scheme: {scheme!r}')
-    return urllib.request.urlopen(url, **kwargs)  # scheme already validated
+    return urllib.request.urlopen(url, **kwargs)  # nosec B310 — scheme validated above
 
 # Import scan_log to register the in-memory log handler on first import.
 from . import scan_log as _scan_log  # noqa: F401
@@ -810,6 +810,9 @@ import tempfile as _tempfile
 import zipfile as _zipfile
 import shutil as _shutil
 
+_APT_GET = _shutil.which('apt-get') or '/usr/bin/apt-get'
+_SNAP    = _shutil.which('snap')    or '/usr/bin/snap'
+
 NUCLEI_BIN = '/usr/local/bin/nuclei'
 NUCLEI_TEMPLATES = '/opt/nuclei-templates'
 
@@ -831,7 +834,7 @@ def _install_nuclei():
         if sys_bin:
             try:
                 _shutil.copy2(sys_bin, NUCLEI_BIN)
-                os.chmod(NUCLEI_BIN, 0o755)
+                os.chmod(NUCLEI_BIN, 0o755)  # nosec B103
             except Exception:
                 pass
             return True
@@ -842,13 +845,13 @@ def _install_nuclei():
     try:
         if _shutil.which('apt-get'):
             r = _subprocess.run(
-                ['apt-get', 'install', '-y', '--no-install-recommends', 'nuclei'],
+                [_APT_GET, 'install', '-y', '--no-install-recommends', 'nuclei'],
                 capture_output=True, timeout=60,
             )
             if r.returncode == 0 and _shutil.which('nuclei'):
                 try:
                     _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
-                    os.chmod(NUCLEI_BIN, 0o755)
+                    os.chmod(NUCLEI_BIN, 0o755)  # nosec B103
                 except Exception:
                     pass
                 return True
@@ -859,7 +862,7 @@ def _install_nuclei():
     try:
         go_bin = _shutil.which('go')
         if not go_bin and _shutil.which('apt-get'):
-            _subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'golang-go'],
+            _subprocess.run([_APT_GET, 'install', '-y', '--no-install-recommends', 'golang-go'],
                             capture_output=True, timeout=120)
             go_bin = _shutil.which('go')
         if go_bin:
@@ -874,7 +877,7 @@ def _install_nuclei():
                 for candidate in ('/root/go/bin/nuclei', '/usr/local/go/bin/nuclei'):
                     if os.path.exists(candidate):
                         _shutil.copy2(candidate, NUCLEI_BIN)
-                        os.chmod(NUCLEI_BIN, 0o755)
+                        os.chmod(NUCLEI_BIN, 0o755)  # nosec B103
                         return True
     except Exception:
         pass
@@ -883,13 +886,13 @@ def _install_nuclei():
     try:
         if _shutil.which('snap'):
             r = _subprocess.run(
-                ['snap', 'install', 'nuclei', '--classic'],
+                [_SNAP, 'install', 'nuclei', '--classic'],
                 capture_output=True, timeout=120,
             )
             if r.returncode == 0 and _shutil.which('nuclei'):
                 try:
                     _shutil.copy2(_shutil.which('nuclei'), NUCLEI_BIN)
-                    os.chmod(NUCLEI_BIN, 0o755)
+                    os.chmod(NUCLEI_BIN, 0o755)  # nosec B103
                 except Exception:
                     pass
                 return True
@@ -954,7 +957,7 @@ def _install_nuclei():
                     return False
                 zf.extract(binary, tmp)
             _shutil.copy2(os.path.join(tmp, binary), NUCLEI_BIN)
-            os.chmod(NUCLEI_BIN, 0o755)
+            os.chmod(NUCLEI_BIN, 0o755)  # nosec B103
         return True
     except Exception as e:
         logger.error('nuclei install failed: %s', e)
@@ -1131,7 +1134,7 @@ def _install_zap():
                 # Validate members: reject absolute paths and path traversal
                 safe = [m for m in tf.getmembers()
                         if not os.path.isabs(m.name) and '..' not in m.name.split('/')]
-                tf.extractall(tmp, members=safe)
+                tf.extractall(tmp, members=safe)  # nosec B112 — members filtered above
 
             # Find extracted directory
             extracted = [d for d in os.listdir(tmp)
@@ -1143,7 +1146,7 @@ def _install_zap():
             if os.path.exists(ZAP_DIR):
                 _shutil.rmtree(ZAP_DIR)
             _shutil.copytree(src, ZAP_DIR)
-            os.chmod(ZAP_SH, 0o755)
+            os.chmod(ZAP_SH, 0o755)  # nosec B103
             # Store installed version for quick lookup
             with open(os.path.join(ZAP_DIR, '.version'), 'w') as _vf:
                 _vf.write(version)
@@ -1212,7 +1215,7 @@ def _ensure_java():
     """Check if Java 11+ is available, install if not."""
     if _shutil.which('java'):
         return True
-    r = _subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'default-jre-headless'],
+    r = _subprocess.run([_APT_GET, 'install', '-y', '--no-install-recommends', 'default-jre-headless'],
                         capture_output=True, timeout=120)
     return r.returncode == 0
 

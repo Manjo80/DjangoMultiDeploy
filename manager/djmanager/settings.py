@@ -88,7 +88,7 @@ LOGOUT_REDIRECT_URL = '/login/'
 SESSION_COOKIE_AGE = int(os.getenv('SESSION_TIMEOUT_SECONDS', str(8 * 3600)))  # default 8h
 SESSION_SAVE_EVERY_REQUEST = True   # reset timer on each request
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SAMESITE = 'Strict'
 
 # CSRF-Cookie langlebig machen (1 Jahr) — verhindert 403-Fehler wenn
 # iOS/Android den Browser-Tab einfriert und Session-Cookies löscht
@@ -96,6 +96,7 @@ CSRF_COOKIE_AGE = 31449600  # 1 Jahr
 # HttpOnly: JS kann den Token nicht mehr per document.cookie lesen.
 # Alle AJAX-Requests nutzen {{ csrf_token }} aus dem Template-Kontext.
 CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = 'Strict'
 
 # ── Security headers (relevant even behind reverse proxy) ─────────────────────
 # CSP, Permissions-Policy, COEP, CORP are set by SecurityHeadersMiddleware

@@ -66,7 +66,7 @@ def _check_project_access(user, name):
 
 # ── HTTP scan host helpers ────────────────────────────────────────────────────
 
-_INTERNAL_HOSTS = {'127.0.0.1', 'localhost', '::1', '0.0.0.0'}
+_INTERNAL_HOSTS = {'127.0.0.1', 'localhost', '::1', '0.0.0.0'}  # nosec B104 — not a bind address, just a comparison set
 
 
 def _is_ip_address(h):
