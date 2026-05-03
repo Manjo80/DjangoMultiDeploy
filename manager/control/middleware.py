@@ -36,9 +36,12 @@ def _build_csp(nonce: str) -> str:
     return (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        # Bootstrap uses inline style="" attributes for dynamic component positioning
+        # (dropdowns, modals, tooltips) — unsafe-inline cannot be removed without
+        # breaking Bootstrap. The nonce covers our own <style nonce="..."> blocks.
+        f"style-src 'self' 'nonce-{nonce}' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "img-src 'self' data: blob:; "
-        "font-src 'self' data: https://cdn.jsdelivr.net; "
+        "font-src 'self' data:; "
         "object-src 'none'; "
         "base-uri 'self'; "
         "form-action 'self'; "
