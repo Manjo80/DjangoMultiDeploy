@@ -258,13 +258,29 @@ _JOBS_LOCATION_TEMPLATE = '''\
 
 '''
 
+_STATIC_FALLBACK_NAMED_LOCATION = '''\
+    # Static-file fallback: files missing from staticfiles/ are served by WhiteNoise.
+    location @mgr_static_fallback {{
+        proxy_pass {upstream};
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+    }}
+
+'''
+
 
 def patch_manager_nginx_config():
     """
-    Read the current djmanager nginx config and apply two idempotent fixes:
+    Read the current djmanager nginx config and apply three idempotent fixes:
     1. Remove top-level add_header security directives that Django's middleware
        already sets (avoids duplicate headers).
     2. Add a location /jobs/ block (without rate limiting) before location /.
+    3. Add error_page 404 fallback in location /static/ so files not yet
+       collected (e.g. new icon fonts) are served by WhiteNoise via Django.
 
     Returns (ok: bool, message: str).
     """
@@ -338,6 +354,35 @@ def patch_manager_nginx_config():
             count=1,
         )
         changes.append('location /jobs/ hinzugefügt')
+
+    # ── 3. Add error_page 404 fallback to location /static/ ──────────────────
+    if 'error_page 404' not in content and 'location /static/' in content:
+        # Insert error_page directive at the end of the /static/ location block
+        content = _re.sub(
+            r'(location\s+/static/\s*\{[^}]*?)(\s*\})',
+            lambda m: m.group(1) + '\n        error_page 404 = @mgr_static_fallback;' + m.group(2),
+            content,
+            count=1,
+            flags=_re.DOTALL,
+        )
+        changes.append('error_page 404 Fallback in /static/ hinzugefügt')
+
+    if '@mgr_static_fallback' not in content:
+        m = _re.search(
+            r'location\s+/\s*\{[^}]*proxy_pass\s+(https?://[^\s;]+)',
+            content, _re.DOTALL
+        )
+        upstream = m.group(1) if m else 'http://127.0.0.1:8888'
+        fallback_block = _STATIC_FALLBACK_NAMED_LOCATION.format(upstream=upstream)
+        # Insert before location /jobs/ or before location /
+        content = _re.sub(
+            r'([ \t]*location\s+(?:/jobs/|/)\s*\{)',
+            fallback_block + r'\1',
+            content,
+            count=1,
+        )
+        if 'mgr_static_fallback' not in changes[-1] if changes else True:
+            changes.append('@mgr_static_fallback location hinzugefügt')
 
     if not changes:
         return True, 'Keine Änderungen nötig — Config ist bereits aktuell.'
