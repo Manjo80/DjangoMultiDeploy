@@ -19,6 +19,12 @@ from django.http import HttpResponseForbidden
 # ──────────────────────────────────────────────────────────────────────────────
 
 _STATIC_SECURITY_HEADERS = [
+    # nginx patch removes these from the nginx config (treated as duplicates);
+    # we set them here so Django-proxied responses always carry them.
+    ('Strict-Transport-Security', 'max-age=63072000; includeSubDomains'),
+    ('X-Content-Type-Options', 'nosniff'),
+    ('X-Frame-Options', 'DENY'),
+    ('Referrer-Policy', 'strict-origin-when-cross-origin'),
     ('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=()'),
     ('Cross-Origin-Embedder-Policy', 'unsafe-none'),
     ('Cross-Origin-Resource-Policy', 'same-origin'),

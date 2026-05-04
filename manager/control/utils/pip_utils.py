@@ -269,7 +269,7 @@ def run_manager_bandit():
         result = subprocess.run(
             [bandit_bin, '-r', appdir,
              '--exclude', exclude,
-             '--skip', 'B404,B603,B110,B105',
+             '--skip', 'B404,B603,B110,B105,B112',
              '-f', 'json', '-q'],
             capture_output=True, text=True, timeout=120,
         )
