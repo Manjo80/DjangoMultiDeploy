@@ -22,6 +22,19 @@
       Das Projekt <strong>{{ name }}</strong> wurde neu aufgesetzt.
       Datenbank geleert, Code auf neueste GitHub-Version zurückgesetzt, Migrationen ausgeführt.
     </div>
+    {% if admin_user %}
+    <div class="alert alert-info py-2">
+      <i class="bi bi-person-check me-1"></i>
+      Admin-Benutzer <strong>{{ admin_user }}</strong> wurde angelegt.
+      Bitte jetzt im Projekt einloggen und das Passwort notieren.
+    </div>
+    {% else %}
+    <div class="alert alert-warning py-2">
+      <i class="bi bi-person-exclamation me-1"></i>
+      Kein Admin-Benutzer angelegt — bitte über die Django-Shell oder
+      <code>createsuperuser</code> manuell erstellen.
+    </div>
+    {% endif %}
     {% else %}
     <div class="alert alert-warning">
       Beim Neu aufsetzen sind Fehler aufgetreten. Prüfe die Ausgabe unten.
