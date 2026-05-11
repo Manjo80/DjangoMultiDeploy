@@ -373,6 +373,10 @@ def reset_project(name):
             if dbuser:
                 _run('su', '-s', '/bin/bash', 'postgres', '-c',
                      f'psql -c "GRANT ALL PRIVILEGES ON DATABASE \\"{dbname}\\" TO \\"{dbuser}\\";"')
+                # PostgreSQL 15+ no longer grants CREATE on public schema by default.
+                # Without this the app user cannot create tables (migrations fail).
+                _run('su', '-s', '/bin/bash', 'postgres', '-c',
+                     f'psql -d "{dbname}" -c "GRANT ALL ON SCHEMA public TO \\"{dbuser}\\";"')
             log.append(f'✅ PostgreSQL-Datenbank {dbname} neu erstellt')
         elif dbtype == 'mysql':
             _run('mysql', '-u', 'root', '-e', f'DROP DATABASE IF EXISTS `{dbname}`;')
