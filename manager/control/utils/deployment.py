@@ -310,10 +310,10 @@ def update_project_from_zip(name, uploaded_file):
             pass
 
 
-def reset_project(name):
+def reset_project(name, admin_user=None, admin_pass=None):
     """
     Full reset: backup → stop service → drop+recreate DB → git fetch+reset --hard
-    → pip install → migrate → collectstatic → restart service.
+    → pip install → migrate → collectstatic → create superuser → restart service.
     Preserves: .env, .venv, media/, staticfiles/
     Returns (ok, output).
     """
@@ -483,7 +483,23 @@ def reset_project(name):
     )
     log.append(f'{"✅" if rc == 0 else "⚠️"} collectstatic')
 
-    # 8. load_glossary (optional — silently skipped if command doesn't exist)
+    # 8. Create superuser (if credentials provided)
+    if admin_user and admin_pass:
+        rc, out = _run_as(
+            f'cd {appdir} && source {venv_activate} && '
+            f'DJANGO_SUPERUSER_USERNAME={shlex.quote(admin_user)} '
+            f'DJANGO_SUPERUSER_PASSWORD={shlex.quote(admin_pass)} '
+            f'DJANGO_SUPERUSER_EMAIL=admin@localhost '
+            f'python manage.py createsuperuser --noinput',
+            timeout=30,
+        )
+        if rc == 0:
+            log.append(f'✅ Admin-Benutzer "{admin_user}" erstellt')
+        else:
+            log.append(f'⚠️ Admin-Benutzer konnte nicht erstellt werden:\n{out[-300:]}')
+            ok = False
+
+    # 10. load_glossary (optional — silently skipped if command doesn't exist)
     rc, out = _run_as(
         f'cd {appdir} && source {venv_activate} && python manage.py load_glossary 2>&1',
         timeout=120,
@@ -495,7 +511,7 @@ def reset_project(name):
     else:
         log.append(f'⚠️ Glossar laden fehlgeschlagen:\n{out[-300:]}')
 
-    # 9. Restart service
+    # 11. Restart service
     _run('systemctl', 'start', name)
     log.append(f'✅ Service {name} neu gestartet')
 

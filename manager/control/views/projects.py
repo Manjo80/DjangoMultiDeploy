@@ -588,9 +588,33 @@ def reset_confirm(request, name):
 @require_POST
 @admin_required
 def reset_run(request, name):
-    ok, output = reset_project(name)
+    admin_user = request.POST.get('admin_user', '').strip()
+    admin_pass = request.POST.get('admin_pass', '')
+    admin_pass2 = request.POST.get('admin_pass2', '')
+
+    errors = []
+    if admin_user:
+        if len(admin_user) > 150 or not admin_user.replace('_', '').replace('-', '').replace('.', '').replace('@', '').replace('+', '').isalnum():
+            errors.append('Ungültiger Benutzername (nur Buchstaben, Ziffern, @/./+/-/_).')
+        if len(admin_pass) < 8:
+            errors.append('Passwort muss mindestens 8 Zeichen lang sein.')
+        if admin_pass != admin_pass2:
+            errors.append('Passwörter stimmen nicht überein.')
+
+    if errors:
+        conf = get_project(name)
+        return render(request, 'control/reset_confirm.html', {
+            'name': name, 'conf': conf,
+            'errors': errors,
+            'admin_user': admin_user,
+        })
+
+    ok, output = reset_project(name, admin_user=admin_user or None, admin_pass=admin_pass or None)
     AuditLog.log(request, f'Projekt neu aufgesetzt: {name}', project=name, success=ok)
-    request.session['reset_result'] = {'name': name, 'ok': ok, 'output': output}
+    request.session['reset_result'] = {
+        'name': name, 'ok': ok, 'output': output,
+        'admin_user': admin_user if admin_user else None,
+    }
     return redirect('reset_done')
 
 

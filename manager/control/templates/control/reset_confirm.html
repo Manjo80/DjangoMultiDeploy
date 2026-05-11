@@ -46,8 +46,45 @@
       </li>
     </ul>
 
+    {% if errors %}
+    <div class="alert alert-danger py-2">
+      {% for e in errors %}<div><i class="bi bi-exclamation-circle me-1"></i>{{ e }}</div>{% endfor %}
+    </div>
+    {% endif %}
+
     <form method="post" action="{% url 'reset_run' name %}">
       {% csrf_token %}
+
+      <div class="card mb-3" style="border-color:#30363d">
+        <div class="card-header py-2" style="background:#21262d">
+          <h6 class="mb-0"><i class="bi bi-person-fill-gear me-2"></i>Admin-Benutzer (optional)</h6>
+        </div>
+        <div class="card-body py-3">
+          <p class="text-muted small mb-3">
+            Da die Datenbank geleert wird, gibt es danach keine Benutzer mehr.
+            Gib hier die Zugangsdaten für den ersten Admin-Account an.
+          </p>
+          <div class="mb-3">
+            <label class="form-label">Benutzername</label>
+            <input type="text" name="admin_user" class="form-control"
+                   value="{{ admin_user|default:'' }}"
+                   placeholder="z.B. admin"
+                   autocomplete="off"
+                   pattern="[\w.@+\-]+" title="Buchstaben, Ziffern, @/./+/-/_">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Passwort <span class="text-muted small">(min. 8 Zeichen)</span></label>
+            <input type="password" name="admin_pass" class="form-control"
+                   minlength="8" autocomplete="new-password">
+          </div>
+          <div class="mb-0">
+            <label class="form-label">Passwort bestätigen</label>
+            <input type="password" name="admin_pass2" class="form-control"
+                   autocomplete="new-password">
+          </div>
+        </div>
+      </div>
+
       <div class="d-flex gap-2">
         <a href="{% url 'project_detail' name %}" class="btn btn-secondary flex-fill">
           Abbrechen
