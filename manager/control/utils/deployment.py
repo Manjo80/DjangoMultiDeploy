@@ -232,7 +232,10 @@ def extract_project_zip(zip_path, dest_dir, skip_tops=None):
                 skipped += 1
                 continue
             target = os.path.join(dest_dir, rel)
-            if not os.path.realpath(os.path.dirname(target)).startswith(real_dest):
+            # Anchor the containment check on path components (commonpath), so
+            # '/srv/app-evil' can't pass as being inside '/srv/app'.
+            real_parent = os.path.realpath(os.path.dirname(target))
+            if os.path.commonpath([real_dest, real_parent]) != real_dest:
                 skipped += 1
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
