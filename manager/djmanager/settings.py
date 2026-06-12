@@ -135,10 +135,12 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # ── Security (hinter nginx/SSL-Proxy) ─────────────────────────────────────────
 
-# Default to True (secure-by-default behind the TLS-terminating nginx proxy).
-# For a plain-HTTP direct-access deployment set these to False in the .env.
-SESSION_COOKIE_SECURE  = os.getenv('SESSION_COOKIE_SECURE',  'True') == 'True'
-CSRF_COOKIE_SECURE     = os.getenv('CSRF_COOKIE_SECURE',     'True') == 'True'
+# Secure-by-default in production (behind the TLS-terminating nginx proxy);
+# False under DEBUG so local plain-HTTP development still works. Always
+# overridable via .env for a plain-HTTP direct-access deployment.
+_secure_cookie_default = 'False' if DEBUG else 'True'
+SESSION_COOKIE_SECURE  = os.getenv('SESSION_COOKIE_SECURE',  _secure_cookie_default) == 'True'
+CSRF_COOKIE_SECURE     = os.getenv('CSRF_COOKIE_SECURE',     _secure_cookie_default) == 'True'
 SECURE_HSTS_SECONDS    = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv('SECURE_HSTS_INCLUDE_SUBDOMAINS', 'False') == 'True'
 SECURE_HSTS_PRELOAD    = os.getenv('SECURE_HSTS_PRELOAD',    'False') == 'True'
