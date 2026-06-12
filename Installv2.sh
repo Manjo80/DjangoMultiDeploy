@@ -64,6 +64,14 @@ _generate_selfsigned_cert() {
 # ===================================================================
 _RESUME=false
 
+# Die State-Datei enthält Klartext-Secrets (DB-Passwort, SECRET_KEY, Admin-/
+# App-Passwort). Sie gehört daher in ein root-only Verzeichnis statt in das
+# world-writable /tmp (verhindert Symlink-Races und Mitlesen durch andere
+# lokale Benutzer).
+STATE_DIR="/var/lib/djmd-install"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+chmod 700 "$STATE_DIR" 2>/dev/null || true
+
 # Prüft ob ein Schritt bereits abgeschlossen wurde
 is_done() {
   grep -q "^STEP_${1}=\"done\"" "${STATE_FILE:-/dev/null}" 2>/dev/null || return 1
@@ -88,7 +96,7 @@ _ufw_port_allowed() {
 }
 
 # Unterbrochene Installationen suchen
-mapfile -t _STATES < <(compgen -G "/tmp/django_install_*.state" 2>/dev/null || true)
+mapfile -t _STATES < <( { compgen -G "$STATE_DIR/django_install_*.state"; compgen -G "/tmp/django_install_*.state"; } 2>/dev/null || true)
 if [ "${#_STATES[@]}" -gt 0 ] && [ -f "${_STATES[0]}" ]; then
   echo
   echo "┌──────────────────────────────────────────────────────────────────┐"
@@ -374,9 +382,11 @@ if [[ "$_RESUME" != "true" ]]; then
 
   APPDIR="/srv/$PROJECTNAME"
 
-  # State-Datei für dieses Projekt initialisieren
-  STATE_FILE="/tmp/django_install_${PROJECTNAME}.state"
-  : > "$STATE_FILE"
+  # State-Datei für dieses Projekt initialisieren (root-only, mode 600).
+  # umask 077 + rm -f schließt das TOCTOU-/Symlink-Fenster vor dem ersten Write.
+  STATE_FILE="$STATE_DIR/django_install_${PROJECTNAME}.state"
+  rm -f "$STATE_FILE"
+  (umask 077; : > "$STATE_FILE")
   chmod 600 "$STATE_FILE"
   printf 'PROJECTNAME="%s"\n' "$PROJECTNAME" >> "$STATE_FILE"
   printf 'APPDIR="%s"\n' "$APPDIR" >> "$STATE_FILE"
@@ -449,6 +459,13 @@ fi
 LOCAL_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}')"
 [ -z "${LOCAL_IP:-}" ] && LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -z "${LOCAL_IP:-}" ] && LOCAL_IP="127.0.0.1"
+
+# Gunicorn nur an Loopback binden — nur der lokale nginx soll den App-Server
+# erreichen. So ist die App NIE direkt aus dem LAN erreichbar (an nginx/TLS/
+# Security-Headern/Rate-Limiting vorbei), selbst wenn keine Firewall greift
+# (z.B. in LXC-Containern). Für Setups mit nginx auf einem ANDEREN Host kann
+# GUNICORN_BIND_HOST per Umgebungsvariable überschrieben werden.
+GUNICORN_BIND_HOST="${GUNICORN_BIND_HOST:-127.0.0.1}"
 
 # Alle IPs sammeln (für ALLOWED_HOSTS)
 ALL_LOCAL_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
@@ -601,6 +618,15 @@ else
   _read -p "DB User [${DBUSER_DEFAULT}]: " TMP_DBUSER
   DBUSER="${TMP_DBUSER:-$DBUSER_DEFAULT}"
   DBUSER="${DBUSER//-/_}"
+
+  # DBNAME/DBUSER werden unquoted als SQL-Identifier verwendet → strikt
+  # validieren (verhindert SQL-Injection beim Anlegen der Datenbank/Rolle).
+  if ! [[ "$DBNAME" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "❌ FEHLER: Ungültiger DB-Name '$DBNAME' (nur Buchstaben, Ziffern, _)." && exit 1
+  fi
+  if ! [[ "$DBUSER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "❌ FEHLER: Ungültiger DB-User '$DBUSER' (nur Buchstaben, Ziffern, _)." && exit 1
+  fi
 
   _read -p "DB Host [localhost]: " DBHOST
   DBHOST="${DBHOST:-localhost}"
@@ -996,44 +1022,17 @@ else
 fi  # end ufw_base_done
 
 # -------------------------------------------------------------------
-# SSH-Server: PasswordAuthentication + PermitRootLogin sicherstellen
+# SSH-Server: NICHT aufweichen.
+# Früher hat der Installer host-weit PermitRootLogin yes + PasswordAuthentication
+# yes erzwungen (für SCP-Key-Download per Passwort). Das öffnet den GESAMTEN
+# Host für Root-Brute-Force und wird hier bewusst NICHT mehr getan.
+# Der erzeugte ed25519-Deploy-Key und der Web-UI-Download decken den Anwendungs-
+# fall ab; Key-basierte Authentifizierung bleibt die sichere Voreinstellung.
 # -------------------------------------------------------------------
 if ! is_done "sshd_configured"; then
-echo "🔐 Prüfe SSH-Server Konfiguration..."
-SSHD_CONFIG="/etc/ssh/sshd_config"
-SSHD_CHANGED=false
-
-# PasswordAuthentication aktivieren (nötig für SCP Key-Download mit Passwort)
-if grep -qE '^\s*PasswordAuthentication\s+no' "$SSHD_CONFIG" 2>/dev/null; then
-  sed -i 's/^\s*PasswordAuthentication\s\+no/PasswordAuthentication yes/' "$SSHD_CONFIG"
-  SSHD_CHANGED=true
-  echo "  ✅ PasswordAuthentication auf 'yes' gesetzt"
-elif ! grep -qE '^\s*PasswordAuthentication\s+yes' "$SSHD_CONFIG" 2>/dev/null; then
-  echo "PasswordAuthentication yes" >> "$SSHD_CONFIG"
-  SSHD_CHANGED=true
-  echo "  ✅ PasswordAuthentication hinzugefügt"
-else
-  echo "  ✅ PasswordAuthentication bereits aktiv"
-fi
-
-# PermitRootLogin aktivieren (nötig für scp root@...)
-if grep -qE '^\s*PermitRootLogin\s+(no|prohibit-password|forced-commands-only)' "$SSHD_CONFIG" 2>/dev/null; then
-  sed -i 's/^\s*PermitRootLogin\s\+\(no\|prohibit-password\|forced-commands-only\)/PermitRootLogin yes/' "$SSHD_CONFIG"
-  SSHD_CHANGED=true
-  echo "  ✅ PermitRootLogin auf 'yes' gesetzt"
-elif ! grep -qE '^\s*PermitRootLogin' "$SSHD_CONFIG" 2>/dev/null; then
-  echo "PermitRootLogin yes" >> "$SSHD_CONFIG"
-  SSHD_CHANGED=true
-  echo "  ✅ PermitRootLogin hinzugefügt"
-else
-  echo "  ✅ PermitRootLogin bereits aktiv"
-fi
-
-if [ "$SSHD_CHANGED" = true ]; then
-  systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
-  echo "  🔄 SSH-Server neu gestartet"
-fi
-
+echo "🔐 SSH-Server: sichere Defaults bleiben unverändert (kein Root-/Passwort-Login erzwungen)."
+echo "   ℹ️  Falls Passwort-SCP wirklich nötig ist, konfiguriere das gezielt per"
+echo "      'Match User <user>' und 'PermitRootLogin prohibit-password' von Hand."
 mark_done "sshd_configured"
 else
   echo "⏭️  SSH-Konfiguration bereits erledigt - überspringe"
@@ -1148,7 +1147,9 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   # Retry-Schleife: Key testen, bei Fehler nochmal warten
   # Im NONINTERACTIVE-Modus: auf Confirm-File warten statt Terminal-Eingabe
   _CONFIRM_FILE="/tmp/djmanager_installs/${PROJECTNAME}_github_confirm"
-  mkdir -p /tmp/djmanager_installs
+  # Shared mit dem Manager-Prozess. Restriktive Rechte gegen Manipulation durch
+  # andere lokale Benutzer im world-writable /tmp.
+  mkdir -p /tmp/djmanager_installs && chmod 700 /tmp/djmanager_installs
 
   _wait_for_github_confirm() {
     if [ "$NONINTERACTIVE" = "true" ]; then
@@ -1244,18 +1245,27 @@ if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
     done
     
     echo "🔐 Erstelle PostgreSQL Benutzer und Datenbank..."
+    # Single-Quotes im Passwort für das SQL-Literal verdoppeln (kein Breakout).
+    _DBPASS_SQL="${DBPASS//\'/\'\'}"
     su -s /bin/bash postgres <<PGEOF
 psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
   psql -c "CREATE DATABASE \"$DBNAME\";"
 
 psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DBUSER'" | grep -q 1 || \
-  psql -c "CREATE USER \"$DBUSER\" WITH ENCRYPTED PASSWORD '$DBPASS';"
+  psql -c "CREATE ROLE \"$DBUSER\" LOGIN;"
+
+# Passwort über stdin setzen — NICHT als psql -c Argument (sonst in ps /
+# /proc/<pid>/cmdline sichtbar).
+psql <<EOSQL
+ALTER ROLE "$DBUSER" WITH ENCRYPTED PASSWORD '$_DBPASS_SQL';
+EOSQL
 
 psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DBNAME\" TO \"$DBUSER\";"
 
 # PostgreSQL 15+ compatibility
 psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null || true
 PGEOF
+    unset _DBPASS_SQL
     
   elif [ "$DBTYPE" = "mysql" ]; then
     echo "📦 Installiere MariaDB..."
@@ -1272,12 +1282,17 @@ PGEOF
     done
     
     echo "🔐 Erstelle MySQL/MariaDB Benutzer und Datenbank..."
+    # Backslash und Single-Quote im Passwort für das SQL-Literal escapen.
+    _DBPASS_MY="${DBPASS//\\/\\\\}"
+    _DBPASS_MY="${_DBPASS_MY//\'/\\\'}"
+    # Passwort via stdin (Heredoc) — nicht als -p Argument (kein ps-Leak).
     mysql -u root <<SQL
 CREATE DATABASE IF NOT EXISTS \`$DBNAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '$DBUSER'@'localhost' IDENTIFIED BY '$DBPASS';
+CREATE USER IF NOT EXISTS '$DBUSER'@'localhost' IDENTIFIED BY '$_DBPASS_MY';
 GRANT ALL PRIVILEGES ON \`$DBNAME\`.* TO '$DBUSER'@'localhost';
 FLUSH PRIVILEGES;
 SQL
+    unset _DBPASS_MY
   fi
 elif [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "2" ]; then
   echo "🌐 Installiere ${DBTYPE^^} Client für Remote-Verbindung..."
@@ -1302,8 +1317,9 @@ chown "$APPUSER:$APPUSER" "$APPDIR"
 # -------------------------------------------------------------------
 if [[ "$SOURCE_TYPE" == "zip" ]]; then
   echo "📦 Entpacke ZIP nach $APPDIR..."
-  _ZIP_TMP="/tmp/_dmd_zip_${PROJECTNAME}_$$"
-  mkdir -p "$_ZIP_TMP"
+  # mktemp -d statt vorhersehbarem /tmp-Pfad (mode 700, kein Symlink-/Race-Risiko).
+  _ZIP_TMP="$(mktemp -d "/tmp/_dmd_zip_${PROJECTNAME}_XXXXXX")"
+  chmod 700 "$_ZIP_TMP"
   unzip -q "$UPLOAD_ZIP_PATH" -d "$_ZIP_TMP" 2>/dev/null \
     || { echo "❌ FEHLER: ZIP konnte nicht entpackt werden"; exit 1; }
 
@@ -1681,7 +1697,8 @@ if ! is_done "migrations_done"; then
     fi
     echo "✅ PostgreSQL-Verbindung erfolgreich"
   elif [ "$DBTYPE" = "mysql" ]; then
-    if ! mysql -h "$DBHOST" -P "$DBPORT" -u "$DBUSER" -p"$DBPASS" \
+    # MYSQL_PWD statt -p"$DBPASS": Passwort nicht in der Prozess-Argumentliste.
+    if ! MYSQL_PWD="$DBPASS" mysql -h "$DBHOST" -P "$DBPORT" -u "$DBUSER" \
          "$DBNAME" -e "SELECT 1" >/dev/null 2>&1; then
       echo "❌ FEHLER: MySQL/MariaDB-Verbindung fehlgeschlagen!"
       echo "   Host: $DBHOST | Port: $DBPORT | User: $DBUSER | DB: $DBNAME"
@@ -1768,7 +1785,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind ${LOCAL_IP}:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
+ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind ${GUNICORN_BIND_HOST}:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
 Restart=always
 RestartSec=10
 
@@ -1844,10 +1861,12 @@ fi
 # Real-IP: lokaler Reverse Proxy (Zoraxy etc.) + Cloudflare
 if [ ! -f /etc/nginx/conf.d/realip.conf ]; then
   cat > /etc/nginx/conf.d/realip.conf <<'REALIP'
-# Lokaler Reverse Proxy (Zoraxy, Traefik, etc.) — privates Netz
-set_real_ip_from 10.0.0.0/8;
-set_real_ip_from 172.16.0.0/12;
-set_real_ip_from 192.168.0.0/16;
+# Lokaler Reverse Proxy (Zoraxy, Traefik, etc.).
+# WICHTIG: NICHT blanket allen privaten Netzen vertrauen — sonst kann jeder
+# Host im LAN per X-Forwarded-For seine IP fälschen (umgeht Rate-Limit/fail2ban
+# und verfälscht Logs). Nur Loopback ist standardmäßig vertrauenswürdig; trage
+# hier die KONKRETE IP deines Reverse Proxys ein, falls vorhanden, z.B.:
+#   set_real_ip_from 192.168.1.10;
 set_real_ip_from 127.0.0.1;
 # Cloudflare IPv4
 set_real_ip_from 103.21.244.0/22;
@@ -1912,7 +1931,7 @@ server {
     # Security Headers
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-XSS-Protection "0" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' data: https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';" always;
@@ -1930,7 +1949,7 @@ server {
     location ~* ^/(login|djadmin/login|accounts/login|api/auth) {
         limit_req zone=django_login burst=10 nodelay;
         add_header Retry-After 60 always;
-        proxy_pass http://${LOCAL_IP}:${GUNICORN_PORT};
+        proxy_pass http://${GUNICORN_BIND_HOST}:${GUNICORN_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -1958,7 +1977,7 @@ server {
     # Scanner-Endpunkte — längerer Timeout wegen HTTP/Port-Scans (max. 90s Django-Timeout)
     location ~* ^/(security-scanner/(http-scan|port-scan)|[^/]+/http-scan|[^/]+/security-scan|manager/(http-scan|security-scan))/ {
         limit_req zone=django_general burst=5 nodelay;
-        proxy_pass http://${LOCAL_IP}:${GUNICORN_PORT};
+        proxy_pass http://${GUNICORN_BIND_HOST}:${GUNICORN_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -1971,7 +1990,7 @@ server {
     # Django App
     location / {
         limit_req zone=django_general burst=30 nodelay;
-        proxy_pass http://${LOCAL_IP}:${GUNICORN_PORT};
+        proxy_pass http://${GUNICORN_BIND_HOST}:${GUNICORN_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -2147,14 +2166,17 @@ if [ -f "\$APPDIR/requirements.txt" ]; then
   su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && pip install --no-cache-dir -r requirements.txt"
 fi
 
-# Migrationen prüfen und ausführen
-echo "🔍 Prüfe auf neue Migrationen..."
+# Migrationen prüfen. In Produktion NIEMALS automatisch makemigrations
+# ausführen — Migrationsdateien sind ausführbarer Python-Code und gehören in
+# die Versionskontrolle, nicht auf dem Server generiert. Bei Drift nur warnen.
+echo "🔍 Prüfe auf nicht-committete Modelländerungen..."
 su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py makemigrations --check --dry-run" || {
-  echo "⚠️  Neue Migrationen gefunden. Führe makemigrations aus..."
-  su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py makemigrations"
+  echo "⚠️  Modelländerungen ohne zugehörige Migration erkannt."
+  echo "    → Migration lokal mit 'manage.py makemigrations' erstellen und committen,"
+  echo "      dann erneut deployen. (makemigrations wird hier NICHT automatisch ausgeführt.)"
 }
 
-echo "📊 Führe Migrationen aus..."
+echo "📊 Führe (committete) Migrationen aus..."
 su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py migrate"
 
 # Statische Dateien sammeln
@@ -2213,9 +2235,12 @@ fi
 # .env sichern
 [ -f "\$APPDIR/.env" ] && cp "\$APPDIR/.env" "\$BACKUP_DIR/env_\${TIMESTAMP}.backup" && chmod 600 "\$BACKUP_DIR/env_\${TIMESTAMP}.backup"
 
-# Projekt sichern
-tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.log' \\
+# Projekt sichern. .env wird separat (oben, mode 600) gesichert und hier
+# AUSGESCHLOSSEN, damit SECRET_KEY/DB-Passwort nicht zusätzlich im weiter
+# kopierbaren Projekt-Tarball landen.
+tar --exclude='.env' --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.log' \\
     -czf "\$BACKUP_DIR/project_\${TIMESTAMP}.tar.gz" -C /srv "\$PROJECT" 2>/dev/null || echo "⚠️ Projekt-Backup fehlgeschlagen"
+chmod 600 "\$BACKUP_DIR/project_\${TIMESTAMP}.tar.gz" 2>/dev/null || true
 
 # Maximal 5 Backups behalten (älteste löschen)
 ls -t "\$BACKUP_DIR"/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
@@ -2651,9 +2676,14 @@ echo
 echo "✅ FERTIG! Viel Erfolg mit deinem Django-Projekt! 🚀"
 echo "════════════════════════════════════════════════════════════════════"
 
-# State-Datei nach erfolgreicher Installation entfernen
+# State-Datei nach erfolgreicher Installation entfernen.
+# Sie enthält Klartext-Secrets — daher nach Möglichkeit sicher überschreiben.
 if [ -f "${STATE_FILE:-}" ]; then
-  rm -f "$STATE_FILE"
+  if command -v shred >/dev/null 2>&1; then
+    shred -u "$STATE_FILE" 2>/dev/null || rm -f "$STATE_FILE"
+  else
+    rm -f "$STATE_FILE"
+  fi
   echo "🧹 Installations-State-Datei bereinigt"
 fi
 
@@ -3189,7 +3219,7 @@ server {
     # Security Headers
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-XSS-Protection "0" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
     # Content-Security-Policy: set by Django's SecurityHeadersMiddleware with per-request nonce.

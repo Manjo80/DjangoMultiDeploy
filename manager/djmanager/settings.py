@@ -157,7 +157,12 @@ REGISTRY_DIR    = os.getenv('REGISTRY_DIR',    '/etc/django-servers.d')
 INSTALL_LOG_DIR = os.getenv('INSTALL_LOG_DIR', os.path.join(tempfile.gettempdir(), 'djmanager_logs'))
 MANAGER_VENV    = os.getenv('MANAGER_VENV',    '/srv/djmanager/venv')
 
+# Install logs can contain echoed secrets — keep the directory root-only.
 os.makedirs(INSTALL_LOG_DIR, exist_ok=True)
+try:
+    os.chmod(INSTALL_LOG_DIR, 0o700)
+except OSError:
+    pass
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 _LOG_DIR = '/var/log/djmanager'

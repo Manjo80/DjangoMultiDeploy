@@ -147,6 +147,10 @@ def install_run(request):
                           {'error': 'Nur .zip Dateien erlaubt.'})
         upload_dir = _UPLOAD_DIR
         os.makedirs(upload_dir, exist_ok=True)
+        try:
+            os.chmod(upload_dir, 0o700)
+        except OSError:
+            pass
         zip_path = os.path.join(upload_dir, f'{project}.zip')
         with open(zip_path, 'wb') as f:
             for chunk in zip_file.chunks():
@@ -183,6 +187,11 @@ def install_run(request):
 
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(_INSTALL_DIR, exist_ok=True)
+    for _d in (log_dir, _INSTALL_DIR):
+        try:
+            os.chmod(_d, 0o700)
+        except OSError:
+            pass
     with open(log_path, 'w') as log_f:
         proc = subprocess.Popen(
             [_BASH, settings.INSTALL_SCRIPT],
