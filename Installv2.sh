@@ -1176,14 +1176,23 @@ if [[ "$USE_GITHUB" == "true" ]]; then
   while true; do
     _wait_for_github_confirm
 
-    # known_hosts für github.com (als root)
-    ssh-keyscan -H github.com >> /root/.ssh/known_hosts 2>/dev/null || true
-    chmod 644 /root/.ssh/known_hosts
+    # known_hosts für github.com (als root).
+    # GitHubs offiziellen, stabilen Ed25519-Hostkey PINNEN (statt blindem TOFU
+    # per ssh-keyscan). So wird ein MITM beim ersten Kontakt erkannt: ssh
+    # bevorzugt den bekannten ed25519-Key, ein gefälschter Key passt nicht.
+    mkdir -p /root/.ssh
+    _GH_ED25519='github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
+    touch /root/.ssh/known_hosts
+    grep -qF "$_GH_ED25519" /root/.ssh/known_hosts 2>/dev/null \
+      || echo "$_GH_ED25519" >> /root/.ssh/known_hosts
+    # rsa/ecdsa zusätzlich aufnehmen (für Clients ohne ed25519-Präferenz)
+    ssh-keyscan -H -t rsa,ecdsa github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+    chmod 600 /root/.ssh/known_hosts
 
-    # SSH-Verbindung zu GitHub testen
+    # SSH-Verbindung zu GitHub testen (accept-new respektiert den gepinnten Key)
     echo "🔍 Teste SSH-Verbindung zu GitHub (Port 22)..."
     SSH_TEST_RESULT=$(timeout 15 ssh -i "$GITHUB_DEPLOY_KEY" -o IdentitiesOnly=yes \
-      -o StrictHostKeyChecking=no -o ConnectTimeout=10 -T git@github.com 2>&1 || true)
+      -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -T git@github.com 2>&1 || true)
 
     if echo "$SSH_TEST_RESULT" | grep -q "successfully authenticated"; then
       echo "✅ GitHub SSH Port 22 erfolgreich verbunden"
@@ -1360,7 +1369,7 @@ cd "$APPDIR"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --no-cache-dir --upgrade pip
-pip install --no-cache-dir --prefer-binary django gunicorn python-dotenv pillow
+pip install --no-cache-dir --prefer-binary 'django>=4.2,<6.0' 'gunicorn>=21,<24' 'python-dotenv>=1.0' pillow
 
 if [ "$DBTYPE" = "postgresql" ]; then
   pip install --no-cache-dir --prefer-binary "psycopg[binary]"
@@ -1409,7 +1418,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install --no-cache-dir --upgrade pip
 # --prefer-binary: verwendet fertige Binary-Wheels statt Kompilierung (spart ~300 MB RAM-Peak)
-pip install --no-cache-dir --prefer-binary django gunicorn python-dotenv pillow
+pip install --no-cache-dir --prefer-binary 'django>=4.2,<6.0' 'gunicorn>=21,<24' 'python-dotenv>=1.0' pillow
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then
@@ -1435,7 +1444,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install --no-cache-dir --upgrade pip
 # --prefer-binary: verwendet fertige Binary-Wheels statt Kompilierung (spart ~300 MB RAM-Peak)
-pip install --no-cache-dir --prefer-binary django gunicorn python-dotenv pillow
+pip install --no-cache-dir --prefer-binary 'django>=4.2,<6.0' 'gunicorn>=21,<24' 'python-dotenv>=1.0' pillow
 
 # DB-spezifische Pakete
 if [ "$DBTYPE" = "postgresql" ]; then

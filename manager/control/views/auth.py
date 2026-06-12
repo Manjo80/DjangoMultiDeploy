@@ -1,5 +1,6 @@
 """Authentication, 2FA setup / verify, and profile views."""
 import logging
+from datetime import timedelta
 
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
@@ -8,12 +9,23 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.models import User
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from ..models import UserProfile, AuditLog, SecuritySettings
+from ..middleware import get_client_ip
 from ._helpers import _get_role
 
 logger = logging.getLogger('djmanager.views.auth')
+
+# Generic message for any throttling case — does NOT reveal whether the
+# account exists or is specifically locked (prevents username enumeration).
+_GENERIC_THROTTLE_MSG = (
+    'Zu viele fehlgeschlagene Anmeldeversuche. Bitte einige Minuten warten.'
+)
+# Per-IP throttle: block after this many failed logins from one IP in the window.
+_IP_FAIL_LIMIT = 15
+_IP_FAIL_WINDOW_MIN = 15
 
 
 # ── Login / Logout ────────────────────────────────────────────────────────────
@@ -27,12 +39,27 @@ def login_view(request):
         username = request.POST.get('username', '').strip()
         password = request.POST.get('password', '')
 
+        # Per-IP throttle (shared across workers via the audit log in the DB).
+        client_ip = get_client_ip(request)
+        if client_ip:
+            since = timezone.now() - timedelta(minutes=_IP_FAIL_WINDOW_MIN)
+            recent_ip_fails = AuditLog.objects.filter(
+                action='Login fehlgeschlagen', success=False,
+                ip_address=client_ip, timestamp__gte=since,
+            ).count()
+            if recent_ip_fails >= _IP_FAIL_LIMIT:
+                AuditLog.log(request, 'Login blockiert (IP Rate Limit)',
+                             details=username, success=False)
+                return render(request, 'control/login.html',
+                              {'error': _GENERIC_THROTTLE_MSG})
+
+        # Per-account lock. Use the SAME generic message as the IP throttle so a
+        # locked account is indistinguishable from a wrong password.
         try:
             profile = User.objects.get(username=username).userprofile
             if profile.is_locked():
-                error = 'Konto vorübergehend gesperrt (zu viele fehlgeschlagene Versuche). Bitte 15 Minuten warten.'
                 AuditLog.log(request, 'Login blockiert (Rate Limit)', details=username, success=False)
-                return render(request, 'control/login.html', {'error': error})
+                return render(request, 'control/login.html', {'error': _GENERIC_THROTTLE_MSG})
         except (User.DoesNotExist, UserProfile.DoesNotExist):
             pass
 

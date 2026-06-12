@@ -197,14 +197,25 @@ def manager_settings_view(request):
 
 @admin_required
 def manager_env_view(request):
-    """Read/write the manager's .env file directly via the web UI."""
+    """Read/write the manager's .env file directly via the web UI.
+
+    Secret values are masked in the browser and merged back from disk on save,
+    so secrets are never exposed nor clobbered by the placeholder.
+    """
+    from ..utils.secrets_mask import mask_env_for_edit, merge_env_secrets
     env_path = Path(settings.BASE_DIR) / '.env'
     error = None
     success_msg = None
 
     if request.method == 'POST':
-        new_content = request.POST.get('env_content', '')
+        submitted = request.POST.get('env_content', '')
         try:
+            try:
+                with open(env_path) as f:
+                    original = f.read()
+            except OSError:
+                original = ''
+            new_content = merge_env_secrets(submitted, original)
             with open(env_path, 'w') as f:
                 f.write(new_content)
             os.chmod(env_path, 0o600)
@@ -220,7 +231,7 @@ def manager_env_view(request):
 
     try:
         with open(env_path) as f:
-            env_content = f.read()
+            env_content = mask_env_for_edit(f.read())
     except OSError:
         env_content = ''
 
@@ -247,14 +258,21 @@ def project_env_view(request, name):
     if not conf:
         raise Http404(f'Projekt "{name}" nicht gefunden.')
 
+    from ..utils.secrets_mask import mask_env_for_edit, merge_env_secrets
     appdir   = conf.get('APPDIR', f'/srv/{name}')
     env_path = Path(appdir) / '.env'
     error    = None
     success_msg = None
 
     if request.method == 'POST':
-        new_content = request.POST.get('env_content', '')
+        submitted = request.POST.get('env_content', '')
         try:
+            try:
+                with open(env_path) as f:
+                    original = f.read()
+            except OSError:
+                original = ''
+            new_content = merge_env_secrets(submitted, original)
             with open(env_path, 'w') as f:
                 f.write(new_content)
             os.chmod(env_path, 0o600)
@@ -270,7 +288,7 @@ def project_env_view(request, name):
 
     try:
         with open(env_path) as f:
-            env_content = f.read()
+            env_content = mask_env_for_edit(f.read())
     except OSError:
         env_content = ''
 
