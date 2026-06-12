@@ -95,8 +95,19 @@ _ufw_port_allowed() {
   ufw status 2>/dev/null | grep -qE "^${_port}[/ ].*ALLOW"
 }
 
-# Unterbrochene Installationen suchen
-mapfile -t _STATES < <( { compgen -G "$STATE_DIR/django_install_*.state"; compgen -G "/tmp/django_install_*.state"; } 2>/dev/null || true)
+# Alte State-Dateien aus /tmp ins root-only Verzeichnis übernehmen — aber nur
+# root-eigene reguläre Dateien. Direkt aus dem world-writable /tmp zu sourcen
+# wäre eine Privilege-Escalation: jeder lokale User könnte dort eine Datei mit
+# beliebigem Bash-Code ablegen, der dann als root ausgeführt würde.
+for _legacy in /tmp/django_install_*.state; do
+  [ -e "$_legacy" ] || continue
+  if [ ! -L "$_legacy" ] && [ -f "$_legacy" ] && [ "$(stat -c %u "$_legacy" 2>/dev/null)" = "0" ]; then
+    mv "$_legacy" "$STATE_DIR/" 2>/dev/null || true
+  fi
+done
+
+# Unterbrochene Installationen suchen (nur im root-only State-Verzeichnis)
+mapfile -t _STATES < <(compgen -G "$STATE_DIR/django_install_*.state" 2>/dev/null || true)
 if [ "${#_STATES[@]}" -gt 0 ] && [ -f "${_STATES[0]}" ]; then
   echo
   echo "┌──────────────────────────────────────────────────────────────────┐"

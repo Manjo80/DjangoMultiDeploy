@@ -39,6 +39,17 @@ from ._helpers import admin_required, operator_required, _check_project_access, 
 logger = logging.getLogger('djmanager.views.admin')
 
 
+def _delayed_systemctl(action, svc, delay=2):
+    """Run `systemctl <action> <svc>` after a short delay so the HTTP response
+    reaches the browser before the manager restarts itself. action/svc are
+    passed as positional parameters — never interpolated into the shell string."""
+    subprocess.Popen(
+        [_BASH, '-c', 'sleep "$1" && exec "$2" "$3" "$4"', '_',
+         str(delay), _SYSTEMCTL, action, svc],
+        close_fds=True, start_new_session=True,
+    )
+
+
 # ── Audit Log ─────────────────────────────────────────────────────────────────
 
 @admin_required
@@ -142,10 +153,7 @@ def manager_settings_view(request):
 
             def _schedule_restart():
                 svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
-                subprocess.Popen(
-                    [_BASH, '-c', f'sleep 2 && {_SYSTEMCTL} restart {svc}'],
-                    close_fds=True, start_new_session=True,
-                )
+                _delayed_systemctl('restart', svc, delay=2)
 
             if action == 'add':
                 if host in cur_hosts:
@@ -220,10 +228,7 @@ def manager_env_view(request):
                 f.write(new_content)
             os.chmod(env_path, 0o600)
             svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
-            subprocess.Popen(
-                [_BASH, '-c', f'sleep 2 && {_SYSTEMCTL} restart {svc}'],
-                close_fds=True, start_new_session=True,
-            )
+            _delayed_systemctl('restart', svc, delay=2)
             AuditLog.log(request, 'Manager: .env bearbeitet')
             success_msg = 'Die .env-Datei wurde gespeichert. Service wird neu gestartet…'
         except OSError as e:
@@ -391,10 +396,7 @@ def manager_action(request):
         return JsonResponse({'ok': False, 'message': 'Ungültige Aktion'})
     svc = getattr(settings, 'MANAGER_SERVICE_NAME', 'djmanager')
     if action in ('restart', 'stop'):
-        subprocess.Popen(
-            [_BASH, '-c', f'sleep 1 && {_SYSTEMCTL} {action} {svc}'],
-            close_fds=True, start_new_session=True,
-        )
+        _delayed_systemctl(action, svc, delay=1)
         AuditLog.log(request, f'Manager-Service {action}', success=True)
         return JsonResponse({'ok': True, 'message': f'Service wird {action}ed…'})
     from ..utils import service_action as _service_action

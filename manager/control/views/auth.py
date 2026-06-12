@@ -10,6 +10,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from ..models import UserProfile, AuditLog, SecuritySettings
@@ -26,6 +27,16 @@ _GENERIC_THROTTLE_MSG = (
 # Per-IP throttle: block after this many failed logins from one IP in the window.
 _IP_FAIL_LIMIT = 15
 _IP_FAIL_WINDOW_MIN = 15
+
+
+def _safe_next_url(request, candidate, fallback='/dashboard/'):
+    """Only allow same-host relative redirect targets (prevents open redirect)."""
+    if candidate and url_has_allowed_host_and_scheme(
+        candidate, allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return candidate
+    return fallback
 
 
 # ── Login / Logout ────────────────────────────────────────────────────────────
@@ -94,14 +105,15 @@ def login_view(request):
             # login() without completing the second factor.
             if profile is not None and profile.totp_enabled:
                 request.session['2fa_user_id'] = user.pk
-                request.session['2fa_next']    = request.GET.get('next', '/dashboard/')
+                request.session['2fa_next']    = _safe_next_url(
+                    request, request.GET.get('next'))
                 request.session.pop('2fa_verified', None)
                 AuditLog.log(request, '2FA-Verify angefordert', details=username)
                 return redirect('two_factor_verify')
 
             login(request, user)
             AuditLog.log(request, 'Login erfolgreich', details=username)
-            return redirect(request.GET.get('next', 'dashboard'))
+            return redirect(_safe_next_url(request, request.GET.get('next')))
 
         try:
             fail_user = User.objects.get(username=username)
@@ -248,7 +260,7 @@ def two_factor_verify(request):
                       backend='django.contrib.auth.backends.ModelBackend')
                 del request.session['2fa_user_id']
             AuditLog.log(request, '2FA verifiziert', details=verify_user.username)
-            next_url = request.session.pop('2fa_next', '/dashboard/')
+            next_url = _safe_next_url(request, request.session.pop('2fa_next', ''))
             return redirect(next_url)
 
         error = 'Ungültiger Code. Bitte erneut versuchen.'
