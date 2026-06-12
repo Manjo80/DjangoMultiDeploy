@@ -7,12 +7,15 @@ DjangoMultiDeploy Manager — Security Middleware
 """
 import base64
 import ipaddress
+import logging
 import secrets
 import threading
 
 from django.conf import settings
 from django.shortcuts import redirect
 from django.http import HttpResponseForbidden
+
+logger = logging.getLogger('djmanager.middleware')
 
 
 def get_client_ip(request):
@@ -137,7 +140,11 @@ class TwoFactorMiddleware:
                     if SecuritySettings.get().require_2fa:
                         return redirect(f'/2fa/setup/?next={request.path}')
             except Exception:
-                pass
+                # Fail-open nur für den Fall fehlender Tabellen während der
+                # Erstmigration — aber niemals stumm: jeder andere Fehler hier
+                # würde sonst unbemerkt die 2FA-Pflicht aushebeln.
+                logger.exception('TwoFactorMiddleware: 2FA-Prüfung fehlgeschlagen '
+                                 '(Request wird ohne 2FA-Gate durchgelassen)')
 
         return self.get_response(request)
 

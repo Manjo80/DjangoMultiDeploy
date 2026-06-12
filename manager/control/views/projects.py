@@ -43,6 +43,7 @@ from ..utils import (
     remove_project,
     start_job,
     get_project_nginx_config, save_project_nginx_config, _CSP_DEFAULT,
+    certbot_available, cert_status, obtain_certificate, is_valid_hostname,
 )
 from ._helpers import (
     admin_required, operator_required, _get_role,
@@ -349,6 +350,51 @@ def project_http_scan(request, name):
                                         local_port=_local_port)
 
     return JsonResponse(result)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Let's Encrypt / TLS certificate (optional, opt-in per project)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def project_tls_cert(request, name):
+    """
+    GET  → return certbot availability + cert status for the project's hostnames.
+    POST → request/renew a Let's Encrypt certificate for a chosen hostname.
+
+    Entirely optional: deployments that terminate TLS on an external reverse
+    proxy never use this. Requires the certbot nginx plugin on the host.
+    """
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Nur Admins'}, status=403)
+
+    conf = get_project(name)
+    if not conf:
+        return JsonResponse({'error': 'Projekt nicht gefunden'}, status=404)
+
+    candidate_hosts = _build_extern_scan_hosts(
+        get_nginx_server_names(name), get_allowed_hosts(name))
+
+    if request.method == 'POST':
+        domain = request.POST.get('domain', '').strip().lower()
+        email  = request.POST.get('email', '').strip()
+        if not is_valid_hostname(domain):
+            return JsonResponse({'ok': False, 'output': 'Ungültiger Hostname.'})
+        # Only allow domains that actually belong to this project's nginx config.
+        if domain not in candidate_hosts:
+            return JsonResponse({'ok': False,
+                                 'output': 'Hostname gehört nicht zu diesem Projekt.'})
+        result = obtain_certificate(domain, email)
+        AuditLog.log(request, 'Let\'s-Encrypt-Zertifikat angefordert', project=name,
+                     details=domain, success=result.get('ok', False))
+        return JsonResponse(result)
+
+    return JsonResponse({
+        'certbot_available': certbot_available(),
+        'hosts': [{'domain': h, **cert_status(h)} for h in candidate_hosts],
+    })
 
 
 # ──────────────────────────────────────────────────────────────────────────────

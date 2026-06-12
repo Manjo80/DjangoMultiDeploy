@@ -98,15 +98,37 @@ from .scanning import (
 
 from .jobs import start_job, get_job
 
+from .notify import (
+    send_notification,
+    EVENT_BACKUP_FAILURE,
+    EVENT_SERVICE_DOWN,
+    EVENT_VULNERABILITY,
+)
+
+from .tls import (
+    certbot_available,
+    cert_status,
+    obtain_certificate,
+)
+
 from .validators import (
     is_valid_project_name,
     is_valid_db_identifier,
     is_valid_linux_user,
+    is_valid_hostname,
 )
 
 __all__ = [
     # validators
     'is_valid_project_name', 'is_valid_db_identifier', 'is_valid_linux_user',
+    'is_valid_hostname',
+    # notify
+    'send_notification', 'EVENT_BACKUP_FAILURE', 'EVENT_SERVICE_DOWN',
+    'EVENT_VULNERABILITY',
+    # tls / let's encrypt
+    'certbot_available', 'cert_status', 'obtain_certificate',
+    # jobs
+    'start_job', 'get_job',
     # registry
     '_parse_conf', 'get_all_projects', 'get_project', 'get_service_status',
     'service_action', 'get_journal_logs', 'get_nginx_log', 'set_project_conf_value',

@@ -36,19 +36,6 @@ if [ -z "$SCRIPT_DIR" ]; then
   SCRIPT_DIR="/opt/DjangoMultiDeploy"
 fi
 
-# Patch: Füge Security-Header-Fix vor dem abschließenden Banner ein
-PATCH=$(cat <<'PATCHEOF'
-
-# Security-Header sicherstellen (nginx-Config regenerierung kann Headers zurücksetzen)
-_FIX_HEADERS="$SCRIPT_DIR/fix_security_headers.sh"
-if [ -f "$_FIX_HEADERS" ]; then
-  echo "🔒 Überprüfe Security-Header..."
-  NGINX_SITES=/etc/nginx/sites-available bash "$_FIX_HEADERS" 2>&1 \
-    | grep -v "^📦\|^📋\|^🔒\|Verzeichnis\|Backup\|Gefundene\|•\|Fertig" || true
-fi
-PATCHEOF
-)
-
 # Einfügen vor der abschließenden Banner-Zeile
 BANNER_LINE=$(grep -n "MANAGER UPDATE DONE" "$UPDATE_SCRIPT" | head -1 | cut -d: -f1)
 if [ -z "$BANNER_LINE" ]; then
@@ -59,21 +46,29 @@ fi
 # Referenzzeile: die nginx -t Zeile davor finden (2 Zeilen vor Banner)
 REF_LINE=$((BANNER_LINE - 2))
 
-# Patch per python3 (zuverlässiger als sed bei mehrzeiligen Inserts)
-python3 - <<PYEOF
-lines = open("$UPDATE_SCRIPT").readlines()
-insert_at = $REF_LINE  # nach dieser Zeilennummer einfügen
-patch = """
+# Patch per python3 (zuverlässiger als sed bei mehrzeiligen Inserts).
+# Pfad und Zeilennummer als argv übergeben — keine Bash-Interpolation im Code.
+python3 - "$UPDATE_SCRIPT" "$REF_LINE" <<'PYEOF'
+import sys
+
+update_script = sys.argv[1]
+insert_at = int(sys.argv[2])  # nach dieser Zeilennummer einfügen
+
+patch = '''
 # Security-Header sicherstellen (nginx-Config regenerierung kann Headers zurücksetzen)
-_FIX_HEADERS="\$SCRIPT_DIR/fix_security_headers.sh"
-if [ -f "\$_FIX_HEADERS" ]; then
+_FIX_HEADERS="$SCRIPT_DIR/fix_security_headers.sh"
+if [ -f "$_FIX_HEADERS" ]; then
   echo "🔒 Überprüfe Security-Header..."
-  NGINX_SITES=/etc/nginx/sites-available bash "\$_FIX_HEADERS" 2>&1 \\\\
-    | grep -v "^📦\\\\|^📋\\\\|^🔒\\\\|Verzeichnis\\\\|Backup\\\\|Gefundene\\\\|•\\\\|Fertig" || true
+  NGINX_SITES=/etc/nginx/sites-available bash "$_FIX_HEADERS" 2>&1 \\
+    | grep -v "^📦\\|^📋\\|^🔒\\|Verzeichnis\\|Backup\\|Gefundene\\|•\\|Fertig" || true
 fi
-"""
+'''
+
+with open(update_script) as f:
+    lines = f.readlines()
 lines.insert(insert_at, patch)
-open("$UPDATE_SCRIPT", 'w').writelines(lines)
+with open(update_script, 'w') as f:
+    f.writelines(lines)
 print("✅ Patch eingefügt")
 PYEOF
 

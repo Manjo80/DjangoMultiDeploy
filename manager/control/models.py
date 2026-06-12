@@ -274,3 +274,91 @@ class ProjectPermission(models.Model):
 
     def __str__(self):
         return f'{self.user.username} → {self.project_name}'
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HealthSample — time series of server resource usage for the dashboard sparkline
+# ──────────────────────────────────────────────────────────────────────────────
+
+class HealthSample(models.Model):
+    """One snapshot of server resource usage. Kept short-term for trend display."""
+    timestamp    = models.DateTimeField(auto_now_add=True, db_index=True)
+    mem_percent  = models.IntegerField(null=True, blank=True)
+    disk_percent = models.IntegerField(null=True, blank=True)
+    load1        = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f'[{self.timestamp:%Y-%m-%d %H:%M}] mem={self.mem_percent}% disk={self.disk_percent}%'
+
+    @classmethod
+    def record(cls, stats):
+        """Persist a sample from a get_server_stats() dict. Never raises."""
+        try:
+            def _f(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+            cls.objects.create(
+                mem_percent=stats.get('mem_percent'),
+                disk_percent=stats.get('disk_percent'),
+                load1=_f(stats.get('load1')),
+            )
+        except Exception:
+            logger.debug('HealthSample.record failed', exc_info=True)
+
+    @classmethod
+    def prune(cls, keep_days=7):
+        """Delete samples older than keep_days. Never raises."""
+        try:
+            cutoff = timezone.now() - timedelta(days=keep_days)
+            cls.objects.filter(timestamp__lt=cutoff).delete()
+        except Exception:
+            logger.debug('HealthSample.prune failed', exc_info=True)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# NotificationSettings — singleton: where/when to send alerts
+# ──────────────────────────────────────────────────────────────────────────────
+
+class NotificationSettings(models.Model):
+    """Singleton row (pk=1). Controls e-mail and webhook alerting."""
+    enabled        = models.BooleanField(default=False,
+                                         help_text='Benachrichtigungen aktivieren.')
+
+    # E-mail (SMTP)
+    email_enabled  = models.BooleanField(default=False)
+    email_to       = models.CharField(max_length=255, blank=True,
+                                      help_text='Empfänger, kommasepariert.')
+    smtp_host      = models.CharField(max_length=255, blank=True)
+    smtp_port      = models.IntegerField(default=587)
+    smtp_user      = models.CharField(max_length=255, blank=True)
+    smtp_password  = models.CharField(max_length=255, blank=True)
+    smtp_from      = models.CharField(max_length=255, blank=True)
+    smtp_use_tls   = models.BooleanField(default=True)
+
+    # Webhook (generic JSON POST — Slack/Discord/Mattermost compatible)
+    webhook_enabled = models.BooleanField(default=False)
+    webhook_url     = models.URLField(max_length=500, blank=True)
+
+    # Which events trigger an alert
+    notify_backup_failure  = models.BooleanField(default=True)
+    notify_service_down    = models.BooleanField(default=True)
+    notify_vulnerabilities = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = verbose_name_plural = 'Notification Settings'
+
+    @classmethod
+    def get(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def recipients(self):
+        return [a.strip() for a in self.email_to.split(',') if a.strip()]
+
+    def __str__(self):
+        return 'Notification Settings'

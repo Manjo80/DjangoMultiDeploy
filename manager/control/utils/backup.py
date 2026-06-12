@@ -36,15 +36,34 @@ def run_backup(name):
     """Run the project backup script. Returns (ok, output)."""
     script = f'/usr/local/bin/{name}_backup.sh'
     if not os.path.exists(script):
-        return False, f'Backup script not found: {script}'
+        ok, output = False, f'Backup script not found: {script}'
+        _notify_backup_failure(name, output)
+        return ok, output
     try:
         result = subprocess.run(
             [script],
             capture_output=True, text=True, timeout=300
         )
-        return result.returncode == 0, (result.stdout + result.stderr)
+        ok = result.returncode == 0
+        output = (result.stdout + result.stderr)
     except Exception as e:
-        return False, str(e)
+        ok, output = False, str(e)
+    if not ok:
+        _notify_backup_failure(name, output)
+    return ok, output
+
+
+def _notify_backup_failure(name, output):
+    try:
+        from .notify import send_notification, EVENT_BACKUP_FAILURE
+        send_notification(
+            f'Backup fehlgeschlagen: {name}',
+            f'Das Backup für Projekt "{name}" ist fehlgeschlagen.\n\n'
+            f'{(output or "")[-1500:]}',
+            event_type=EVENT_BACKUP_FAILURE,
+        )
+    except Exception:
+        pass
 
 
 def delete_backup(project, filename):

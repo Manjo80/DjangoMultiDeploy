@@ -6,6 +6,8 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 from django.contrib import messages
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 
 from ..models import UserProfile, AuditLog, ProjectPermission
 from ..utils import get_all_projects
@@ -37,11 +39,15 @@ def user_create(request):
             error = f'Benutzer "{username}" existiert bereits.'
         elif password != password2:
             error = 'Passwörter stimmen nicht überein.'
-        elif len(password) < 10:
-            error = 'Passwort muss mindestens 10 Zeichen haben.'
         elif role not in [r[0] for r in UserProfile.ROLE_CHOICES]:
             error = 'Ungültige Rolle.'
         else:
+            try:
+                validate_password(password)
+            except ValidationError as exc:
+                error = ' '.join(exc.messages)
+
+        if not error:
             new_user = User.objects.create_user(
                 username=username, email=email, password=password,
                 is_staff=(role == UserProfile.ROLE_ADMIN),
@@ -94,9 +100,13 @@ def user_edit(request, uid):
                 error = 'Ungültige Rolle.'
             elif password and password != password2:
                 error = 'Passwörter stimmen nicht überein.'
-            elif password and len(password) < 10:
-                error = 'Passwort muss mindestens 10 Zeichen haben.'
-            else:
+            elif password:
+                try:
+                    validate_password(password, user=edit_user)
+                except ValidationError as exc:
+                    error = ' '.join(exc.messages)
+
+            if not error:
                 edit_user.email    = email
                 edit_user.is_staff = (role == UserProfile.ROLE_ADMIN)
                 edit_user.save()

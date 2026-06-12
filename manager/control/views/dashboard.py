@@ -7,11 +7,14 @@ from pathlib import Path
 
 _GIT = shutil.which('git') or '/usr/bin/git'
 
+from django.http import JsonResponse
 from django.shortcuts import render
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
+from django.utils import timezone
+from datetime import timedelta
 
-from ..models import UserProfile, FavoriteCommand
+from ..models import UserProfile, FavoriteCommand, HealthSample
 from ..utils import (
     get_all_projects, get_ufw_status, get_server_stats,
     get_service_status, get_last_backup,
@@ -19,6 +22,20 @@ from ..utils import (
 from ._helpers import _get_role, _allowed_projects, _is_ip_address
 
 logger = logging.getLogger('djmanager.views.dashboard')
+
+# Record at most one health sample per this interval to keep the table small.
+_HEALTH_SAMPLE_INTERVAL = timedelta(minutes=5)
+
+
+def _maybe_record_health(server_stats):
+    """Store a health sample if the last one is older than the sample interval."""
+    try:
+        last = HealthSample.objects.values_list('timestamp', flat=True).first()
+        if last is None or timezone.now() - last >= _HEALTH_SAMPLE_INTERVAL:
+            HealthSample.record(server_stats)
+            HealthSample.prune(keep_days=7)
+    except Exception:
+        logger.debug('health sampling skipped', exc_info=True)
 
 
 def _get_manager_info():
@@ -85,6 +102,7 @@ def dashboard(request):
             p['last_backup'] = get_last_backup(p.get('PROJECTNAME', ''))
         ufw          = get_ufw_status()
         server_stats = get_server_stats()
+        _maybe_record_health(server_stats)
         role         = _get_role(request.user)
         allowed_hosts = [h for h in settings.ALLOWED_HOSTS if h != '*']
         manager_info  = _get_manager_info() if role in (
@@ -116,3 +134,26 @@ def dashboard(request):
     except Exception:
         logger.error('dashboard() crashed:\n%s', traceback.format_exc())
         raise
+
+
+@login_required
+def health_history(request):
+    """Return recent server-resource samples as JSON for the dashboard sparkline."""
+    try:
+        hours = max(1, min(168, int(request.GET.get('hours', 24))))
+    except (TypeError, ValueError):
+        hours = 24
+    since = timezone.now() - timedelta(hours=hours)
+    samples = (HealthSample.objects
+               .filter(timestamp__gte=since)
+               .order_by('timestamp')
+               .values('timestamp', 'mem_percent', 'disk_percent', 'load1'))
+    return JsonResponse({'samples': [
+        {
+            'ts':   s['timestamp'].isoformat(),
+            'mem':  s['mem_percent'],
+            'disk': s['disk_percent'],
+            'load': s['load1'],
+        }
+        for s in samples
+    ]})

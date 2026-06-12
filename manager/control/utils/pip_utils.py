@@ -43,6 +43,8 @@ def run_pip_audit(project):
                     'fix':     vuln.get('fix_versions', []),
                     'desc':    vuln.get('description', '')[:200],
                 })
+        if vulns:
+            _notify_vulnerabilities(project, vulns)
         return {'ok': True, 'vulnerabilities': vulns, 'error': ''}
     except subprocess.TimeoutExpired:
         return {'ok': False, 'vulnerabilities': [], 'error': 'Timeout (pip-audit)'}
@@ -50,6 +52,21 @@ def run_pip_audit(project):
         return {'ok': False, 'vulnerabilities': [], 'error': 'Ungültige pip-audit Ausgabe'}
     except Exception as e:
         return {'ok': False, 'vulnerabilities': [], 'error': str(e)}
+
+
+def _notify_vulnerabilities(target, vulns):
+    """Send an alert when pip-audit reports vulnerabilities. Never raises."""
+    try:
+        from .notify import send_notification, EVENT_VULNERABILITY
+        lines = [f'- {v["package"]} {v["version"]}: {v["id"]}' for v in vulns[:20]]
+        send_notification(
+            f'Sicherheitslücken gefunden: {target}',
+            f'pip-audit hat {len(vulns)} Schwachstelle(n) in "{target}" gefunden:\n\n'
+            + '\n'.join(lines),
+            event_type=EVENT_VULNERABILITY,
+        )
+    except Exception:
+        pass
 
 
 def run_bandit(project):
@@ -200,6 +217,8 @@ def run_manager_pip_audit():
                     'fix':     vuln.get('fix_versions', []),
                     'desc':    vuln.get('description', '')[:200],
                 })
+        if vulns:
+            _notify_vulnerabilities('djmanager', vulns)
         return {'ok': True, 'vulnerabilities': vulns, 'error': ''}
     except subprocess.TimeoutExpired:
         return {'ok': False, 'vulnerabilities': [], 'error': 'Timeout (pip-audit)'}
@@ -258,13 +277,10 @@ def run_manager_bandit():
         return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'bandit konnte nicht installiert werden'}
 
     try:
-        # Exclude venvs and legacy monolithic files (superseded by control/utils/ package)
+        # Exclude virtualenvs from the scan.
         exclude = ','.join([
             os.path.join(appdir, 'venv'),
             os.path.join(appdir, '.venv'),
-            os.path.join(appdir, 'control', 'utils_legacy.py'),
-            os.path.join(appdir, 'control', 'utils.py'),
-            os.path.join(appdir, 'control', 'views.py'),
         ])
         result = subprocess.run(
             [bandit_bin, '-r', appdir,

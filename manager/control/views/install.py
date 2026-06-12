@@ -221,6 +221,10 @@ def install_progress(request, project, run_id):
 
 @login_required
 def install_poll(request, log_name):
+    # Nur Dateinamen im erwarteten Format <projekt>_<run_id>.log zulassen —
+    # verhindert Zugriff auf beliebige Dateien über manipulierte Namen.
+    if not _re.fullmatch(r'[A-Za-z0-9_\-]+\.log', log_name):
+        return JsonResponse({'lines': [], 'offset': 0, 'done': True, 'waiting': False})
     log_path = os.path.join(settings.INSTALL_LOG_DIR, log_name)
     try:
         offset = int(request.GET.get('offset', 0))
