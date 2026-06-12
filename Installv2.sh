@@ -2041,6 +2041,46 @@ if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
   echo "  ✅ UFW: Port ${NGINX_PORT} für ${PROJECTNAME} geöffnet"
 fi
 
+# -------------------------------------------------------------------
+# Let's Encrypt (OPTIONAL — Standard: nein)
+# Nur sinnvoll, wenn dieser Server TLS selbst terminiert (Ports 80/443
+# öffentlich erreichbar). Bei vorgelagertem Reverse Proxy mit eigenen
+# Zertifikaten überspringen — daher per Default deaktiviert.
+# -------------------------------------------------------------------
+_read -p "Let's-Encrypt-Zertifikat per certbot anfordern? [j/N]: " INSTALL_CERTBOT
+INSTALL_CERTBOT="${INSTALL_CERTBOT:-N}"
+if [[ "$INSTALL_CERTBOT" =~ ^[Jj]$ ]]; then
+  # Domain = erster ALLOWED_HOST, der wie ein FQDN aussieht (Punkt, keine reine IP)
+  _CB_DOMAIN="${CERTBOT_DOMAIN:-}"
+  if [ -z "$_CB_DOMAIN" ]; then
+    for _h in ${ALLOWED_HOSTS//,/ }; do
+      _h="$(echo "$_h" | tr -d ' ')"
+      if [[ "$_h" == *.* ]] && [[ ! "$_h" =~ ^[0-9.]+$ ]]; then
+        _CB_DOMAIN="$_h"; break
+      fi
+    done
+  fi
+  if [ -z "$_CB_DOMAIN" ]; then
+    echo "  ⏭️  Kein geeigneter Hostname in ALLOWED_HOSTS — certbot übersprungen"
+  else
+    echo "🔐 Installiere certbot (nginx-Plugin)..."
+    _apt_install certbot python3-certbot-nginx
+    _CB_ARGS=(--nginx -d "$_CB_DOMAIN" --non-interactive --agree-tos --redirect)
+    if [ -n "${CERTBOT_EMAIL:-}" ]; then
+      _CB_ARGS+=(-m "$CERTBOT_EMAIL")
+    else
+      _CB_ARGS+=(--register-unsafely-without-email)
+    fi
+    echo "🔒 Fordere Zertifikat für ${_CB_DOMAIN} an..."
+    if certbot "${_CB_ARGS[@]}"; then
+      echo "  ✅ Let's-Encrypt-Zertifikat für ${_CB_DOMAIN} aktiv"
+      command -v ufw &>/dev/null && ufw allow 443/tcp comment "HTTPS" 2>/dev/null || true
+    else
+      echo "  ⚠️  certbot fehlgeschlagen — Installation läuft ohne HTTPS weiter"
+    fi
+  fi
+fi
+
 mark_done "nginx_done"
 
 echo

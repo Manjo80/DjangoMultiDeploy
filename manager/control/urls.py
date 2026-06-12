@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     # Dashboard
     path('dashboard/', views.dashboard, name='dashboard'),
+    path('dashboard/health-history/', views.health_history, name='health_history'),
 
     # Install wizard
     path('install/', views.install_form, name='install_form'),
@@ -40,6 +41,7 @@ urlpatterns = [
     path('project/<str:name>/upload-zip/', views.project_upload_zip, name='project_upload_zip'),
     path('project/<str:name>/stats/', views.project_stats, name='project_stats'),
     path('project/<str:name>/security-scan/', views.project_security_scan, name='project_security_scan'),
+    path('project/<str:name>/tls-cert/', views.project_tls_cert, name='project_tls_cert'),
     path('project/<str:name>/favorite-commands/', views.project_favorite_commands, name='project_favorite_commands'),
     path('project/<str:name>/migrations/', views.project_migrations, name='project_migrations'),
     path('project/<str:name>/pip-outdated/', views.project_pip_outdated, name='project_pip_outdated'),
@@ -74,6 +76,9 @@ urlpatterns = [
 
     # Security settings (admin only)
     path('security/', views.security_settings_view, name='security_settings'),
+
+    # Notification settings (admin only)
+    path('notifications/', views.notification_settings_view, name='notification_settings'),
 
     # Manager-Einstellungen: ALLOWED_HOSTS (admin only)
     path('manager-settings/', views.manager_settings_view, name='manager_settings'),

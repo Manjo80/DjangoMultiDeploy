@@ -443,6 +443,32 @@
   </div>
   {% endif %}
 
+  {% if role == 'admin' %}
+  <!-- Let's Encrypt / TLS-Zertifikat (optional, admin only) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center" style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#tls-cert-body">
+        <span><i class="bi bi-shield-lock me-1"></i>TLS-Zertifikat (Let's Encrypt)</span>
+        <span class="text-muted small">optional — nur bei lokaler TLS-Terminierung <i class="bi bi-chevron-down"></i></span>
+      </div>
+      <div id="tls-cert-body" class="collapse">
+        <div class="card-body p-3">
+          <div class="alert alert-secondary small mb-2">
+            <i class="bi bi-info-circle me-1"></i>
+            Nur nötig, wenn dieser Server HTTPS selbst bereitstellt. Hinter einem
+            Reverse Proxy mit eigenen Zertifikaten nicht erforderlich.
+          </div>
+          <div id="tls-cert-info" class="alert alert-info small d-none"></div>
+          <button class="btn btn-sm btn-outline-secondary mb-2" data-action="tlsLoad">
+            <i class="bi bi-arrow-clockwise me-1"></i>Status laden
+          </button>
+          <div id="tls-cert-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Sicherheitsscan (pip-audit + Deploy + HTTP/TLS) -->
   <div class="col-12">
     <div class="card">
@@ -2212,6 +2238,8 @@ document.addEventListener('click', function (e) {
     case 'nginxLoad':             nginxLoad(); break;
     case 'nginxSave':             nginxSave(); break;
     case 'nginxAddCsp':           nginxAddCsp(); break;
+    case 'tlsLoad':               tlsLoad(); break;
+    case 'tlsObtain':             tlsObtain(el.dataset.domain, el); break;
     case 'copyToClipboard': {
       e.preventDefault();
       const target = document.getElementById(el.dataset.target);
@@ -2491,6 +2519,84 @@ ${nginxContent ? `<h2>nginx Konfiguration</h2>
     if (editor()?.value === '') nginxLoad();
   }, { once: true });
 })();
+</script>
+
+<!-- Let's Encrypt / TLS-Zertifikat JS (admin only) -->
+<script nonce="{{ csp_nonce }}">
+const tlsUrl = "{% url 'project_tls_cert' name %}";
+
+async function tlsLoad() {
+  const list = document.getElementById('tls-cert-list');
+  const info = document.getElementById('tls-cert-info');
+  list.innerHTML = '<span class="text-muted small">⏳ Lade…</span>';
+  info.classList.add('d-none');
+  try {
+    const r = await fetch(tlsUrl, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+    const d = await r.json();
+    if (!d.certbot_available) {
+      info.className = 'alert alert-warning small';
+      info.textContent = 'certbot ist nicht installiert. Paket "python3-certbot-nginx" '
+        + 'installieren oder die Installation mit der certbot-Option ausführen.';
+      info.classList.remove('d-none');
+    }
+    if (!d.hosts || !d.hosts.length) {
+      list.innerHTML = '<span class="text-muted small">Keine geeigneten Hostnamen in der nginx-Konfiguration.</span>';
+      return;
+    }
+    let html = '<table class="table table-sm table-dark mb-0"><tbody>';
+    for (const h of d.hosts) {
+      let status;
+      if (h.present && h.days_left != null) {
+        const cls = h.days_left < 14 ? 'text-warning' : 'text-success';
+        status = `<span class="${cls}">gültig bis ${escHtml(h.expires)} (${h.days_left} Tage)</span>`;
+      } else {
+        status = '<span class="text-muted">kein Zertifikat</span>';
+      }
+      html += `<tr>
+        <td class="font-monospace">${escHtml(h.domain)}</td>
+        <td>${status}</td>
+        <td class="text-end">
+          <button class="btn btn-sm btn-outline-success" data-action="tlsObtain"
+                  data-domain="${escHtml(h.domain)}" ${d.certbot_available ? '' : 'disabled'}>
+            <i class="bi bi-shield-plus me-1"></i>${h.present ? 'Erneuern' : 'Anfordern'}
+          </button>
+        </td></tr>`;
+    }
+    html += '</tbody></table>';
+    list.innerHTML = html;
+  } catch (err) {
+    list.innerHTML = '<span class="text-danger small">Fehler: ' + escHtml(err) + '</span>';
+  }
+}
+
+async function tlsObtain(domain, btn) {
+  const info = document.getElementById('tls-cert-info');
+  if (!confirm(`Let's-Encrypt-Zertifikat für ${domain} anfordern?`)) return;
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('domain', domain);
+  try {
+    const r = await fetch(tlsUrl, {method: 'POST', body: fd});
+    const d = await r.json();
+    info.className = 'alert small ' + (d.ok ? 'alert-success' : 'alert-danger');
+    info.textContent = (d.ok ? '✅ ' : '❌ ') + (d.output || '').slice(-500);
+    info.classList.remove('d-none');
+    tlsLoad();
+  } catch (err) {
+    info.className = 'alert alert-danger small';
+    info.textContent = 'Netzwerkfehler: ' + err;
+    info.classList.remove('d-none');
+  }
+  btn.disabled = false;
+  btn.innerHTML = orig;
+}
+
+document.getElementById('tls-cert-body')?.addEventListener('shown.bs.collapse', function() {
+  if (!document.getElementById('tls-cert-list').innerHTML.trim()) tlsLoad();
+}, { once: true });
 </script>
 {% endif %}
 {% endblock %}

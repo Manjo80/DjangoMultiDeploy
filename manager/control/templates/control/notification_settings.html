@@ -1,0 +1,142 @@
+{% extends "control/base.html" %}
+{% block title %}Benachrichtigungen — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-lg-8">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-bell me-2"></i>Benachrichtigungen</h4>
+  <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if success_msg %}<div class="alert alert-success">{{ success_msg }}</div>{% endif %}
+
+<p class="text-muted small">
+  Sende Alarme bei fehlgeschlagenen Backups, ausgefallenen Diensten oder
+  gefundenen Sicherheitslücken — per E-Mail und/oder Webhook (Slack, Discord,
+  Mattermost, generisch). Alles optional.
+</p>
+
+<form method="post">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="save">
+
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-toggle-on me-2"></i>Allgemein</div>
+    <div class="card-body">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="enabled" id="enabled"
+               {% if cfg.enabled %}checked{% endif %}>
+        <label class="form-check-label" for="enabled">Benachrichtigungen aktivieren</label>
+      </div>
+      <div class="form-text">Übergeordneter Schalter — ist er aus, wird nichts gesendet.</div>
+    </div>
+  </div>
+
+  <!-- Events -->
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-list-check me-2"></i>Auslösende Ereignisse</div>
+    <div class="card-body">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="notify_backup_failure" id="ev_backup"
+               {% if cfg.notify_backup_failure %}checked{% endif %}>
+        <label class="form-check-label" for="ev_backup">Backup fehlgeschlagen</label>
+      </div>
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="notify_service_down" id="ev_svc"
+               {% if cfg.notify_service_down %}checked{% endif %}>
+        <label class="form-check-label" for="ev_svc">Dienst ausgefallen</label>
+      </div>
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="notify_vulnerabilities" id="ev_vuln"
+               {% if cfg.notify_vulnerabilities %}checked{% endif %}>
+        <label class="form-check-label" for="ev_vuln">Sicherheitslücken gefunden (pip-audit)</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- E-Mail -->
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-envelope me-2"></i>E-Mail (SMTP)</div>
+    <div class="card-body">
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" name="email_enabled" id="email_enabled"
+               {% if cfg.email_enabled %}checked{% endif %}>
+        <label class="form-check-label" for="email_enabled">E-Mail-Versand aktivieren</label>
+      </div>
+      <div class="row g-2">
+        <div class="col-md-8">
+          <label class="form-label small">Empfänger <span class="text-muted">(kommasepariert)</span></label>
+          <input type="text" name="email_to" class="form-control form-control-sm"
+                 value="{{ cfg.email_to }}" placeholder="admin@example.com, ops@example.com">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small">Absender (From)</label>
+          <input type="text" name="smtp_from" class="form-control form-control-sm"
+                 value="{{ cfg.smtp_from }}" placeholder="djmanager@example.com">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">SMTP-Host</label>
+          <input type="text" name="smtp_host" class="form-control form-control-sm"
+                 value="{{ cfg.smtp_host }}" placeholder="smtp.example.com">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">Port</label>
+          <input type="number" name="smtp_port" class="form-control form-control-sm"
+                 value="{{ cfg.smtp_port }}" min="1" max="65535">
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+          <div class="form-check form-switch mb-1">
+            <input class="form-check-input" type="checkbox" name="smtp_use_tls" id="smtp_use_tls"
+                   {% if cfg.smtp_use_tls %}checked{% endif %}>
+            <label class="form-check-label small" for="smtp_use_tls">STARTTLS (Port 465 = SSL)</label>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">SMTP-Benutzer</label>
+          <input type="text" name="smtp_user" class="form-control form-control-sm"
+                 value="{{ cfg.smtp_user }}" autocomplete="off">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small">SMTP-Passwort</label>
+          <input type="password" name="smtp_password" class="form-control form-control-sm"
+                 autocomplete="new-password"
+                 placeholder="{% if has_smtp_password %}•••••• (unverändert lassen){% else %}Passwort{% endif %}">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Webhook -->
+  <div class="card mb-3">
+    <div class="card-header"><i class="bi bi-link-45deg me-2"></i>Webhook</div>
+    <div class="card-body">
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" name="webhook_enabled" id="webhook_enabled"
+               {% if cfg.webhook_enabled %}checked{% endif %}>
+        <label class="form-check-label" for="webhook_enabled">Webhook-Versand aktivieren</label>
+      </div>
+      <label class="form-label small">Webhook-URL</label>
+      <input type="url" name="webhook_url" class="form-control form-control-sm"
+             value="{{ cfg.webhook_url }}" placeholder="https://hooks.slack.com/services/...">
+      <div class="form-text">
+        JSON-POST mit Feld <code>text</code> — kompatibel mit Slack, Mattermost und
+        generischen Empfängern.
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2">
+    <button type="submit" class="btn btn-primary">
+      <i class="bi bi-floppy me-1"></i>Speichern
+    </button>
+    <button type="submit" name="action" value="test" class="btn btn-outline-info">
+      <i class="bi bi-send me-1"></i>Testbenachrichtigung senden
+    </button>
+  </div>
+</form>
+
+</div>
+</div>
+{% endblock %}

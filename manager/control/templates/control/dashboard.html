@@ -66,6 +66,19 @@
     </div>
   </div>
 </div>
+
+<!-- Ressourcen-Verlauf (letzte 24h) -->
+<div class="card py-2 px-3 mb-3" id="healthHistoryCard" style="display:none">
+  <div class="d-flex justify-content-between align-items-center">
+    <small class="text-muted"><i class="bi bi-graph-up me-1"></i>Verlauf (24h)</small>
+    <small class="text-muted" id="healthHistoryLegend">
+      <span style="color:#58a6ff">RAM</span> ·
+      <span style="color:#f0883e">Disk</span>
+    </small>
+  </div>
+  <svg id="healthSpark" viewBox="0 0 600 60" preserveAspectRatio="none"
+       style="width:100%;height:60px"></svg>
+</div>
 {% endif %}
 
 <!-- Firewall-Status Banner -->
@@ -691,6 +704,32 @@ document.addEventListener('click', function (e) {
     }
   }
 });
+
+// Ressourcen-Verlauf laden und als SVG-Sparkline zeichnen.
+(function () {
+  const card = document.getElementById('healthHistoryCard');
+  if (!card) return;
+  fetch('{% url "health_history" %}?hours=24', {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !data.samples || data.samples.length < 2) return;
+      const W = 600, H = 60;
+      const line = (key, color) => {
+        const pts = data.samples.map((s, i) => {
+          const x = (i / (data.samples.length - 1)) * W;
+          const v = s[key];
+          const y = v == null ? null : H - (Math.max(0, Math.min(100, v)) / 100) * H;
+          return y == null ? null : `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).filter(Boolean).join(' ');
+        if (!pts) return '';
+        return `<polyline fill="none" stroke="${color}" stroke-width="1.5" points="${pts}"/>`;
+      };
+      const svg = document.getElementById('healthSpark');
+      svg.innerHTML = line('mem', '#58a6ff') + line('disk', '#f0883e');
+      card.style.display = '';
+    })
+    .catch(() => {});
+})();
 </script>
 {% endblock %}
 {% endblock %}

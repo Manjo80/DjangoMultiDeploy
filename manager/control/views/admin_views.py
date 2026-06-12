@@ -20,7 +20,7 @@ from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 from django.conf import settings
 
-from ..models import AuditLog, SecuritySettings
+from ..models import AuditLog, SecuritySettings, NotificationSettings
 from ..utils import (
     get_project, service_action,
     get_ufw_status, get_ufw_port_rules, ufw_toggle_port,
@@ -87,6 +87,63 @@ def security_settings_view(request):
         'sec':         sec,
         'error':       error,
         'success_msg': success_msg,
+    })
+
+
+# ── Notification Settings (e-mail / webhook alerts) ──────────────────────────
+
+@admin_required
+def notification_settings_view(request):
+    from ..utils import send_notification
+    cfg = NotificationSettings.get()
+    error = None
+    success_msg = None
+
+    if request.method == 'POST':
+        action = request.POST.get('action', 'save')
+        if action == 'test':
+            res = send_notification(
+                'Testbenachrichtigung',
+                'Dies ist eine Testbenachrichtigung von DjangoMultiDeploy.',
+            )
+            sent = [k for k, v in res.items() if v]
+            if sent:
+                success_msg = 'Testbenachrichtigung gesendet über: ' + ', '.join(sent)
+            else:
+                error = ('Keine Benachrichtigung gesendet — sind Kanäle aktiviert '
+                         'und ist "Benachrichtigungen aktivieren" gesetzt?')
+        else:
+            cfg.enabled         = bool(request.POST.get('enabled'))
+            cfg.email_enabled   = bool(request.POST.get('email_enabled'))
+            cfg.email_to        = request.POST.get('email_to', '').strip()
+            cfg.smtp_host       = request.POST.get('smtp_host', '').strip()
+            cfg.smtp_user       = request.POST.get('smtp_user', '').strip()
+            cfg.smtp_from       = request.POST.get('smtp_from', '').strip()
+            cfg.smtp_use_tls    = bool(request.POST.get('smtp_use_tls'))
+            cfg.webhook_enabled = bool(request.POST.get('webhook_enabled'))
+            cfg.webhook_url     = request.POST.get('webhook_url', '').strip()
+            cfg.notify_backup_failure  = bool(request.POST.get('notify_backup_failure'))
+            cfg.notify_service_down    = bool(request.POST.get('notify_service_down'))
+            cfg.notify_vulnerabilities = bool(request.POST.get('notify_vulnerabilities'))
+            # Only overwrite the SMTP password when a new one is supplied, so the
+            # stored secret isn't wiped when the (masked) field is left blank.
+            new_pw = request.POST.get('smtp_password', '')
+            if new_pw:
+                cfg.smtp_password = new_pw
+            try:
+                cfg.smtp_port = max(1, min(65535, int(request.POST.get('smtp_port', 587))))
+            except ValueError:
+                error = 'Ungültiger SMTP-Port.'
+            if not error:
+                cfg.save()
+                AuditLog.log(request, 'Benachrichtigungseinstellungen geändert')
+                success_msg = 'Einstellungen gespeichert.'
+
+    return render(request, 'control/notification_settings.html', {
+        'cfg':         cfg,
+        'error':       error,
+        'success_msg': success_msg,
+        'has_smtp_password': bool(cfg.smtp_password),
     })
 
 

@@ -34,7 +34,8 @@ vollautomatisch, wiederholbar und mit Checkpoint/Resume.
 | ⚙️ | systemd-Service mit Autostart & Restart=always | ▶️ | Start / Stop / Restart / Git-Update / ZIP-Update per Klick |
 | 🗄️ | PostgreSQL / MySQL / SQLite — lokal oder remote | 🔑 | Deploy-Key-Verwaltung (global, pro Projekt, Registry) |
 | 🔥 | ufw-Firewall automatisch (Gunicorn-Ports nur intern) | 🧾 | Log-Viewer: systemd-Journal, nginx Access/Error |
-| 🛡️ | fail2ban optional (SSH-Schutz) | 📈 | Zugriffsstatistiken aus nginx-Logs (Requests, Status-Codes, Top-URLs/IPs, Antwortzeit) |
+| 🔐 | Let's Encrypt optional (certbot, opt-in) | 📈 | Zugriffsstatistiken + Ressourcen-Verlauf (RAM/Disk-Sparkline) |
+| 🛡️ | fail2ban optional (SSH-Schutz) | 🔔 | Benachrichtigungen (E-Mail/Webhook) bei Backup-Fehler, Dienstausfall, CVE |
 | 💾 | Tägliche Backups (DB-Dump + Projektarchiv, Rotation) | 🔍 | Security-Scanner: HTTP/TLS-Header, Portscan, Nuclei, OWASP ZAP, pip-audit |
 | 🔁 | Checkpoint/Resume — abgebrochene Installs fortsetzbar | 👥 | Benutzerverwaltung mit Rollen (Admin / Operator / Viewer) + Projektrechten |
 | 📦 | ZIP-Deployment (GitHub „Download ZIP" direkt nutzbar) | 🔐 | Login, TOTP-2FA mit Backup-Codes, IP-Whitelist, Audit-Log |
@@ -84,11 +85,17 @@ und verwaltet alle installierten Projekte im Browser.
 
 - **Log-Viewer** — systemd-Journal, nginx Access- und Error-Logs
 - **Zugriffsstatistiken** — Requests/Tag (7 Tage), Status-Code-Verteilung, Top-10-URLs und -IPs, ⌀ Antwortzeit (via `$request_time`), Service-Ereignisse aus dem systemd-Journal (14 Tage)
+- **Ressourcen-Verlauf** — RAM-/Disk-Auslastung der letzten 24 h als Sparkline im Dashboard (Samples werden automatisch gespeichert, 7 Tage Aufbewahrung)
 - **Migrations-Übersicht** — offene Django-Migrationen pro Projekt anzeigen und ausführen
 - **pip-Verwaltung** — veraltete Pakete anzeigen und gezielt aktualisieren (mit Versions-Pinning)
 - **Favoriten-Befehle** — eigene `manage.py`-Kommandos als Quick-Action-Buttons pro Projekt
 - **.env-Editor** — Umgebungsvariablen pro Projekt und für den Manager direkt im Browser bearbeiten (Secrets maskiert)
 - **Firewall** — ufw-Status und Portverwaltung im Browser
+
+### TLS & Benachrichtigungen
+
+- **Let's Encrypt (optional)** — Zertifikat pro Projekt-Hostname per certbot anfordern/erneuern, direkt aus dem Projektdetail. Rein opt-in: Setups mit vorgelagertem Reverse Proxy (eigene Zertifikate) brauchen es nicht. Im Installer per Abfrage `INSTALL_CERTBOT` (Standard: nein).
+- **Benachrichtigungen** — E-Mail (SMTP) und/oder Webhook (Slack/Discord/Mattermost/generisch) bei fehlgeschlagenem Backup, ausgefallenem Dienst oder gefundener Schwachstelle (pip-audit). Pro Ereignis ein-/ausschaltbar, mit Test-Versand. Dienst-Überwachung optional per Cron (`manage.py check_health`).
 
 ### Security-Scanner
 
@@ -293,6 +300,8 @@ sudo ./Installv2.sh
 | `_BACKUP_TIME` | Backup-Cron (HH:MM) | `02:00` |
 | `UPGRADE` | `j` = Systempakete updaten | `n` |
 | `INSTALL_FAIL2BAN` | `j` = fail2ban installieren | `n` |
+| `INSTALL_CERTBOT` | `j` = Let's-Encrypt-Zertifikat via certbot anfordern | `n` |
+| `CERTBOT_DOMAIN` / `CERTBOT_EMAIL` | Domain / Kontakt-E-Mail für certbot | auto / leer |
 
 </details>
 
@@ -331,6 +340,19 @@ Bricht eine Installation ab — Stromausfall, SSH-Abbruch, Fehler —, setzt der
 - **Kein HTTPS im Skript** — TLS-Terminierung übernimmt Zoraxy bzw. der vorgelagerte Reverse Proxy
 - **Kein Auto-Scaling** — ein Gunicorn-Service pro Projekt
 - **Kein Docker** — klassisches Deployment direkt auf dem Host/LXC
+
+---
+
+## 🧑‍💻 Entwicklung & Tests
+
+Der Manager bringt eine Test-Suite mit (Sicherheits-Regression, Benachrichtigungen, Health-Historie, Validatoren):
+
+```bash
+cd manager
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+DEBUG=True SECRET_KEY=dev python manage.py test control.tests
+```
 
 ---
 

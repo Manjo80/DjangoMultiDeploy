@@ -5,7 +5,8 @@ Re-exports all view functions for backwards compatibility with urls.py.
 from .auth import login_view, logout_view, two_factor_setup, two_factor_verify, profile_view
 from .users import user_list, user_create, user_edit, user_delete
 from .admin_views import (
-    audit_log_view, security_settings_view, manager_settings_view,
+    audit_log_view, security_settings_view, notification_settings_view,
+    manager_settings_view,
     manager_env_view, project_env_view, firewall_view,
     manager_action, manager_update, manager_security_scan, manager_http_scan,
     manager_pip_outdated, manager_pip_upgrade_view,
@@ -16,7 +17,7 @@ from .admin_views import (
     manager_nginx_patch,
     job_poll_view,
 )
-from .dashboard import dashboard
+from .dashboard import dashboard, health_history
 from .install import (
     install_form, install_run, install_progress, install_poll,
     install_manager, install_kill,
@@ -40,6 +41,7 @@ from .projects import (
     project_clone_form, project_clone_run,
     project_nginx_config,
     project_config_export,
+    project_tls_cert,
 )
 from .scanner import security_scanner_view, security_scanner_run, port_scan_run, scan_log_view, clear_scan_log
 
