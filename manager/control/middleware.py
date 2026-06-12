@@ -10,8 +10,33 @@ import ipaddress
 import secrets
 import threading
 
+from django.conf import settings
 from django.shortcuts import redirect
 from django.http import HttpResponseForbidden
+
+
+def get_client_ip(request):
+    """
+    Return the real client IP.
+
+    Forwarding headers (CF-Connecting-IP / X-Real-IP / X-Forwarded-For) are
+    honoured ONLY when the request actually arrives from a trusted proxy
+    (settings.TRUSTED_PROXIES). Otherwise a direct client could spoof these
+    headers to bypass the IP whitelist or forge audit-log IPs.
+    """
+    remote = (request.META.get('REMOTE_ADDR') or '').strip()
+    trusted = getattr(settings, 'TRUSTED_PROXIES', ['127.0.0.1', '::1'])
+    if remote in trusted:
+        ip = (
+            request.META.get('HTTP_CF_CONNECTING_IP')
+            or request.META.get('HTTP_X_REAL_IP')
+            or request.META.get('HTTP_X_FORWARDED_FOR', '')
+            or remote
+        )
+        if ip and ',' in ip:
+            ip = ip.split(',')[0].strip()
+        return ip.strip()
+    return remote
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -188,20 +213,7 @@ class IPWhitelistMiddleware:
         if not whitelist:
             return self.get_response(request)
 
-        # Determine real client IP.
-        # Priority: CF-Connecting-IP (set by Cloudflare, always single IP)
-        #           > X-Real-IP (set by nginx after real_ip module restores it)
-        #           > X-Forwarded-For first entry
-        #           > REMOTE_ADDR
-        ip = (
-            request.META.get('HTTP_CF_CONNECTING_IP')
-            or request.META.get('HTTP_X_REAL_IP')
-            or request.META.get('HTTP_X_FORWARDED_FOR', '')
-            or request.META.get('REMOTE_ADDR', '')
-        )
-        if ip and ',' in ip:
-            ip = ip.split(',')[0].strip()
-        ip = ip.strip()
+        ip = get_client_ip(request)
 
         if not _ip_in_whitelist(ip, whitelist):
             return HttpResponseForbidden(

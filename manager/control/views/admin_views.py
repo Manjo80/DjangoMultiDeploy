@@ -34,7 +34,7 @@ from ..utils import (
     patch_manager_nginx_config,
     start_job, get_job,
 )
-from ._helpers import admin_required, operator_required, _check_project_access
+from ._helpers import admin_required, operator_required, _check_project_access, is_admin
 
 logger = logging.getLogger('djmanager.views.admin')
 
@@ -485,7 +485,7 @@ def _patch_update_script_rsync_fallback(script_path):
 @login_required
 def manager_security_scan(request):
     """Run pip-audit + manage.py check --deploy + bandit on the manager itself."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
 
     def _run():
@@ -502,7 +502,7 @@ def manager_security_scan(request):
 @login_required
 def manager_pip_outdated(request):
     """List outdated packages in the manager venv."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     result = run_manager_pip_outdated()
     return JsonResponse(result)
@@ -522,7 +522,7 @@ def manager_pip_upgrade_view(request):
 def manager_http_scan(request):
     """HTTP/TLS security scan for the manager itself — runs in background job."""
     import ipaddress
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
 
     target = request.GET.get('target', 'internal')
@@ -606,7 +606,7 @@ def _manager_scan_hosts():
 @login_required
 def job_poll_view(request, job_id):
     """Return current status of a background job."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     state = get_job(job_id)
     if state is None:
@@ -618,7 +618,7 @@ def job_poll_view(request, job_id):
 
 @login_required
 def manager_nuclei_scan(request):
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     hostname = request.GET.get('target', '').strip().lower()
     if not hostname:
@@ -642,7 +642,7 @@ def manager_nuclei_scan(request):
 
 @login_required
 def manager_nuclei_version(request):
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     return JsonResponse(nuclei_version_info())
 
@@ -663,7 +663,7 @@ def manager_nuclei_update(request):
 
 @login_required
 def manager_zap_scan(request):
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     import ipaddress as _ipa
     hostname  = request.GET.get('target', request.POST.get('target', '')).strip().lower()
@@ -706,7 +706,7 @@ def manager_zap_scan(request):
 
 @login_required
 def manager_zap_version(request):
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     return JsonResponse(zap_version_info())
 
@@ -726,16 +726,10 @@ def manager_zap_update(request):
 @login_required
 def manager_config_export(request):
     """Return manager .env (secrets masked) + nginx config for scan report. Admin only."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Nur Admins'}, status=403)
 
-    _SECRET_RE = re.compile(
-        r'^(\s*(?:[A-Z_]*(?:PASSWORD|SECRET|TOKEN|AUTH_KEY|PRIVATE_KEY|API_KEY|DB_PASS|PASS)[A-Z_]*)\s*=\s*)(.+)$',
-        re.IGNORECASE | re.MULTILINE,
-    )
-
-    def mask(text):
-        return _SECRET_RE.sub(r'\1xxxx', text)
+    from ..utils.secrets_mask import mask_secrets as mask
 
     env_path = Path(settings.BASE_DIR) / '.env'
     try:
@@ -764,7 +758,7 @@ def manager_config_export(request):
 @login_required
 def manager_nginx_config(request):
     """Read (GET) or save (POST) the nginx config for the manager itself."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Nur Admins'}, status=403)
 
     from ..utils.config import get_project_nginx_config, save_project_nginx_config, _CSP_DEFAULT
@@ -786,7 +780,7 @@ def manager_nginx_config(request):
 @require_POST
 def manager_nginx_patch(request):
     """Auto-patch the manager nginx config: remove duplicate headers, add /jobs/ location."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'ok': False, 'error': 'Nur Admins'}, status=403)
     ok, msg = patch_manager_nginx_config()
     if ok:

@@ -46,7 +46,7 @@ from ..utils import (
 )
 from ._helpers import (
     admin_required, operator_required, _get_role,
-    _check_project_access, _build_extern_scan_hosts,
+    _check_project_access, _build_extern_scan_hosts, is_admin,
 )
 
 logger = logging.getLogger('djmanager.views.projects')
@@ -113,7 +113,7 @@ def project_allowed_hosts(request, name):
 @login_required
 def project_nginx_config(request, name):
     """Read (GET) or save (POST) the nginx sites-available config for a project."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Nur Admins'}, status=403)
     if not _check_project_access(request.user, name):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
@@ -141,7 +141,7 @@ def project_config_export(request, name):
     Return .env (secrets masked) + nginx config as JSON for inclusion in scan report.
     Admin only — never logs this view to avoid leaking sensitive keys via audit trail.
     """
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Nur Admins'}, status=403)
     if not _check_project_access(request.user, name):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
@@ -149,16 +149,7 @@ def project_config_export(request, name):
     conf   = get_project(name)
     appdir = conf.get('APPDIR', f'/srv/{name}') if conf else f'/srv/{name}'
 
-    import re as _re
-
-    # Mask secret values: KEY=value, PASSWORD=value, SECRET=value, TOKEN=value
-    _SECRET_RE = _re.compile(
-        r'^(\s*(?:[A-Z_]*(?:PASSWORD|SECRET|TOKEN|AUTH_KEY|PRIVATE_KEY|API_KEY|DB_PASS|PASS)[A-Z_]*)\s*=\s*)(.+)$',
-        _re.IGNORECASE | _re.MULTILINE,
-    )
-
-    def mask(text):
-        return _SECRET_RE.sub(r'\1xxxx', text)
+    from ..utils.secrets_mask import mask_secrets as mask
 
     # .env
     env_path = os.path.join(appdir, '.env')
@@ -404,7 +395,7 @@ def nuclei_version_view(request, name):
 @require_POST
 def nuclei_update_view(request, name):
     """Download and install the latest nuclei release."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Nur Admins'}, status=403)
 
     def _run():
@@ -431,7 +422,7 @@ def zap_version_view(request, name):
 @require_POST
 def zap_update_view(request, name):
     """Download and install the latest ZAP release."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Nur Admins'}, status=403)
 
     def _run():

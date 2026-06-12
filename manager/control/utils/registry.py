@@ -11,6 +11,8 @@ _SYSTEMCTL  = shutil.which('systemctl')  or '/usr/bin/systemctl'
 _JOURNALCTL = shutil.which('journalctl') or '/usr/bin/journalctl'
 _TAIL       = shutil.which('tail')       or '/usr/bin/tail'
 
+from .validators import is_valid_project_name
+
 
 def _parse_conf(path):
     """Parse a shell-style key=value config file into a dict."""
@@ -44,6 +46,8 @@ def get_all_projects():
 
 def get_project(name):
     """Return a single project dict or None."""
+    if not is_valid_project_name(name):
+        return None
     conf_path = os.path.join(settings.REGISTRY_DIR, f'{name}.conf')
     if not os.path.exists(conf_path):
         return None
@@ -94,6 +98,10 @@ def get_journal_logs(name, lines=100):
 
 def get_nginx_log(name, log_type='access', lines=100):
     """Return last N lines of nginx access or error log for a project."""
+    if not is_valid_project_name(name):
+        return 'Ungültiger Projektname.'
+    if log_type not in ('access', 'error'):
+        return 'Ungültiger Log-Typ.'
     # Install script writes: /var/log/nginx/{name}.access.log (dot separator)
     # Fallback: underscore separator (older installs) and default nginx logs
     candidates = [
@@ -120,6 +128,8 @@ def get_nginx_log(name, log_type='access', lines=100):
 def set_project_conf_value(project, key, value):
     """Write or update a single KEY=value line in the project's .conf file."""
     from django.conf import settings as djsettings
+    if not is_valid_project_name(project):
+        return False, 'Ungültiger Projektname'
     conf_path = os.path.join(
         getattr(djsettings, 'REGISTRY_DIR', '/etc/django-servers.d'),
         f'{project}.conf',

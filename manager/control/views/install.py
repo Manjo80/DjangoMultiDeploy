@@ -13,6 +13,7 @@ import logging
 import uuid
 import datetime
 import tempfile
+import re as _re
 from pathlib import Path
 
 _INSTALL_DIR = os.path.join(tempfile.gettempdir(), 'djmanager_installs')
@@ -32,6 +33,7 @@ from ..utils import (
     start_install, list_deploy_keys, create_deploy_key,
     assign_project_deploy_key, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     get_global_deploy_key,
+    is_valid_project_name, is_valid_linux_user,
 )
 from ._helpers import admin_required
 
@@ -117,6 +119,23 @@ def install_run(request):
     if not project:
         return render(request, 'control/install_form.html',
                       {'error': 'Projektname darf nicht leer sein.'})
+    if not is_valid_project_name(project):
+        return render(request, 'control/install_form.html',
+                      {'error': 'Ungültiger Projektname. Erlaubt: Buchstabe gefolgt von '
+                                'Buchstaben, Ziffern, "_" oder "-" (max. 64 Zeichen).'})
+
+    appuser = params.get('APPUSER', '')
+    if appuser and not is_valid_linux_user(appuser):
+        return render(request, 'control/install_form.html',
+                      {'error': 'Ungültiger App-Benutzername.'})
+
+    repo_url = params.get('GITHUB_REPO_URL', '')
+    if repo_url and not _re.match(
+        r'^(https://github\.com/|git@github\.com:)[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+(\.git)?/?$',
+        repo_url,
+    ):
+        return render(request, 'control/install_form.html',
+                      {'error': 'Ungültige GitHub-Repository-URL.'})
 
     if source_type == 'zip':
         zip_file = request.FILES.get('zip_file')

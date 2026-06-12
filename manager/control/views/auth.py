@@ -2,10 +2,13 @@
 import logging
 
 from django.shortcuts import render, redirect
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.models import User
 from django.contrib import messages
+from django.core.exceptions import ValidationError
+from django.views.decorators.http import require_POST
 
 from ..models import UserProfile, AuditLog, SecuritySettings
 from ._helpers import _get_role
@@ -36,13 +39,19 @@ def login_view(request):
         user = authenticate(request, username=username, password=password)
 
         if user:
+            # Resolve the profile up front; we must know the 2FA status reliably.
             try:
                 profile = user.userprofile
-                profile.record_successful_login()
-                profile.last_login_ip = request.META.get('REMOTE_ADDR', '')
-                profile.save(update_fields=['last_login_ip'])
             except Exception:
-                pass
+                profile = None
+
+            if profile is not None:
+                try:
+                    profile.record_successful_login()
+                    profile.last_login_ip = request.META.get('REMOTE_ADDR', '')
+                    profile.save(update_fields=['last_login_ip'])
+                except Exception:
+                    pass
 
             try:
                 sec = SecuritySettings.get()
@@ -53,14 +62,15 @@ def login_view(request):
             except Exception:
                 pass
 
-            try:
-                if user.userprofile.totp_enabled:
-                    request.session['2fa_user_id'] = user.pk
-                    request.session['2fa_next']    = request.GET.get('next', '/dashboard/')
-                    AuditLog.log(request, '2FA-Verify angefordert', details=username)
-                    return redirect('two_factor_verify')
-            except Exception:
-                pass
+            # 2FA gate — fail CLOSED. The redirect is NOT wrapped in a bare
+            # try/except: a 2FA-enabled account must never fall through to
+            # login() without completing the second factor.
+            if profile is not None and profile.totp_enabled:
+                request.session['2fa_user_id'] = user.pk
+                request.session['2fa_next']    = request.GET.get('next', '/dashboard/')
+                request.session.pop('2fa_verified', None)
+                AuditLog.log(request, '2FA-Verify angefordert', details=username)
+                return redirect('two_factor_verify')
 
             login(request, user)
             AuditLog.log(request, 'Login erfolgreich', details=username)
@@ -77,6 +87,7 @@ def login_view(request):
     return render(request, 'control/login.html', {'error': error})
 
 
+@require_POST
 def logout_view(request):
     AuditLog.log(request, 'Logout')
     request.session.pop('2fa_verified', None)
@@ -112,7 +123,7 @@ def two_factor_setup(request):
             elif not pyotp.TOTP(tmp_secret).verify(code, valid_window=1):
                 error = 'Ungültiger Code. Bitte erneut versuchen.'
             else:
-                profile.totp_secret = tmp_secret
+                profile.set_totp_secret(tmp_secret)
                 profile.totp_enabled = True
                 backup_codes = profile.generate_backup_codes()
                 profile.save()
@@ -190,10 +201,17 @@ def two_factor_verify(request):
         except Exception:
             return redirect('login')
 
+        # Fail closed: never verify against a disabled or empty TOTP config.
+        secret = profile.get_totp_secret()
+        if not profile.totp_enabled or (not use_backup and not secret):
+            AuditLog.log(request, '2FA-Verify ohne aktives 2FA abgelehnt',
+                         success=False, details=verify_user.username)
+            return redirect('login')
+
         verified = (
             profile.use_backup_code(code)
             if use_backup
-            else pyotp.TOTP(profile.totp_secret).verify(code, valid_window=1)
+            else pyotp.TOTP(secret).verify(code, valid_window=1)
         )
 
         if verified:
@@ -231,21 +249,20 @@ def profile_view(request):
                 error = 'Aktuelles Passwort falsch.'
             elif new_pw != new_pw2:
                 error = 'Neue Passwörter stimmen nicht überein.'
-            elif len(new_pw) < 10:
-                error = 'Passwort muss mindestens 10 Zeichen haben.'
             else:
-                request.user.set_password(new_pw)
-                request.user.save()
-                updated = authenticate(
-                    request,
-                    username=request.user.username,
-                    password=new_pw,
-                )
-                if updated:
-                    login(request, updated,
-                          backend='django.contrib.auth.backends.ModelBackend')
-                AuditLog.log(request, 'Passwort geändert')
-                success_msg = 'Passwort erfolgreich geändert.'
+                try:
+                    validate_password(new_pw, user=request.user)
+                except ValidationError as exc:
+                    error = ' '.join(exc.messages)
+                else:
+                    request.user.set_password(new_pw)
+                    request.user.save()
+                    # Keep the current session valid after the password hash
+                    # change; other existing sessions are invalidated by Django's
+                    # SessionAuthenticationMiddleware on their next request.
+                    update_session_auth_hash(request, request.user)
+                    AuditLog.log(request, 'Passwort geändert')
+                    success_msg = 'Passwort erfolgreich geändert.'
 
     return render(request, 'control/profile.html', {
         'profile':     profile,

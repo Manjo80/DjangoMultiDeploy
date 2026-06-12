@@ -2,12 +2,23 @@ import os
 import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env', override=True)
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
+
+_INSECURE_SECRET_KEY = 'change-me-in-production'
+SECRET_KEY = os.getenv('SECRET_KEY', _INSECURE_SECRET_KEY)
+# Refuse to run in production with a missing/placeholder key — a predictable
+# SECRET_KEY lets an attacker forge session cookies and signed tokens.
+if not DEBUG and (not SECRET_KEY or SECRET_KEY == _INSECURE_SECRET_KEY):
+    raise ImproperlyConfigured(
+        'SECRET_KEY ist nicht gesetzt (oder noch der Platzhalter). '
+        'Bitte einen sicheren Wert in der .env setzen, z.B. mit '
+        '`python -c "import secrets; print(secrets.token_urlsafe(64))"`.'
+    )
 ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', '*').split(',') if h.strip()]
 CSRF_TRUSTED_ORIGINS = [h.strip() for h in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if h.strip()]
 
@@ -16,6 +27,14 @@ CSRF_TRUSTED_ORIGINS = [h.strip() for h in os.getenv('CSRF_TRUSTED_ORIGINS', '')
 # sonst liefert Django 400/500 wegen fehlendem X-Forwarded-Host.
 USE_X_FORWARDED_HOST = os.getenv('USE_X_FORWARDED_HOST', 'False') == 'True'
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Only these source IPs (the reverse proxy) are allowed to set client-IP
+# forwarding headers (X-Forwarded-For / X-Real-IP / CF-Connecting-IP). A direct
+# client connecting from any other address cannot spoof its IP to bypass the
+# IP whitelist or forge audit-log entries. nginx proxies from loopback.
+TRUSTED_PROXIES = [
+    p.strip() for p in os.getenv('TRUSTED_PROXIES', '127.0.0.1,::1').split(',') if p.strip()
+]
 
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
@@ -116,8 +135,10 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # ── Security (hinter nginx/SSL-Proxy) ─────────────────────────────────────────
 
-SESSION_COOKIE_SECURE  = os.getenv('SESSION_COOKIE_SECURE',  'False') == 'True'
-CSRF_COOKIE_SECURE     = os.getenv('CSRF_COOKIE_SECURE',     'False') == 'True'
+# Default to True (secure-by-default behind the TLS-terminating nginx proxy).
+# For a plain-HTTP direct-access deployment set these to False in the .env.
+SESSION_COOKIE_SECURE  = os.getenv('SESSION_COOKIE_SECURE',  'True') == 'True'
+CSRF_COOKIE_SECURE     = os.getenv('CSRF_COOKIE_SECURE',     'True') == 'True'
 SECURE_HSTS_SECONDS    = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv('SECURE_HSTS_INCLUDE_SUBDOMAINS', 'False') == 'True'
 SECURE_HSTS_PRELOAD    = os.getenv('SECURE_HSTS_PRELOAD',    'False') == 'True'
