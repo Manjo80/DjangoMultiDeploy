@@ -43,6 +43,16 @@ admin_required    = role_required(UserProfile.ROLE_ADMIN)
 operator_required = role_required(UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR)
 
 
+def is_admin(user):
+    """True if the user has (or is treated as) the admin role.
+
+    Use this instead of ``user.is_staff`` so authorization stays consistent with
+    the role system (superusers and role=admin users), rather than drifting from
+    the ``is_staff`` flag.
+    """
+    return _get_role(user) == UserProfile.ROLE_ADMIN
+
+
 # ── Project access helpers ────────────────────────────────────────────────────
 
 def _allowed_projects(user):

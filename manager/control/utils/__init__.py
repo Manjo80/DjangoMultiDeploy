@@ -98,7 +98,15 @@ from .scanning import (
 
 from .jobs import start_job, get_job
 
+from .validators import (
+    is_valid_project_name,
+    is_valid_db_identifier,
+    is_valid_linux_user,
+)
+
 __all__ = [
+    # validators
+    'is_valid_project_name', 'is_valid_db_identifier', 'is_valid_linux_user',
     # registry
     '_parse_conf', 'get_all_projects', 'get_project', 'get_service_status',
     'service_action', 'get_journal_logs', 'get_nginx_log', 'set_project_conf_value',

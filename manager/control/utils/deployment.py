@@ -21,6 +21,11 @@ _INSTALL_DIR = os.path.join(tempfile.gettempdir(), 'djmanager_installs')
 
 from .registry import get_project, set_project_conf_value
 from .deploy_keys import KEYS_DIR
+from .validators import (
+    is_valid_project_name,
+    is_valid_db_identifier,
+    is_valid_linux_user,
+)
 
 
 def _record_version(name):
@@ -132,6 +137,8 @@ def _patch_project_update_script(script_path):
 def run_update(name):
     """Run the project update script. Returns (ok, output)."""
     import re as _re
+    if not is_valid_project_name(name):
+        return False, 'Ungültiger Projektname'
     script = f'/usr/local/bin/{name}_update.sh'
     if not os.path.exists(script):
         return False, f'Update script not found: {script}'
@@ -149,9 +156,11 @@ def run_update(name):
                 try:
                     with open(script) as f:
                         content = f.read()
+                    # Use a replacement function so backslashes / group refs in
+                    # key_path are never interpreted by re.sub.
                     new_content = _re.sub(
                         r'GITHUB_DEPLOY_KEY="[^"]*"',
-                        f'GITHUB_DEPLOY_KEY="{key_path}"',
+                        lambda _m: f'GITHUB_DEPLOY_KEY="{key_path}"',
                         content,
                     )
                     if new_content != content:
@@ -223,7 +232,10 @@ def extract_project_zip(zip_path, dest_dir, skip_tops=None):
                 skipped += 1
                 continue
             target = os.path.join(dest_dir, rel)
-            if not os.path.realpath(os.path.dirname(target)).startswith(real_dest):
+            # Anchor the containment check on path components (commonpath), so
+            # '/srv/app-evil' can't pass as being inside '/srv/app'.
+            real_parent = os.path.realpath(os.path.dirname(target))
+            if os.path.commonpath([real_dest, real_parent]) != real_dest:
                 skipped += 1
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -246,6 +258,8 @@ def update_project_from_zip(name, uploaded_file):
         return False, 'Projekt nicht gefunden'
     appdir = conf.get('APPDIR', f'/srv/{name}')
     appuser = conf.get('APPUSER', name)
+    if not is_valid_linux_user(appuser):
+        return False, f'Ungültiger APPUSER in der Projektkonfiguration: {appuser!r}'
     output_lines = []
 
     try:
@@ -275,20 +289,24 @@ def update_project_from_zip(name, uploaded_file):
             )
             return r.returncode, (r.stdout + r.stderr).strip()[-800:]
 
+        q_appdir   = shlex.quote(appdir)
+        q_activate = shlex.quote(venv_activate)
+        q_req      = shlex.quote(req_file)
+
         if os.path.isfile(req_file):
             rc, out = _run_as(
-                f'source {venv_activate} && pip install --no-cache-dir --prefer-binary -r {req_file}'
+                f'source {q_activate} && pip install --no-cache-dir --prefer-binary -r {q_req}'
             )
             output_lines.append(f'📦 pip install {"✅" if rc == 0 else "❌"}\n{out}')
 
         rc, out = _run_as(
-            f'cd {appdir} && source {venv_activate} && python manage.py migrate --noinput',
+            f'cd {q_appdir} && source {q_activate} && python manage.py migrate --noinput',
             timeout=120
         )
         output_lines.append(f'🔄 migrate {"✅" if rc == 0 else "❌"}\n{out}')
 
         rc, out = _run_as(
-            f'cd {appdir} && source {venv_activate} && python manage.py collectstatic --noinput',
+            f'cd {q_appdir} && source {q_activate} && python manage.py collectstatic --noinput',
             timeout=60
         )
         output_lines.append(f'📁 collectstatic {"✅" if rc == 0 else "⚠️"}\n{out[-200:]}')
@@ -317,6 +335,8 @@ def reset_project(name, admin_user=None, admin_pass=None):
     Preserves: .env, .venv, media/, staticfiles/
     Returns (ok, output).
     """
+    if not is_valid_project_name(name):
+        return False, 'Ungültiger Projektname'
     conf = get_project(name)
     if not conf:
         return False, 'Projekt nicht gefunden'
@@ -325,12 +345,15 @@ def reset_project(name, admin_user=None, admin_pass=None):
     appuser = conf.get('APPUSER', name)
     dbtype  = conf.get('DBTYPE', '')
     dbname  = conf.get('DBNAME', '')
+    if not is_valid_linux_user(appuser):
+        return False, f'Ungültiger APPUSER in der Projektkonfiguration: {appuser!r}'
     log = []
     ok  = True
 
-    def _run(*cmd, timeout=60):
+    def _run(*cmd, timeout=60, env=None):
         try:
-            r = subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run(list(cmd), capture_output=True, text=True,
+                               timeout=timeout, env=env)
             return r.returncode, (r.stdout + r.stderr).strip()
         except Exception as e:
             return 1, str(e)
@@ -356,6 +379,9 @@ def reset_project(name, admin_user=None, admin_pass=None):
     log.append(f'🔴 Service {name} gestoppt')
 
     # 3. Drop + recreate database
+    if dbtype and dbname and not is_valid_db_identifier(dbname):
+        log.append(f'⚠️ Ungültiger DB-Name {dbname!r} — DB-Reset übersprungen')
+        dbtype = ''
     if dbtype and dbname:
         log.append(f'🗄️ Setze Datenbank zurück ({dbtype} / {dbname})...')
         dbuser = ''
@@ -365,6 +391,9 @@ def reset_project(name, admin_user=None, admin_pass=None):
                 if line.startswith('DB_USER=') or line.startswith('DATABASE_USER='):
                     dbuser = line.split('=', 1)[1].strip().strip('"\'')
                     break
+        if dbuser and not is_valid_db_identifier(dbuser):
+            log.append(f'⚠️ Ungültiger DB-User {dbuser!r} — GRANT übersprungen')
+            dbuser = ''
         if dbtype == 'postgresql':
             _run('su', '-s', '/bin/bash', 'postgres', '-c',
                  f'psql -c "DROP DATABASE IF EXISTS \\"{dbname}\\";"')
@@ -398,29 +427,34 @@ def reset_project(name, admin_user=None, admin_pass=None):
             candidate = os.path.join(KEYS_DIR, f'{deploy_key_id}_ed25519')
             if os.path.exists(candidate):
                 key_path = candidate
-        ssh_env = (
-            f'GIT_SSH_COMMAND="ssh -i {key_path} -o IdentitiesOnly=yes -o ConnectTimeout=30" '
-            if key_path else ''
-        )
-        _run('git', 'config', '--global', '--add', 'safe.directory', appdir)
-        _run('git', 'config', '--global', 'pull.rebase', 'false')
-        rc, out = _run('bash', '-c', f'{ssh_env}git -C {appdir} fetch --all --quiet', timeout=60)
+        # Build env for git instead of interpolating into a shell string.
+        git_env = os.environ.copy()
+        if key_path:
+            git_env['GIT_SSH_COMMAND'] = (
+                f'ssh -i {shlex.quote(key_path)} '
+                f'-o IdentitiesOnly=yes -o ConnectTimeout=30'
+            )
+        _run(_GIT, 'config', '--global', '--add', 'safe.directory', appdir)
+        _run(_GIT, 'config', '--global', 'pull.rebase', 'false')
+        rc, out = _run(_GIT, '-C', appdir, 'fetch', '--all', '--quiet',
+                       timeout=60, env=git_env)
         if rc != 0:
             log.append(f'❌ git fetch fehlgeschlagen:\n{out}')
             ok = False
         else:
-            rc2, out2 = _run('bash', '-c',
-                f'branch=$(git -C {appdir} rev-parse --abbrev-ref HEAD 2>/dev/null || echo main); '
-                f'git -C {appdir} reset --hard origin/$branch 2>/dev/null '
-                f'|| git -C {appdir} reset --hard origin/main 2>/dev/null '
-                f'|| git -C {appdir} reset --hard origin/master',
-                timeout=30)
+            rcb, branch = _run(_GIT, '-C', appdir, 'rev-parse',
+                               '--abbrev-ref', 'HEAD', timeout=15)
+            branch = branch.strip() if (rcb == 0 and branch.strip()) else 'main'
+            rc2, out2 = 1, ''
+            for ref in (f'origin/{branch}', 'origin/main', 'origin/master'):
+                rc2, out2 = _run(_GIT, '-C', appdir, 'reset', '--hard', ref,
+                                 timeout=30, env=git_env)
+                if rc2 == 0:
+                    break
             log.append('✅ Git: neueste Version geladen' if rc2 == 0 else f'⚠️ git reset: {out2}')
-            _run('bash', '-c',
-                f'git -C {appdir} clean -fd '
-                f'--exclude=.env --exclude=.venv --exclude=media --exclude=staticfiles '
-                f'2>/dev/null || true',
-                timeout=30)
+            _run(_GIT, '-C', appdir, 'clean', '-fd',
+                 '--exclude=.env', '--exclude=.venv',
+                 '--exclude=media', '--exclude=staticfiles', timeout=30)
     else:
         log.append('⏭️ Kein Git-Repository gefunden — überspringe git reset')
 
@@ -454,12 +488,15 @@ def reset_project(name, admin_user=None, admin_pass=None):
 
     venv_activate = os.path.join(appdir, '.venv', 'bin', 'activate')
     req_file      = os.path.join(appdir, 'requirements.txt')
+    q_appdir      = shlex.quote(appdir)
+    q_activate    = shlex.quote(venv_activate)
+    q_req         = shlex.quote(req_file)
 
     # 5. pip install
     if os.path.isfile(req_file):
         log.append('📦 Installiere Python-Abhängigkeiten...')
         rc, out = _run_as(
-            f'source {venv_activate} && pip install --no-cache-dir --prefer-binary -r {req_file}',
+            f'source {q_activate} && pip install --no-cache-dir --prefer-binary -r {q_req}',
             timeout=300,
         )
         log.append(f'{"✅" if rc == 0 else "❌"} pip install\n{out[-400:]}')
@@ -469,7 +506,7 @@ def reset_project(name, admin_user=None, admin_pass=None):
     # 6. migrate (fresh DB)
     log.append('📊 Führe Migrationen aus (neue Datenbank)...')
     rc, out = _run_as(
-        f'cd {appdir} && source {venv_activate} && python manage.py migrate --noinput',
+        f'cd {q_appdir} && source {q_activate} && python manage.py migrate --noinput',
         timeout=180,
     )
     log.append(f'{"✅" if rc == 0 else "❌"} migrate\n{out[-500:]}')
@@ -478,7 +515,7 @@ def reset_project(name, admin_user=None, admin_pass=None):
 
     # 7. collectstatic
     rc, _ = _run_as(
-        f'cd {appdir} && source {venv_activate} && python manage.py collectstatic --noinput',
+        f'cd {q_appdir} && source {q_activate} && python manage.py collectstatic --noinput',
         timeout=60,
     )
     log.append(f'{"✅" if rc == 0 else "⚠️"} collectstatic')
@@ -486,7 +523,7 @@ def reset_project(name, admin_user=None, admin_pass=None):
     # 8. Create superuser (if credentials provided)
     if admin_user and admin_pass:
         rc, out = _run_as(
-            f'cd {appdir} && source {venv_activate} && '
+            f'cd {q_appdir} && source {q_activate} && '
             f'DJANGO_SUPERUSER_USERNAME={shlex.quote(admin_user)} '
             f'DJANGO_SUPERUSER_PASSWORD={shlex.quote(admin_pass)} '
             f'DJANGO_SUPERUSER_EMAIL=admin@localhost '
@@ -501,7 +538,7 @@ def reset_project(name, admin_user=None, admin_pass=None):
 
     # 10. load_glossary (optional — silently skipped if command doesn't exist)
     rc, out = _run_as(
-        f'cd {appdir} && source {venv_activate} && python manage.py load_glossary 2>&1',
+        f'cd {q_appdir} && source {q_activate} && python manage.py load_glossary 2>&1',
         timeout=120,
     )
     if rc == 0:
@@ -528,6 +565,8 @@ def remove_project(name, opts):
     remove_backups, remove_logs.  Returns (ok, output).
     """
     import shutil
+    if not is_valid_project_name(name):
+        return False, 'Ungültiger Projektname'
     conf    = get_project(name) or {}
     appdir  = conf.get('APPDIR', f'/srv/{name}')
     appuser = conf.get('APPUSER', '')
@@ -610,6 +649,9 @@ def remove_project(name, opts):
         log.append('✅ Backups entfernt')
 
     # ── Optional: database ────────────────────────────────────────────────────
+    if opts.get('remove_db') and dbname and not is_valid_db_identifier(dbname):
+        log.append(f'⚠️  Ungültiger DB-Name {dbname!r} — DB-Entfernung übersprungen')
+        dbname = ''
     if opts.get('remove_db') and dbname:
         # Try to read DBUSER from the project .env
         dbuser = ''
@@ -619,6 +661,9 @@ def remove_project(name, opts):
                 if line.startswith('DB_USER=') or line.startswith('DATABASE_USER='):
                     dbuser = line.split('=', 1)[1].strip().strip('"\'')
                     break
+        if dbuser and not is_valid_db_identifier(dbuser):
+            log.append(f'⚠️  Ungültiger DB-User {dbuser!r} — DROP USER übersprungen')
+            dbuser = ''
         if dbtype == 'postgresql':
             _run('su', '-s', '/bin/bash', 'postgres', '-c',
                  f'psql -c "DROP DATABASE IF EXISTS \\"{dbname}\\";"')
@@ -634,6 +679,9 @@ def remove_project(name, opts):
             log.append(f'✅ MySQL DB {dbname} entfernt')
 
     # ── Optional: Linux user ──────────────────────────────────────────────────
+    if opts.get('remove_user') and appuser and not is_valid_linux_user(appuser):
+        log.append(f'⚠️  Ungültiger APPUSER {appuser!r} — User-Entfernung übersprungen')
+        appuser = ''
     if opts.get('remove_user') and appuser:
         try:
             result = subprocess.run(
@@ -669,6 +717,8 @@ def start_install(params):
     log_dir = settings.INSTALL_LOG_DIR
     run_id = str(uuid.uuid4())[:8]
     project = params.get('PROJECTNAME', 'install')
+    if not is_valid_project_name(project):
+        raise ValueError('Ungültiger Projektname')
     log_path = os.path.join(log_dir, f'{project}_{run_id}.log')
 
     env = os.environ.copy()
@@ -712,6 +762,8 @@ def run_management_command(name, raw_cmd):
     appuser = conf.get('APPUSER', '')
     if not appuser:
         return False, 'APPUSER nicht konfiguriert'
+    if not is_valid_linux_user(appuser):
+        return False, f'Ungültiger APPUSER: {appuser!r}'
 
     venv_python = os.path.join(appdir, '.venv', 'bin', 'python')
     manage_py   = os.path.join(appdir, 'manage.py')
@@ -727,13 +779,23 @@ def run_management_command(name, raw_cmd):
     if not cmd_clean:
         return False, 'Kein Kommando angegeben'
 
-    # Security: block shell metacharacters and control characters
-    if _re.search(r'[;&|`$<>()\r\n]', cmd_clean):
-        return False, 'Ungültige Zeichen im Kommando (keine Shell-Sonderzeichen erlaubt)'
+    # Tokenize as a shell would, then re-quote every token individually so the
+    # values are passed as literal argv to manage.py — no shell interpretation,
+    # no metacharacter/glob/quote-breakout possible (replaces the old blocklist).
+    try:
+        parts = shlex.split(cmd_clean)
+    except ValueError as e:
+        return False, f'Kommando konnte nicht geparst werden: {e}'
+    if not parts:
+        return False, 'Kein Kommando angegeben'
+    # The subcommand itself must be a plain identifier.
+    if not _re.match(r'^[A-Za-z][A-Za-z0-9_-]*$', parts[0]):
+        return False, 'Ungültiger Management-Befehl'
 
+    quoted_args = ' '.join(shlex.quote(p) for p in parts)
     full_cmd = (
         f'cd {shlex.quote(appdir)} && '
-        f'{shlex.quote(venv_python)} manage.py {cmd_clean}'
+        f'{shlex.quote(venv_python)} manage.py {quoted_args}'
     )
     try:
         result = subprocess.run(

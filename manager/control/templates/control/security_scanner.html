@@ -220,7 +220,7 @@ async function runCustomHttpScan() {
     const d = await r.json();
     loading.classList.add('d-none');
     if (d.error && !d.headers?.length && !d.cookies?.length) {
-      output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      output.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-exclamation-triangle me-1"></i>${escHtml(d.error)}</div>`;
       document.getElementById('http-scan-actions').classList.add('d-none');
       loadScanLog();
       return;
@@ -274,7 +274,7 @@ async function runPortScan() {
     const d = await r.json();
     loading.classList.add('d-none');
     if (d.error) {
-      output.innerHTML = `<div class="alert alert-danger small py-2"><i class="bi bi-exclamation-triangle me-1"></i>${d.error}</div>`;
+      output.innerHTML = `<div class="alert alert-danger small py-2"><i class="bi bi-exclamation-triangle me-1"></i>${escHtml(d.error)}</div>`;
       loadScanLog();
       return;
     }
@@ -294,7 +294,7 @@ function renderPortScanResult(d) {
   const sevCls   = {critical:'danger', high:'danger', medium:'warning', low:'secondary', info:'info'};
 
   let html = `<div class="card"><div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-radar me-1"></i>Port-Scan: <code>${d.host}</code></span>
+    <span><i class="bi bi-radar me-1"></i>Port-Scan: <code>${escHtml(d.host)}</code></span>
     <span class="text-muted small">${d.scanned} Ports geprüft</span>
   </div><div class="card-body">`;
 
@@ -325,9 +325,9 @@ function renderPortScanResult(d) {
                      p.severity === 'medium' ? 'table-warning' : '';
       html += `<tr class="${rowCls}">
         <td class="font-monospace"><strong>${p.port}</strong></td>
-        <td>${p.service || '—'}</td>
-        <td><span class="badge bg-${cls} text-${cls==='warning'?'dark':'white'}">${sevLabel[p.severity]||p.severity}</span></td>
-        <td class="small text-muted">${p.note || ''}</td>
+        <td>${escHtml(p.service || '—')}</td>
+        <td><span class="badge bg-${cls} text-${cls==='warning'?'dark':'white'}">${escHtml(sevLabel[p.severity]||p.severity)}</span></td>
+        <td class="small text-muted">${escHtml(p.note || '')}</td>
       </tr>`;
     }
     html += '</tbody></table></div>';
@@ -571,12 +571,12 @@ function generateMarkdownReport(d) {
 function renderHttpScanResult(d) {
   let html = '';
   if (d.error) {
-    html += `<div class="alert alert-warning small py-2 mb-3"><i class="bi bi-exclamation-circle me-1"></i>${d.error}</div>`;
+    html += `<div class="alert alert-warning small py-2 mb-3"><i class="bi bi-exclamation-circle me-1"></i>${escHtml(d.error)}</div>`;
   }
   html += renderSummaryBar(d.summary || {});
   html += `<button class="btn btn-sm btn-outline-secondary mb-3" data-action="downloadReport"><i class="bi bi-file-earmark-arrow-down me-1"></i>Report herunterladen (.md)</button>`;
   html += `<div class="text-muted small mb-3">
-    <i class="bi bi-bullseye me-1"></i>Ziel: <code>${d.target_url}</code>
+    <i class="bi bi-bullseye me-1"></i>Ziel: <code>${escHtml(d.target_url)}</code>
     ${d.http_status ? `&nbsp;· Status: <strong>${d.http_status}</strong>` : ''}
   </div>`;
 
@@ -585,17 +585,17 @@ function renderHttpScanResult(d) {
     const t = d.tls;
     html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-lock me-1"></i>TLS / Zertifikat</h6>';
     if (t.error && !t.reachable) {
-      html += `<div class="alert alert-danger small py-2">${t.error}</div>`;
+      html += `<div class="alert alert-danger small py-2">${escHtml(t.error)}</div>`;
     } else {
       html += '<table class="table table-sm table-dark mb-3">';
       html += `<tr><th class="text-muted w-25">TLS Version</th><td>`;
       if (t.tls_version) {
         const old = ['TLSv1','TLSv1.1','SSLv2','SSLv3'].includes(t.tls_version);
-        html += `<span class="${old?'text-danger':'text-success'}">${t.tls_version}</span>`;
+        html += `<span class="${old?'text-danger':'text-success'}">${escHtml(t.tls_version)}</span>`;
         if (old) html += ' <span class="badge bg-danger ms-1">Veraltet!</span>';
       } else { html += '<span class="text-muted">—</span>'; }
       html += '</td></tr>';
-      html += `<tr><th class="text-muted">Cipher</th><td><code>${t.cipher || '—'}</code></td></tr>`;
+      html += `<tr><th class="text-muted">Cipher</th><td><code>${escHtml(t.cipher || '—')}</code></td></tr>`;
       html += `<tr><th class="text-muted">Zertifikat</th><td>`;
       if (t.cert_valid) {
         html += `<span class="text-success"><i class="bi bi-check-circle me-1"></i>Gültig</span>`;
@@ -605,11 +605,11 @@ function renderHttpScanResult(d) {
         }
       } else {
         html += `<span class="text-danger"><i class="bi bi-x-circle me-1"></i>Ungültig</span>`;
-        if (t.error) html += ` <span class="text-muted small">${t.error}</span>`;
+        if (t.error) html += ` <span class="text-muted small">${escHtml(t.error)}</span>`;
       }
       html += '</td></tr>';
-      if (t.cert_subject) html += `<tr><th class="text-muted">Subject</th><td><code>${t.cert_subject}</code></td></tr>`;
-      if (t.cert_issuer)  html += `<tr><th class="text-muted">Aussteller</th><td><code>${t.cert_issuer}</code></td></tr>`;
+      if (t.cert_subject) html += `<tr><th class="text-muted">Subject</th><td><code>${escHtml(t.cert_subject)}</code></td></tr>`;
+      if (t.cert_issuer)  html += `<tr><th class="text-muted">Aussteller</th><td><code>${escHtml(t.cert_issuer)}</code></td></tr>`;
       html += '</table>';
     }
   }
@@ -619,16 +619,16 @@ function renderHttpScanResult(d) {
     const rr = d.http_redirect;
     html += '<h6 class="border-top pt-3 mt-2"><i class="bi bi-arrow-right-circle me-1"></i>HTTP → HTTPS Weiterleitung</h6>';
     if (!rr.available) {
-      html += `<div class="alert alert-secondary small py-2">Port 80 nicht erreichbar (${rr.error || 'keine Verbindung'})</div>`;
+      html += `<div class="alert alert-secondary small py-2">Port 80 nicht erreichbar (${escHtml(rr.error || 'keine Verbindung')})</div>`;
     } else if (rr.redirects_to_https) {
       html += `<div class="alert small py-2" style="background:#0d2918;border-color:#238636;color:#3fb950">
-        <i class="bi bi-check-circle me-1"></i>HTTP leitet korrekt zu HTTPS weiter (${rr.status} → ${rr.location})
+        <i class="bi bi-check-circle me-1"></i>HTTP leitet korrekt zu HTTPS weiter (${escHtml(rr.status)} → ${escHtml(rr.location)})
       </div>`;
     } else {
       html += `<div class="alert alert-danger small py-2">
         <i class="bi bi-exclamation-triangle me-1"></i>
         HTTP (Port 80) leitet <strong>nicht</strong> zu HTTPS weiter!
-        Status: ${rr.status}${rr.location ? ' Location: ' + rr.location : ''}
+        Status: ${escHtml(rr.status)}${rr.location ? ' Location: ' + escHtml(rr.location) : ''}
       </div>`;
     }
   }
@@ -717,13 +717,13 @@ function renderHttpScanResult(d) {
                        h.severity === 'medium' ? 'table-warning' :
                        ['high','critical'].includes(h.severity) ? 'table-danger' : '';
       html += `<tr class="${rowClass}">
-        <td class="font-monospace small text-nowrap">${h.header}</td>
+        <td class="font-monospace small text-nowrap">${escHtml(h.header)}</td>
         <td class="text-nowrap">${severityBadge(h.severity)}${fixBadge(h.fix_location)}</td>
         <td class="small">`;
       if (h.value && h.status !== 'missing') {
-        html += `<code class="d-block text-truncate" style="max-width:380px" title="${h.value}">${h.value}</code>`;
+        html += `<code class="d-block text-truncate" style="max-width:380px" title="${escHtml(h.value)}">${escHtml(h.value)}</code>`;
       }
-      if (h.msg && h.status !== 'ok') html += `<span class="text-muted">${h.msg}</span>`;
+      if (h.msg && h.status !== 'ok') html += `<span class="text-muted">${escHtml(h.msg)}</span>`;
       if (h.status !== 'ok') html += snippetHtml(h.fix_snippet);
       html += `</td></tr>`;
     }
@@ -739,11 +739,11 @@ function renderHttpScanResult(d) {
       const rowClass = ['critical','high'].includes(c.severity) ? 'table-danger' :
                        c.severity === 'medium' ? 'table-warning' : '';
       html += `<tr class="${rowClass}">
-        <td class="font-monospace small text-nowrap">${c.header}</td>
+        <td class="font-monospace small text-nowrap">${escHtml(c.header)}</td>
         <td class="text-nowrap">${severityBadge(c.severity)}${fixBadge(c.fix_location)}</td>
         <td class="small">
-          ${c.value ? `<code class="d-block text-truncate" style="max-width:380px">${c.value}</code>` : ''}
-          ${c.msg && c.severity !== 'ok' ? `<span class="text-muted">${c.msg}</span>` : ''}
+          ${c.value ? `<code class="d-block text-truncate" style="max-width:380px">${escHtml(c.value)}</code>` : ''}
+          ${c.msg && c.severity !== 'ok' ? `<span class="text-muted">${escHtml(c.msg)}</span>` : ''}
           ${c.severity !== 'ok' ? snippetHtml(c.fix_snippet) : ''}
         </td>
       </tr>`;
@@ -758,20 +758,20 @@ function renderHttpScanResult(d) {
       const hasIssues = ck.issues && ck.issues.length > 0;
       html += `<div class="card mb-2 ${hasIssues ? 'border-warning' : 'border-success'} bg-transparent">
         <div class="card-body py-2 small">
-          <strong class="font-monospace">${ck.name}</strong>
+          <strong class="font-monospace">${escHtml(ck.name)}</strong>
           <span class="ms-2">`;
       const flagHtml = (flag, present) =>
         `<span class="badge ${present ? 'bg-success' : 'bg-danger'} me-1">${flag}: ${present ? '✓' : '✗'}</span>`;
       html += flagHtml('Secure', ck.flags.secure);
       html += flagHtml('HttpOnly', ck.flags.httponly);
       html += ck.flags.samesite
-        ? `<span class="badge bg-success me-1">SameSite: ${ck.flags.samesite}</span>`
+        ? `<span class="badge bg-success me-1">SameSite: ${escHtml(ck.flags.samesite)}</span>`
         : `<span class="badge bg-danger me-1">SameSite: ✗</span>`;
       html += '</span>';
       if (hasIssues) {
         html += '<ul class="mt-1 mb-0 ps-3">';
         for (const issue of ck.issues) {
-          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${issue.flag}</strong>: ${issue.msg} ${fixBadge(issue.fix_location)}${snippetHtml(issue.fix_snippet)}</li>`;
+          html += `<li class="text-warning">${severityBadge(issue.severity)} <strong>${escHtml(issue.flag)}</strong>: ${escHtml(issue.msg)} ${fixBadge(issue.fix_location)}${snippetHtml(issue.fix_snippet)}</li>`;
         }
         html += '</ul>';
       }
@@ -790,9 +790,9 @@ function renderHttpScanResult(d) {
         const cls = l.severity === 'critical' ? 'list-group-item-danger' : 'list-group-item-warning';
         html += `<div class="list-group-item list-group-item-dark ${cls} small py-2">
           ${severityBadge(l.severity)}
-          <strong class="font-monospace ms-1">${l.path}</strong>
-          <span class="text-muted ms-1">(${l.label}, HTTP ${l.status})</span>
-          ${l.note ? `<div class="mt-1 text-danger"><i class="bi bi-exclamation-triangle me-1"></i>${l.note}</div>` : ''}
+          <strong class="font-monospace ms-1">${escHtml(l.path)}</strong>
+          <span class="text-muted ms-1">(${escHtml(l.label)}, HTTP ${escHtml(l.status)})</span>
+          ${l.note ? `<div class="mt-1 text-danger"><i class="bi bi-exclamation-triangle me-1"></i>${escHtml(l.note)}</div>` : ''}
         </div>`;
       }
       html += '</div>';
@@ -800,7 +800,7 @@ function renderHttpScanResult(d) {
     if (infoLeaks.length) {
       html += '<div class="text-muted small mb-1">';
       for (const l of infoLeaks) {
-        html += `<span class="badge bg-secondary me-1">${l.path} (${l.status})</span>`;
+        html += `<span class="badge bg-secondary me-1">${escHtml(l.path)} (${escHtml(l.status)})</span>`;
       }
       html += '</div>';
     }

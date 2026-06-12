@@ -10,6 +10,7 @@ _NGINX     = shutil.which('nginx')     or '/usr/sbin/nginx'
 _SYSTEMCTL = shutil.which('systemctl') or '/usr/bin/systemctl'
 
 from .registry import get_project, set_project_conf_value, service_action
+from .validators import is_valid_project_name
 
 
 def get_allowed_hosts(name):
@@ -32,6 +33,8 @@ def get_allowed_hosts(name):
 
 def get_nginx_server_names(name):
     """Read server_name from nginx site config. Returns list of names."""
+    if not is_valid_project_name(name):
+        return []
     nginx_path = f'/etc/nginx/sites-available/{name}'
     if not os.path.exists(nginx_path):
         return []
@@ -53,6 +56,8 @@ def update_allowed_hosts(name, hosts):
     Restarts the Django service and reloads nginx.
     Returns (ok, message).
     """
+    if not is_valid_project_name(name):
+        return False, 'Ungültiger Projektname'
     conf = get_project(name)
     if not conf:
         return False, 'Projekt nicht gefunden'
@@ -155,11 +160,39 @@ _CSP_DEFAULT = (
 )
 
 
+# nginx directives that allow loading code / running external interpreters or
+# reading arbitrary files — never accept these from the web config editor.
+_FORBIDDEN_NGINX_DIRECTIVES = (
+    'load_module',
+    'perl ',
+    'perl_modules',
+    'perl_require',
+    'js_import',
+    'lua_package',
+    'content_by_lua',
+    'access_by_lua',
+    'rewrite_by_lua',
+    'init_by_lua',
+    'ssl_certificate_key',  # editing key paths via the web UI is not allowed
+)
+
+
+def _nginx_config_is_safe(content):
+    """Return (ok, message). Reject directives that enable code execution."""
+    lowered = content.lower()
+    for directive in _FORBIDDEN_NGINX_DIRECTIVES:
+        if directive in lowered:
+            return False, f'Nicht erlaubte nginx-Direktive: "{directive.strip()}"'
+    return True, ''
+
+
 def get_project_nginx_config(name):
     """
     Read the nginx sites-available config for project `name`.
     Returns (content: str, error: str|None).
     """
+    if not is_valid_project_name(name):
+        return '', 'Ungültiger Projektname'
     path = os.path.join(_NGINX_SITES, name)
     if not os.path.exists(path):
         return '', f'Keine nginx-Konfiguration gefunden: {path}'
@@ -179,7 +212,12 @@ def save_project_nginx_config(name, content):
     Returns (ok: bool, message: str).
     """
     import shutil
+    if not is_valid_project_name(name):
+        return False, 'Ungültiger Projektname'
     path = os.path.join(_NGINX_SITES, name)
+    # Confine the write strictly to the sites-available directory.
+    if os.path.dirname(os.path.realpath(path)) != os.path.realpath(_NGINX_SITES):
+        return False, 'Ungültiger Konfigurationspfad'
     backup = path + '.bak'
 
     if not os.path.exists(path):
@@ -194,6 +232,11 @@ def save_project_nginx_config(name, content):
     # Basic safety check — must still be a server block
     if 'server {' not in content and 'server{' not in content:
         return False, 'Ungültig: "server {" Block fehlt — Konfiguration nicht gespeichert.'
+
+    # Reject directives that allow code execution / arbitrary file access
+    safe, msg = _nginx_config_is_safe(content)
+    if not safe:
+        return False, msg
 
     # Backup
     try:
@@ -418,6 +461,8 @@ def sync_env_to_conf(name, env_content):
     Parse MODE and DEBUG from .env content and write them back into
     /etc/django-servers.d/<name>.conf so the manager display stays in sync.
     """
+    if not is_valid_project_name(name):
+        return
     conf_path = os.path.join(settings.REGISTRY_DIR, f'{name}.conf')
     if not os.path.exists(conf_path):
         return

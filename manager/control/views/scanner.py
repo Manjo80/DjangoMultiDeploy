@@ -13,6 +13,7 @@ from django.contrib.auth.decorators import login_required
 
 from ..utils import run_http_security_scan, get_public_ip, run_port_scan
 from ..utils.scan_log import get_log_entries, clear_log
+from ._helpers import is_admin
 
 _SCAN_TIMEOUT = 90  # seconds — Gunicorn worker timeout is 120s
 
@@ -26,7 +27,7 @@ logger = logging.getLogger('djmanager.scanner')
 @login_required
 def security_scanner_view(request):
     """Render the standalone Security Scanner page."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return render(request, 'control/403.html', status=403)
     pub_ipv4, pub_ipv6 = get_public_ip()
     return render(request, 'control/security_scanner.html', {
@@ -44,7 +45,7 @@ def security_scanner_run(request):
       port=<int>         (optional, default 443)
       tls=1|0            (optional, default 1 if port==443 else 0)
     """
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
 
     target = request.GET.get('target', '').strip()
@@ -114,7 +115,7 @@ def port_scan_run(request):
       from=<int>          (for range mode, default 1)
       to=<int>            (for range mode, default 1024)
     """
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
 
     target = request.GET.get('target', '').strip()
@@ -149,7 +150,7 @@ def port_scan_run(request):
 @login_required
 def scan_log_view(request):
     """Return the in-memory scan log as JSON (staff only)."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     return JsonResponse({'entries': get_log_entries()})
 
@@ -157,7 +158,7 @@ def scan_log_view(request):
 @login_required
 def clear_scan_log(request):
     """Clear the in-memory scan log (POST, staff only)."""
-    if not request.user.is_staff:
+    if not is_admin(request.user):
         return JsonResponse({'error': 'Zugriff verweigert'}, status=403)
     if request.method != 'POST':
         return JsonResponse({'error': 'POST erforderlich'}, status=405)

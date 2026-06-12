@@ -1,16 +1,61 @@
 """
 DjangoMultiDeploy Manager — Models
 """
+import base64
+import hashlib
 import json
 import logging
 import secrets
 
+from django.conf import settings
+from django.contrib.auth.hashers import make_password, check_password
 from django.contrib.auth.models import User
 from django.db import models
+from django.db.models import F
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 from datetime import timedelta
+
+logger = logging.getLogger('djmanager.models')
+
+
+# ── TOTP secret encryption ─────────────────────────────────────────────────────
+# TOTP secrets are encrypted at rest with a Fernet key derived from SECRET_KEY.
+# If cryptography is unavailable we fall back to storing the raw secret so 2FA
+# never hard-breaks, but the encrypted path is strongly preferred.
+_ENC_PREFIX = 'enc:'
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+
+    def _fernet():
+        key = hashlib.sha256(settings.SECRET_KEY.encode()).digest()
+        return Fernet(base64.urlsafe_b64encode(key))
+
+    def _encrypt_secret(raw):
+        if not raw:
+            return ''
+        return _ENC_PREFIX + _fernet().encrypt(raw.encode()).decode()
+
+    def _decrypt_secret(stored):
+        if not stored:
+            return ''
+        if not stored.startswith(_ENC_PREFIX):
+            return stored  # legacy plaintext — readable for backward compatibility
+        try:
+            return _fernet().decrypt(stored[len(_ENC_PREFIX):].encode()).decode()
+        except (InvalidToken, Exception):
+            logger.error('TOTP secret could not be decrypted')
+            return ''
+except Exception:  # cryptography not installed
+    def _encrypt_secret(raw):
+        return raw or ''
+
+    def _decrypt_secret(stored):
+        if stored and stored.startswith(_ENC_PREFIX):
+            return ''
+        return stored or ''
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -29,14 +74,22 @@ class UserProfile(models.Model):
 
     user              = models.OneToOneField(User, on_delete=models.CASCADE)
     role              = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_VIEWER)
-    totp_secret       = models.CharField(max_length=64, blank=True)
+    totp_secret       = models.CharField(max_length=255, blank=True)   # encrypted at rest
     totp_enabled      = models.BooleanField(default=False)
-    totp_backup_codes = models.TextField(blank=True)   # JSON list of unused one-time codes
+    totp_backup_codes = models.TextField(blank=True)   # JSON list of HASHED one-time codes
     failed_logins     = models.IntegerField(default=0)
     locked_until      = models.DateTimeField(null=True, blank=True)
     last_login_ip     = models.GenericIPAddressField(null=True, blank=True)
 
     # ── 2FA helpers ──────────────────────────────────────────────────────────
+
+    def set_totp_secret(self, raw):
+        """Store the TOTP secret encrypted at rest."""
+        self.totp_secret = _encrypt_secret(raw)
+
+    def get_totp_secret(self):
+        """Return the decrypted TOTP secret (or '' if unavailable)."""
+        return _decrypt_secret(self.totp_secret)
 
     def get_backup_codes(self):
         if not self.totp_backup_codes:
@@ -47,20 +100,27 @@ class UserProfile(models.Model):
             return []
 
     def generate_backup_codes(self, count=8):
-        """Generate fresh backup codes (64-bit / 16 hex chars each), store and return them."""
+        """
+        Generate fresh backup codes (64-bit / 16 hex chars each). Only the
+        salted hashes are stored; the plaintext codes are returned once so the
+        user can write them down and are never persisted in cleartext.
+        """
         codes = [secrets.token_hex(8).upper() for _ in range(count)]
-        self.totp_backup_codes = json.dumps(codes)
+        self.totp_backup_codes = json.dumps([make_password(c) for c in codes])
         return codes
 
     def use_backup_code(self, code):
         """Consume a backup code. Returns True on success."""
         code = code.upper().replace('-', '').strip()
-        codes = self.get_backup_codes()
-        if code in codes:
-            codes.remove(code)
-            self.totp_backup_codes = json.dumps(codes)
-            self.save(update_fields=['totp_backup_codes'])
-            return True
+        stored = self.get_backup_codes()
+        for i, entry in enumerate(stored):
+            # Hashed entries contain '$'; legacy plaintext codes do not.
+            matched = check_password(code, entry) if '$' in entry else (entry.upper() == code)
+            if matched:
+                stored.pop(i)
+                self.totp_backup_codes = json.dumps(stored)
+                self.save(update_fields=['totp_backup_codes'])
+                return True
         return False
 
     # ── Login rate limiting ───────────────────────────────────────────────────
@@ -69,10 +129,12 @@ class UserProfile(models.Model):
         return bool(self.locked_until and self.locked_until > timezone.now())
 
     def record_failed_login(self):
-        self.failed_logins = (self.failed_logins or 0) + 1
+        # Atomic increment so concurrent login attempts can't race past the cap.
+        type(self).objects.filter(pk=self.pk).update(failed_logins=F('failed_logins') + 1)
+        self.refresh_from_db(fields=['failed_logins'])
         if self.failed_logins >= 5:
             self.locked_until = timezone.now() + timedelta(minutes=15)
-        self.save(update_fields=['failed_logins', 'locked_until'])
+            self.save(update_fields=['locked_until'])
 
     def record_successful_login(self):
         self.failed_logins = 0
@@ -115,9 +177,8 @@ class AuditLog(models.Model):
 
     @classmethod
     def log(cls, request, action, project='', details='', success=True):
-        ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
-        if ip and ',' in ip:
-            ip = ip.split(',')[0].strip()
+        from .middleware import get_client_ip
+        ip = get_client_ip(request)
         user = request.user if request.user.is_authenticated else None
         try:
             cls.objects.create(

@@ -3,8 +3,15 @@
 # Patcht bestehende nginx-Konfigurationen um fehlende Security-Header zu ergänzen.
 # Ausführen als root: sudo bash fix_security_headers.sh
 
+# -u (unset-var) + pipefail ohne -e: das Skript nutzt absichtlich Befehle, die
+# nicht-null zurückgeben können (grep ohne Treffer), daher kein -e.
+set -uo pipefail
+
 NGINX_SITES="${NGINX_SITES:-/etc/nginx/sites-available}"
-BACKUP_DIR="/tmp/nginx_headers_backup_$(date +%Y%m%d_%H%M%S)"
+# Backup in ein root-only Verzeichnis statt world-writable /tmp (nginx-Configs
+# können interne Pfade/Struktur offenlegen). mktemp -d vergibt mode 700.
+BACKUP_DIR="$(mktemp -d /var/backups/nginx_headers_backup_XXXXXX 2>/dev/null || mktemp -d)"
+chmod 700 "$BACKUP_DIR" 2>/dev/null || true
 
 # Globale Variablen für aktuell bearbeitete Datei und Änderungsstatus
 CUR_FILE=""
@@ -148,7 +155,7 @@ patch_config() {
 
   # Fehlende Header ergänzen (einzeln aufgerufen — kein Loop, kein pipefail-Problem)
   _ensure "X-Content-Type-Options"   'add_header X-Content-Type-Options "nosniff" always;'
-  _ensure "X-XSS-Protection"        'add_header X-XSS-Protection "1; mode=block" always;'
+  _ensure "X-XSS-Protection"        'add_header X-XSS-Protection "0" always;'
   _ensure "Referrer-Policy"         'add_header Referrer-Policy "strict-origin-when-cross-origin" always;'
   _ensure "Permissions-Policy"      'add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;'
   [ "$SKIP_CSP" -eq 0 ] && _ensure "Content-Security-Policy" "add_header Content-Security-Policy \"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';\" always;"
