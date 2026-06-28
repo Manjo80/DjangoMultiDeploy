@@ -1119,6 +1119,7 @@ ZAP_DIR     = '/opt/zaproxy'
 ZAP_SH      = '/opt/zaproxy/zap.sh'
 ZAP_PORT    = 8090
 ZAP_API_KEY = 'djmanager-zap-key'
+ZAP_CONTEXT_NAME = 'djmanager'
 ZAP_PID_FILE = os.path.join(tempfile.gettempdir(), 'djmanager-zap.pid')
 
 
@@ -1336,7 +1337,7 @@ def _zap_api(path, params=None):
         raise RuntimeError(f'ZAP-API {path} → HTTP {detail}') from None
 
 
-def _zap_setup_auth(ctx_id, target_url, auth):
+def _zap_setup_auth(ctx_id, ctx_name, target_url, auth):
     """Configure form-based authentication in ZAP for the given context."""
     import urllib.parse as _up
     login_url = auth.get('login_url', '')
@@ -1346,9 +1347,10 @@ def _zap_setup_auth(ctx_id, target_url, auth):
     password   = auth.get('password', '')
     logged_in_indicator = auth.get('logged_in_indicator', '')
 
-    # Include target in context
+    # Include target in context. NOTE: this ZAP action is keyed by *contextName*,
+    # not contextId — passing contextId triggers HTTP 400 "missing_parameter".
     _zap_api('context/action/includeInContext', {
-        'contextId': ctx_id,
+        'contextName': ctx_name,
         'regex': target_url.rstrip('/') + '.*',
     })
 
@@ -1433,9 +1435,9 @@ def run_zap_scan(target_url, scan_type='baseline', auth=None):
         ctx_id = None
         user_id = None
         if authenticated:
-            ctx = _zap_api('context/action/newContext', {'contextName': 'djmanager'})
+            ctx = _zap_api('context/action/newContext', {'contextName': ZAP_CONTEXT_NAME})
             ctx_id = str(ctx.get('contextId', '1'))
-            ctx_id, user_id = _zap_setup_auth(ctx_id, target_url, auth)
+            ctx_id, user_id = _zap_setup_auth(ctx_id, ZAP_CONTEXT_NAME, target_url, auth)
 
         # Open target URL to seed the session. Non-fatal: if ZAP cannot fetch it
         # directly (e.g. a WAF/Cloudflare in front returns 400/403 for the
@@ -1449,7 +1451,7 @@ def run_zap_scan(target_url, scan_type='baseline', auth=None):
         # Spider (auto-crawl), optionally with auth context
         spider_params = {'url': target_url, 'recurse': 'true'}
         if ctx_id:
-            spider_params['contextName'] = 'djmanager'
+            spider_params['contextName'] = ZAP_CONTEXT_NAME
             spider_params['userId'] = user_id
         spider = _zap_api('spider/action/scan', spider_params)
         spider_id = spider.get('scan', '0')

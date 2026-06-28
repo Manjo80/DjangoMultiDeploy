@@ -235,7 +235,12 @@ class ZapAuthEncodingTests(TestCase):
             'logged_in_indicator': '/logout/',
         }
         with mock.patch.object(scanning, '_zap_api', side_effect=fake_api):
-            scanning._zap_setup_auth('1', 'https://app.example.com/', auth)
+            scanning._zap_setup_auth('1', 'djmanager', 'https://app.example.com/', auth)
+
+        # includeInContext must be keyed by contextName (contextId → 400)
+        inc = captured['context/action/includeInContext']
+        self.assertEqual(inc.get('contextName'), 'djmanager')
+        self.assertNotIn('contextId', inc)
 
         cfg = captured['authentication/action/setAuthenticationMethod']
         params = cfg['authMethodConfigParams']
@@ -259,7 +264,7 @@ class ZapAuthEncodingTests(TestCase):
 
         auth = {'login_url': 'https://a/login/', 'username': 'u', 'password': 'p'}
         with mock.patch.object(scanning, '_zap_api', side_effect=fake_api):
-            scanning._zap_setup_auth('1', 'https://a/', auth)
+            scanning._zap_setup_auth('1', 'djmanager', 'https://a/', auth)
 
         acsrf = [p for path, p in calls if path == 'acsrf/action/addOptionToken']
         self.assertEqual(acsrf, [{'String': 'csrfmiddlewaretoken'}])
