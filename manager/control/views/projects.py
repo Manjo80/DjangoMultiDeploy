@@ -27,7 +27,7 @@ from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.conf import settings
 
-from ..models import AuditLog, UserProfile, FavoriteCommand
+from ..models import AuditLog, UserProfile, FavoriteCommand, UpdateCommand
 from ..utils import (
     get_all_projects, get_project, get_service_status,
     service_action, get_journal_logs, get_nginx_log,
@@ -70,6 +70,7 @@ def project_detail(request, name):
     ufw               = get_ufw_status(conf.get('GUNICORN_PORT'))
     role              = _get_role(request.user)
     favorite_commands = list(FavoriteCommand.objects.filter(project_name=name))
+    update_commands   = list(UpdateCommand.objects.filter(project_name=name))
     extern_scan_hosts = _build_extern_scan_hosts(nginx_names, allowed_hosts)
     return render(request, 'control/project_detail.html', {
         'conf':              conf,
@@ -81,6 +82,7 @@ def project_detail(request, name):
         'ufw':               ufw,
         'role':              role,
         'favorite_commands': favorite_commands,
+        'update_commands':   update_commands,
     })
 
 
@@ -226,6 +228,7 @@ def project_action(request, name):
     ufw               = get_ufw_status(conf.get('GUNICORN_PORT') if conf else None)
     role              = _get_role(request.user)
     favorite_commands = list(FavoriteCommand.objects.filter(project_name=name))
+    update_commands   = list(UpdateCommand.objects.filter(project_name=name))
     extern_scan_hosts = _build_extern_scan_hosts(nginx_names, allowed_hosts)
     return render(request, 'control/project_detail.html', {
         'conf':              conf,
@@ -239,6 +242,7 @@ def project_action(request, name):
         'error':             error,
         'role':              role,
         'favorite_commands': favorite_commands,
+        'update_commands':   update_commands,
     })
 
 
@@ -729,6 +733,84 @@ def project_favorite_commands(request, name):
         cmds = list(FavoriteCommand.objects.filter(project_name=name).values(
             'id', 'label', 'command', 'order'))
         return JsonResponse({'ok': True, 'commands': cmds})
+
+    return JsonResponse({'ok': False, 'error': 'Unbekannte Aktion'})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Update Commands — per-project extra steps that run during "Git Pull + Update"
+# ──────────────────────────────────────────────────────────────────────────────
+
+@login_required
+def project_update_commands(request, name):
+    """
+    GET: list the project's custom update commands as JSON.
+    POST: add / delete / toggle a custom update command.
+
+    These commands run automatically during "Git Pull + Update", after
+    migrate + collectstatic and before the final restart.
+    """
+    if not _check_project_access(request.user, name):
+        return JsonResponse({'ok': False, 'error': 'Zugriff verweigert'}, status=403)
+
+    def _serialize():
+        return list(UpdateCommand.objects.filter(project_name=name).values(
+            'id', 'label', 'command', 'order', 'enabled'))
+
+    if request.method == 'GET':
+        return JsonResponse({'ok': True, 'commands': _serialize()})
+
+    role = _get_role(request.user)
+    if role not in (UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR):
+        return JsonResponse({'ok': False, 'error': 'Nur Admins/Operators erlaubt'}, status=403)
+
+    action = request.POST.get('action', '')
+
+    if action == 'add':
+        import re as _re
+        label   = request.POST.get('label', '').strip()[:80]
+        command = request.POST.get('command', '').strip()[:500]
+        # Strip a leading 'python manage.py' / 'manage.py' for convenience.
+        command = _re.sub(r'^(python\s+)?(\./)?manage\.py\s*', '', command).strip()
+        if not label or not command:
+            return JsonResponse({'ok': False, 'error': 'Label und Befehl erforderlich'})
+        if _re.search(r'[;&|`$<>]', command):
+            return JsonResponse({'ok': False, 'error': 'Ungültige Zeichen im Befehl'})
+        # The subcommand itself must be a plain identifier (args may follow).
+        first = command.split()[0] if command.split() else ''
+        if not _re.match(r'^[A-Za-z][A-Za-z0-9_-]*$', first):
+            return JsonResponse({'ok': False, 'error': 'Ungültiger Management-Befehl'})
+        next_order = (UpdateCommand.objects.filter(project_name=name)
+                      .count())
+        obj, created = UpdateCommand.objects.get_or_create(
+            project_name=name, command=command,
+            defaults={'label': label, 'order': next_order},
+        )
+        if not created:
+            return JsonResponse({'ok': False, 'error': f'Befehl "{command}" bereits vorhanden'})
+        AuditLog.log(request, f'Update-Befehl hinzugefügt: {command}', project=name)
+        return JsonResponse({'ok': True, 'commands': _serialize()})
+
+    elif action == 'delete':
+        pk = request.POST.get('pk', '')
+        deleted, _ = UpdateCommand.objects.filter(project_name=name, pk=pk).delete()
+        if not deleted:
+            return JsonResponse({'ok': False, 'error': 'Eintrag nicht gefunden'})
+        AuditLog.log(request, f'Update-Befehl entfernt (pk={pk})', project=name)
+        return JsonResponse({'ok': True, 'commands': _serialize()})
+
+    elif action == 'toggle':
+        pk = request.POST.get('pk', '')
+        try:
+            obj = UpdateCommand.objects.get(project_name=name, pk=pk)
+        except UpdateCommand.DoesNotExist:
+            return JsonResponse({'ok': False, 'error': 'Eintrag nicht gefunden'})
+        obj.enabled = not obj.enabled
+        obj.save(update_fields=['enabled'])
+        AuditLog.log(request,
+                     f'Update-Befehl {"aktiviert" if obj.enabled else "deaktiviert"}: {obj.command}',
+                     project=name)
+        return JsonResponse({'ok': True, 'commands': _serialize()})
 
     return JsonResponse({'ok': False, 'error': 'Unbekannte Aktion'})
 

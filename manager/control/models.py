@@ -255,6 +255,37 @@ class FavoriteCommand(models.Model):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# UpdateCommand — per-project extra steps run during "Git Pull + Update"
+# ──────────────────────────────────────────────────────────────────────────────
+
+class UpdateCommand(models.Model):
+    """
+    A management command that runs automatically as part of the update pipeline
+    (after git pull → migrate → collectstatic, before the final restart).
+
+    Lets each project extend its deployment with its own steps — e.g.
+    ``load_glossary``, ``loaddata fixtures/seed.json`` or ``clearsessions`` —
+    fully configurable from the web UI after installation.
+    """
+    project_name = models.CharField(max_length=100)
+    label        = models.CharField(max_length=80,
+                                    help_text='Beschreibung, z.B. "Glossar laden"')
+    command      = models.CharField(max_length=500,
+                                    help_text='manage.py Unterbefehl, z.B. "load_glossary" oder "loaddata seed.json"')
+    order        = models.IntegerField(default=0, help_text='Reihenfolge (aufsteigend)')
+    enabled      = models.BooleanField(default=True,
+                                       help_text='Deaktivierte Befehle werden beim Update übersprungen.')
+
+    class Meta:
+        ordering        = ['project_name', 'order', 'label']
+        unique_together = ('project_name', 'command')
+
+    def __str__(self):
+        state = '' if self.enabled else ' [aus]'
+        return f'{self.project_name}: {self.label} ({self.command}){state}'
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ProjectPermission — per-project access for Operator/Viewer users
 # ──────────────────────────────────────────────────────────────────────────────
 

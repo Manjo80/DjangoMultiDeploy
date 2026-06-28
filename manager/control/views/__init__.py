@@ -36,7 +36,7 @@ from .projects import (
     reset_confirm, reset_run, reset_done,
     project_nuclei_scan, nuclei_version_view, nuclei_update_view,
     project_zap_scan, zap_version_view, zap_update_view,
-    project_update, project_favorite_commands,
+    project_update, project_favorite_commands, project_update_commands,
     project_migrations, project_pip_outdated, project_pip_upgrade,
     project_clone_form, project_clone_run,
     project_nginx_config,
@@ -76,7 +76,7 @@ __all__ = [
     'reset_confirm', 'reset_run', 'reset_done',
     'project_nuclei_scan', 'nuclei_version_view', 'nuclei_update_view',
     'project_zap_scan', 'zap_version_view', 'zap_update_view',
-    'project_update', 'project_favorite_commands',
+    'project_update', 'project_favorite_commands', 'project_update_commands',
     'project_migrations', 'project_pip_outdated', 'project_pip_upgrade',
     'project_clone_form', 'project_clone_run',
     # scanner
