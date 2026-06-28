@@ -151,7 +151,7 @@ nginx :80                       (server_name-Routing, Security-Header, gzip)
 /etc/nginx/sites-available/<projekt> nginx-Site (+ Symlink in sites-enabled)
 /etc/systemd/system/<projekt>.service
 /etc/django-servers.d/<projekt>.conf Registry-Eintrag (Quelle für den Manager)
-/usr/local/bin/<projekt>_update.sh   Backup → git pull → migrate → collectstatic → restart
+/usr/local/bin/<projekt>_update.sh   Backup → git pull → migrate → eigene Befehle → restart
 /usr/local/bin/<projekt>_backup.sh   DB-Dump + .env + Projektarchiv, Rotation (max. 5)
 /var/log/<projekt>/                  App-Logs (+ logrotate)
 /var/backups/<projekt>/              Backups (Rechte 700)
@@ -315,9 +315,11 @@ DB-Dump (pg_dump `-Fc` / mysqldump / SQLite-Kopie) + `.env`-Sicherung + Projekta
 Maximal **5 Backups** pro Projekt, ältere werden rotiert. Ablage in `/var/backups/<projekt>/` (700).
 
 **Update** (`/usr/local/bin/<projekt>_update.sh`, per Klick im Manager):
-Backup → `git pull` (als App-User mit Deploy-Key) → `pip install -r requirements.txt` → `migrate` → `collectstatic` → **eigene Update-Befehle** → Service-Restart → nginx-Reload.
+Backup → `git pull` (als App-User mit Deploy-Key) → `pip install -r requirements.txt` → `migrate` → **eigene Update-Befehle** → Service-Restart → nginx-Reload.
 
-Die **eigenen Update-Befehle** sind pro Projekt im Web-Manager (Projektdetail → *Update & Backup* → *Eigene Update-Befehle*) frei konfigurierbar: beliebige `manage.py`-Kommandos (z. B. `load_glossary`, `loaddata seed.json`, `clearsessions`), die nach `collectstatic` und vor dem abschließenden Neustart als App-User in der `.venv` ausgeführt werden. Einzeln aktivierbar/deaktivierbar und jederzeit ohne Neuinstallation anpassbar. Eingaben werden validiert (nur `manage.py`-Unterbefehle, keine Shell-Metazeichen).
+`collectstatic` ist **bewusst nicht** mehr fest in die Pipeline eingebaut. Wenn sich Static-Dateien geändert haben, wird es bei Bedarf als **eigener Update-Befehl** (`collectstatic --noinput`) vor dem Neustart eingefügt — bei reinen Python-/Template-Änderungen ist es nicht nötig.
+
+Die **eigenen Update-Befehle** sind pro Projekt im Web-Manager (Projektdetail → *Update & Backup* → *Eigene Update-Befehle*) frei konfigurierbar: beliebige `manage.py`-Kommandos (z. B. `collectstatic --noinput`, `load_glossary`, `loaddata seed.json`, `clearsessions`), die nach `migrate` und vor dem abschließenden Neustart als App-User in der `.venv` ausgeführt werden. Einzeln aktivierbar/deaktivierbar und jederzeit ohne Neuinstallation anpassbar. Eingaben werden validiert (nur `manage.py`-Unterbefehle, keine Shell-Metazeichen).
 
 ---
 

@@ -306,10 +306,12 @@
           <div class="collapse mt-2" id="upd-cmd-manage">
             <p class="text-muted small mb-2">
               Laufen automatisch beim Update — Reihenfolge:
-              <code>git pull → migrate → collectstatic</code> →
+              <code>git pull → migrate</code> →
               <strong>diese Befehle</strong> → <code>restart</code>.
-              Jederzeit anpassbar. Werden als <code>{{ conf.APPUSER }}</code> in der
-              <code>.venv</code> ausgeführt.
+              <code>collectstatic</code> ist <strong>nicht</strong> mehr fest eingebaut:
+              bei geänderten Static-Dateien hier <code>collectstatic --noinput</code>
+              hinzufügen. Jederzeit anpassbar, werden als <code>{{ conf.APPUSER }}</code>
+              in der <code>.venv</code> ausgeführt.
             </p>
             <div id="upd-cmd-list" class="mb-2">
               {% for uc in update_commands %}
@@ -336,7 +338,7 @@
               <input type="text" id="upd-label-input" class="form-control bg-dark text-light border-secondary"
                      placeholder='Label, z.B. "Glossar laden"' maxlength="80">
               <input type="text" id="upd-cmd-input" class="form-control bg-dark text-light border-secondary font-monospace"
-                     placeholder='Befehl, z.B. "load_glossary"' maxlength="500">
+                     placeholder='Befehl, z.B. "collectstatic --noinput"' maxlength="500">
               <button class="btn btn-outline-primary" data-action="addUpdateCommand">
                 <i class="bi bi-plus-lg"></i>
               </button>
@@ -687,6 +689,9 @@
               <p class="text-muted small mb-2">
                 Wenn angegeben, meldet sich ZAP vor dem Spider an und scannt als eingeloggter Nutzer.
                 <strong>Passwörter werden nicht gespeichert</strong> — nur für diese Scan-Session.
+                Djangos CSRF-Token (<code>csrfmiddlewaretoken</code>) wird automatisch vor jedem
+                Login frisch geholt. Login-URL inkl. Pfad angeben (z.B. <code>/login/</code>);
+                als Eingeloggt-Indikator eignet sich <code>/logout/</code> (erscheint nur eingeloggt).
               </p>
               <div class="row g-2">
                 <div class="col-12 col-md-6">

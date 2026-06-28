@@ -212,3 +212,80 @@ class CustomUpdateCommandRunnerTests(TestCase):
                                                            'APPUSER': 'bad user!'})
         self.assertFalse(ok)
         m.assert_not_called()
+
+
+class ZapAuthEncodingTests(TestCase):
+    """The form-based auth login data must encode placeholders exactly once."""
+
+    def test_login_request_data_placeholders_not_double_encoded(self):
+        import urllib.parse as up
+        from control.utils import scanning
+
+        captured = {}
+
+        def fake_api(path, params=None):
+            captured[path] = params or {}
+            # newUser must return a userId for the rest of the flow
+            return {'userId': '0', 'contextId': '1'}
+
+        auth = {
+            'login_url': 'https://app.example.com/login/',
+            'username_field': 'username', 'password_field': 'password',
+            'username': 'admin', 'password': 'secret',
+            'logged_in_indicator': '/logout/',
+        }
+        with mock.patch.object(scanning, '_zap_api', side_effect=fake_api):
+            scanning._zap_setup_auth('1', 'https://app.example.com/', auth)
+
+        cfg = captured['authentication/action/setAuthenticationMethod']
+        params = cfg['authMethodConfigParams']
+        # Pull loginRequestData out and decode once (as ZAP does)
+        sub = dict(up.parse_qsl(params))
+        login_data = up.unquote(sub['loginRequestData'])
+        # Correct, single-encoded placeholders — NOT the %2525 double-encoded form
+        self.assertIn('username={%username%}', login_data)
+        self.assertIn('password={%password%}', login_data)
+        # The old bug produced "%2525" (percent double-encoded). A single "%25"
+        # is correct (it is the encoded "%" of the {%username%} placeholder).
+        self.assertNotIn('%2525', params)
+
+    def test_registers_django_csrf_token(self):
+        from control.utils import scanning
+        calls = []
+
+        def fake_api(path, params=None):
+            calls.append((path, params or {}))
+            return {'userId': '0'}
+
+        auth = {'login_url': 'https://a/login/', 'username': 'u', 'password': 'p'}
+        with mock.patch.object(scanning, '_zap_api', side_effect=fake_api):
+            scanning._zap_setup_auth('1', 'https://a/', auth)
+
+        acsrf = [p for path, p in calls if path == 'acsrf/action/addOptionToken']
+        self.assertEqual(acsrf, [{'String': 'csrfmiddlewaretoken'}])
+
+
+class NucleiUpdateTests(TestCase):
+    """update_nuclei must force a fresh GitHub download, not re-copy a stale binary."""
+
+    def test_update_forces_github_download(self):
+        from control.utils import scanning
+        with mock.patch.object(scanning, '_download_nuclei_release', return_value=True) as dl, \
+             mock.patch.object(scanning, '_nuclei_installed_version', return_value='3.9.0'), \
+             mock.patch.object(scanning._shutil, 'which', return_value='/usr/local/bin/nuclei') as which, \
+             mock.patch.object(scanning._shutil, 'copy2') as copy2:
+            res = scanning.update_nuclei()
+        self.assertTrue(res['ok'])
+        self.assertEqual(res['version'], '3.9.0')
+        dl.assert_called_once()        # forced release download was used
+        copy2.assert_not_called()      # did NOT re-copy an existing binary
+
+    def test_force_skips_path_copy_shortcut(self):
+        from control.utils import scanning
+        with mock.patch.object(scanning, '_download_nuclei_release', return_value=True) as dl, \
+             mock.patch.object(scanning._shutil, 'which', return_value='/usr/bin/nuclei') as which, \
+             mock.patch.object(scanning._shutil, 'copy2') as copy2:
+            ok = scanning._install_nuclei(force=True)
+        self.assertTrue(ok)
+        dl.assert_called_once()
+        copy2.assert_not_called()
