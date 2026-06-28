@@ -265,6 +265,29 @@ class ZapAuthEncodingTests(TestCase):
         self.assertEqual(acsrf, [{'String': 'csrfmiddlewaretoken'}])
 
 
+class ZapApiErrorTests(TestCase):
+    """A ZAP API HTTP error must surface the endpoint + ZAP's error body."""
+
+    def test_http_error_includes_endpoint_and_body(self):
+        import io
+        import urllib.error
+        from control.utils import scanning
+
+        def raise_400(url, **kw):
+            raise urllib.error.HTTPError(
+                url, 400, 'Bad Request', {},
+                io.BytesIO(b'{"code":"url_not_found","message":"No such URL"}'))
+
+        with mock.patch.object(scanning, '_safe_urlopen', side_effect=raise_400):
+            with self.assertRaises(RuntimeError) as cm:
+                scanning._zap_api('spider/action/scan', {'url': 'https://x/'})
+
+        msg = str(cm.exception)
+        self.assertIn('spider/action/scan', msg)   # which call failed
+        self.assertIn('400', msg)
+        self.assertIn('url_not_found', msg)         # ZAP's actual reason
+
+
 class NucleiUpdateTests(TestCase):
     """update_nuclei must force a fresh GitHub download, not re-copy a stale binary."""
 

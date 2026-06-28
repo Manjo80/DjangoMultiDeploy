@@ -1311,13 +1311,29 @@ def _zap_stop():
 
 
 def _zap_api(path, params=None):
-    """Call ZAP JSON API. Returns parsed JSON or raises."""
+    """
+    Call the ZAP JSON API. Returns parsed JSON.
+
+    On an HTTP error, raise with the failing endpoint *and* ZAP's error body
+    (e.g. ``{"code":"illegal_parameter",...}`` or ``url_not_found``) instead of
+    a bare "HTTP Error 400: Bad Request" — so the actual cause is visible in the
+    scan result instead of an opaque 400.
+    """
     import urllib.parse as _up
-    import urllib.request as _ureq
+    import urllib.error as _uerr
     qs = _up.urlencode({**(params or {}), 'apikey': ZAP_API_KEY})
     url = f'http://127.0.0.1:{ZAP_PORT}/JSON/{path}/?{qs}'
-    with _safe_urlopen(url, timeout=30) as r:
-        return _json.loads(r.read())
+    try:
+        with _safe_urlopen(url, timeout=30) as r:
+            return _json.loads(r.read())
+    except _uerr.HTTPError as e:
+        body = ''
+        try:
+            body = e.read().decode('utf-8', 'replace').strip()[:300]
+        except Exception:
+            pass
+        detail = f'{e.code} {e.reason}' + (f': {body}' if body else '')
+        raise RuntimeError(f'ZAP-API {path} → HTTP {detail}') from None
 
 
 def _zap_setup_auth(ctx_id, target_url, auth):
@@ -1421,8 +1437,14 @@ def run_zap_scan(target_url, scan_type='baseline', auth=None):
             ctx_id = str(ctx.get('contextId', '1'))
             ctx_id, user_id = _zap_setup_auth(ctx_id, target_url, auth)
 
-        # Open target URL to seed the session
-        _zap_api('core/action/accessUrl', {'url': target_url, 'followRedirects': 'true'})
+        # Open target URL to seed the session. Non-fatal: if ZAP cannot fetch it
+        # directly (e.g. a WAF/Cloudflare in front returns 400/403 for the
+        # access request) we still let the spider try and surface its — more
+        # specific — error rather than aborting the whole scan here.
+        try:
+            _zap_api('core/action/accessUrl', {'url': target_url, 'followRedirects': 'true'})
+        except Exception as e:
+            logger.warning('ZAP accessUrl fehlgeschlagen für %s: %s', target_url, e)
 
         # Spider (auto-crawl), optionally with auth context
         spider_params = {'url': target_url, 'recurse': 'true'}
