@@ -294,6 +294,58 @@
             </button>
           </form>
         </div>
+
+        {% if role == 'admin' or role == 'operator' %}
+        <!-- Eigene Update-Befehle (laufen automatisch beim "Git Pull + Update") -->
+        <div class="border-top pt-3 mb-3">
+          <button class="btn btn-sm btn-outline-secondary w-100" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#upd-cmd-manage">
+            <i class="bi bi-list-check me-1"></i> Eigene Update-Befehle
+            {% if update_commands %}<span class="badge bg-secondary ms-1">{{ update_commands|length }}</span>{% endif %}
+          </button>
+          <div class="collapse mt-2" id="upd-cmd-manage">
+            <p class="text-muted small mb-2">
+              Laufen automatisch beim Update — Reihenfolge:
+              <code>git pull → migrate → collectstatic</code> →
+              <strong>diese Befehle</strong> → <code>restart</code>.
+              Jederzeit anpassbar. Werden als <code>{{ conf.APPUSER }}</code> in der
+              <code>.venv</code> ausgeführt.
+            </p>
+            <div id="upd-cmd-list" class="mb-2">
+              {% for uc in update_commands %}
+              <div class="d-flex align-items-center gap-2 mb-1 upd-item" data-pk="{{ uc.pk }}">
+                <div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" role="switch"
+                         data-action="toggleUpdateCommand" data-pk="{{ uc.pk }}"
+                         {% if uc.enabled %}checked{% endif %}
+                         title="Aktiviert / deaktiviert">
+                </div>
+                <span class="badge bg-dark border border-secondary font-monospace flex-grow-1 text-start{% if not uc.enabled %} opacity-50{% endif %}">
+                  <strong>{{ uc.label }}</strong> — <code>manage.py {{ uc.command }}</code>
+                </span>
+                <button class="btn btn-sm btn-outline-danger py-0 px-1"
+                        data-action="deleteUpdateCommand" data-pk="{{ uc.pk }}" title="Entfernen">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
+              {% empty %}
+              <p class="text-muted small mb-2" id="upd-empty-hint">Noch keine eigenen Update-Befehle.</p>
+              {% endfor %}
+            </div>
+            <div class="input-group input-group-sm mb-1">
+              <input type="text" id="upd-label-input" class="form-control bg-dark text-light border-secondary"
+                     placeholder='Label, z.B. "Glossar laden"' maxlength="80">
+              <input type="text" id="upd-cmd-input" class="form-control bg-dark text-light border-secondary font-monospace"
+                     placeholder='Befehl, z.B. "load_glossary"' maxlength="500">
+              <button class="btn btn-outline-primary" data-action="addUpdateCommand">
+                <i class="bi bi-plus-lg"></i>
+              </button>
+            </div>
+            <div id="upd-msg" class="d-none small mt-1"></div>
+          </div>
+        </div>
+        {% endif %}
+
         {% if request.user.is_staff %}
         <div class="border-top pt-3">
           <small class="text-muted d-block mb-2">
@@ -1280,6 +1332,89 @@ function showFavMsg(msg, ok) {
 }
 </script>
 
+<!-- Custom Update Commands JS -->
+<script nonce="{{ csp_nonce }}">
+const updCmdUrl = "{% url 'project_update_commands' name %}";
+
+async function updCmdPost(fields) {
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  for (const [k, v] of Object.entries(fields)) fd.append(k, v);
+  const r = await fetch(updCmdUrl, {method: 'POST', body: fd});
+  return r.json();
+}
+
+async function addUpdateCommand() {
+  const label   = document.getElementById('upd-label-input').value.trim();
+  const command = document.getElementById('upd-cmd-input').value.trim();
+  if (!label || !command) { showUpdMsg('Label und Befehl eingeben.', false); return; }
+  try {
+    const d = await updCmdPost({action: 'add', label, command});
+    if (d.ok) {
+      document.getElementById('upd-label-input').value = '';
+      document.getElementById('upd-cmd-input').value = '';
+      renderUpdList(d.commands);
+      showUpdMsg('✅ Update-Befehl hinzugefügt.', true);
+    } else {
+      showUpdMsg('❌ ' + (d.error || 'Fehler'), false);
+    }
+  } catch(e) { showUpdMsg('❌ Verbindungsfehler', false); }
+}
+
+async function deleteUpdateCommand(pk, btn) {
+  if (!confirm('Update-Befehl wirklich entfernen?')) return;
+  btn.disabled = true;
+  try {
+    const d = await updCmdPost({action: 'delete', pk});
+    if (d.ok) { renderUpdList(d.commands); showUpdMsg('✅ Entfernt.', true); }
+    else { btn.disabled = false; showUpdMsg('❌ ' + (d.error || 'Fehler'), false); }
+  } catch(e) { btn.disabled = false; showUpdMsg('❌ Verbindungsfehler', false); }
+}
+
+async function toggleUpdateCommand(pk, el) {
+  el.disabled = true;
+  try {
+    const d = await updCmdPost({action: 'toggle', pk});
+    if (d.ok) { renderUpdList(d.commands); }
+    else { el.checked = !el.checked; showUpdMsg('❌ ' + (d.error || 'Fehler'), false); }
+  } catch(e) { el.checked = !el.checked; showUpdMsg('❌ Verbindungsfehler', false); }
+  el.disabled = false;
+}
+
+function renderUpdList(commands) {
+  const listEl = document.getElementById('upd-cmd-list');
+  if (!listEl) return;
+  if (!commands.length) {
+    listEl.innerHTML = '<p class="text-muted small mb-2" id="upd-empty-hint">Noch keine eigenen Update-Befehle.</p>';
+    return;
+  }
+  listEl.innerHTML = commands.map(c => `
+    <div class="d-flex align-items-center gap-2 mb-1 upd-item" data-pk="${c.id}">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch"
+               data-action="toggleUpdateCommand" data-pk="${c.id}" ${c.enabled ? 'checked' : ''}
+               title="Aktiviert / deaktiviert">
+      </div>
+      <span class="badge bg-dark border border-secondary font-monospace flex-grow-1 text-start${c.enabled ? '' : ' opacity-50'}">
+        <strong>${escHtml(c.label)}</strong> — <code>manage.py ${escHtml(c.command)}</code>
+      </span>
+      <button class="btn btn-sm btn-outline-danger py-0 px-1"
+              data-action="deleteUpdateCommand" data-pk="${c.id}" title="Entfernen">
+        <i class="bi bi-trash"></i>
+      </button>
+    </div>`).join('');
+}
+
+function showUpdMsg(msg, ok) {
+  const el = document.getElementById('upd-msg');
+  if (!el) return;
+  el.className = ok ? 'small mt-1 text-success' : 'small mt-1 text-danger';
+  el.textContent = msg;
+  el.classList.remove('d-none');
+  setTimeout(() => el.classList.add('d-none'), 4000);
+}
+</script>
+
 <!-- Migration Status JS -->
 <script nonce="{{ csp_nonce }}">
 const migUrl = "{% url 'project_migrations' name %}";
@@ -2221,6 +2356,9 @@ document.addEventListener('click', function (e) {
     case 'runFavoriteCommand':    runFavoriteCommand(el.dataset.cmd, el.dataset.label, el); break;
     case 'deleteFavoriteCommand': deleteFavoriteCommand(parseInt(el.dataset.pk, 10), el); break;
     case 'addFavoriteCommand':    addFavoriteCommand(); break;
+    case 'addUpdateCommand':      addUpdateCommand(); break;
+    case 'deleteUpdateCommand':   deleteUpdateCommand(parseInt(el.dataset.pk, 10), el); break;
+    case 'toggleUpdateCommand':   toggleUpdateCommand(parseInt(el.dataset.pk, 10), el); break;
     case 'uploadZip':             uploadZip(); break;
     case 'deleteBackup':          deleteBackup(el.dataset.name, el); break;
     case 'runSecurityScan':       runSecurityScan(); break;

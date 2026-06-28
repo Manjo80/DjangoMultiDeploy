@@ -43,6 +43,7 @@ urlpatterns = [
     path('project/<str:name>/security-scan/', views.project_security_scan, name='project_security_scan'),
     path('project/<str:name>/tls-cert/', views.project_tls_cert, name='project_tls_cert'),
     path('project/<str:name>/favorite-commands/', views.project_favorite_commands, name='project_favorite_commands'),
+    path('project/<str:name>/update-commands/', views.project_update_commands, name='project_update_commands'),
     path('project/<str:name>/migrations/', views.project_migrations, name='project_migrations'),
     path('project/<str:name>/pip-outdated/', views.project_pip_outdated, name='project_pip_outdated'),
     path('project/<str:name>/pip-upgrade/', views.project_pip_upgrade, name='project_pip_upgrade'),

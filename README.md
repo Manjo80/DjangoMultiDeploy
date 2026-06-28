@@ -89,6 +89,7 @@ und verwaltet alle installierten Projekte im Browser.
 - **Migrations-Übersicht** — offene Django-Migrationen pro Projekt anzeigen und ausführen
 - **pip-Verwaltung** — veraltete Pakete anzeigen und gezielt aktualisieren (mit Versions-Pinning)
 - **Favoriten-Befehle** — eigene `manage.py`-Kommandos als Quick-Action-Buttons pro Projekt
+- **Eigene Update-Befehle** — zusätzliche `manage.py`-Schritte (z. B. `load_glossary`, `loaddata seed.json`, `clearsessions`), die automatisch beim „Git Pull + Update" laufen — pro Projekt frei zusammenstellbar, einzeln aktivierbar/deaktivierbar und jederzeit anpassbar
 - **.env-Editor** — Umgebungsvariablen pro Projekt und für den Manager direkt im Browser bearbeiten (Secrets maskiert)
 - **Firewall** — ufw-Status und Portverwaltung im Browser
 
@@ -314,7 +315,9 @@ DB-Dump (pg_dump `-Fc` / mysqldump / SQLite-Kopie) + `.env`-Sicherung + Projekta
 Maximal **5 Backups** pro Projekt, ältere werden rotiert. Ablage in `/var/backups/<projekt>/` (700).
 
 **Update** (`/usr/local/bin/<projekt>_update.sh`, per Klick im Manager):
-Backup → `git pull` (als App-User mit Deploy-Key) → `pip install -r requirements.txt` → `migrate` → `collectstatic` → Service-Restart → nginx-Reload.
+Backup → `git pull` (als App-User mit Deploy-Key) → `pip install -r requirements.txt` → `migrate` → `collectstatic` → **eigene Update-Befehle** → Service-Restart → nginx-Reload.
+
+Die **eigenen Update-Befehle** sind pro Projekt im Web-Manager (Projektdetail → *Update & Backup* → *Eigene Update-Befehle*) frei konfigurierbar: beliebige `manage.py`-Kommandos (z. B. `load_glossary`, `loaddata seed.json`, `clearsessions`), die nach `collectstatic` und vor dem abschließenden Neustart als App-User in der `.venv` ausgeführt werden. Einzeln aktivierbar/deaktivierbar und jederzeit ohne Neuinstallation anpassbar. Eingaben werden validiert (nur `manage.py`-Unterbefehle, keine Shell-Metazeichen).
 
 ---
 

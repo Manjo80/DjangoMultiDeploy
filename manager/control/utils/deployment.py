@@ -134,6 +134,95 @@ def _patch_project_update_script(script_path):
         pass
 
 
+def _run_custom_update_commands(name, conf):
+    """
+    Run the project's user-defined update commands (configured in the web UI)
+    as the app user inside the project's .venv, then restart the service so
+    their effects take hold.
+
+    These run after the update script (git pull → migrate → collectstatic) and
+    generalise the old hard-coded `load_glossary` step into a fully editable
+    pipeline. Returns (ok, output). Safe no-op when none are configured.
+    """
+    import re as _re
+    try:
+        from ..models import UpdateCommand
+    except Exception:
+        return True, ''
+    try:
+        steps = list(
+            UpdateCommand.objects
+            .filter(project_name=name, enabled=True)
+            .order_by('order', 'id')
+        )
+    except Exception:
+        # DB / migration not ready — never break the update over this.
+        return True, ''
+    if not steps:
+        return True, ''
+
+    appdir  = conf.get('APPDIR', f'/srv/{name}') if conf else f'/srv/{name}'
+    appuser = conf.get('APPUSER', name) if conf else name
+    if not is_valid_linux_user(appuser):
+        return False, f'⚠️  Ungültiger APPUSER {appuser!r} — eigene Update-Befehle übersprungen'
+
+    venv_python = os.path.join(appdir, '.venv', 'bin', 'python')
+    lines = ['', '── Eigene Update-Befehle ──']
+    ok = True
+
+    for step in steps:
+        # Normalise: strip an optional leading 'python manage.py' / 'manage.py'.
+        raw = _re.sub(r'^(python\s+)?(\./)?manage\.py\s*',
+                      '', (step.command or '').strip()).strip()
+        try:
+            parts = shlex.split(raw)
+        except ValueError as e:
+            lines.append(f'⚠️  {step.label}: Befehl ungültig ({e})')
+            ok = False
+            continue
+        # The subcommand itself must be a plain identifier; args are re-quoted
+        # individually so nothing is shell-interpreted (same model as
+        # run_management_command).
+        if not parts or not _re.match(r'^[A-Za-z][A-Za-z0-9_-]*$', parts[0]):
+            lines.append(f'⚠️  {step.label}: ungültiger Management-Befehl')
+            ok = False
+            continue
+        quoted   = ' '.join(shlex.quote(p) for p in parts)
+        full_cmd = (
+            f'cd {shlex.quote(appdir)} && '
+            f'{shlex.quote(venv_python)} manage.py {quoted}'
+        )
+        try:
+            r = subprocess.run(
+                [_SU, '-', appuser, '-s', _BASH, '-c', full_cmd],
+                capture_output=True, text=True, timeout=300,
+            )
+            out = (r.stdout + r.stderr).strip()[-400:]
+            if r.returncode == 0:
+                lines.append(f'✅ {step.label} (manage.py {raw})')
+            else:
+                lines.append(f'⚠️  {step.label} fehlgeschlagen:\n{out}')
+                ok = False
+        except subprocess.TimeoutExpired:
+            lines.append(f'⚠️  {step.label}: Timeout nach 300 Sekunden')
+            ok = False
+        except Exception as e:
+            lines.append(f'⚠️  {step.label}: {e}')
+            ok = False
+
+    # Restart once more so the custom commands' effects take hold.
+    try:
+        r = subprocess.run([_SYSTEMCTL, 'restart', name],
+                           capture_output=True, text=True, timeout=30)
+        lines.append('✅ Service neu gestartet (nach eigenen Befehlen)'
+                     if r.returncode == 0
+                     else f'⚠️  Service-Restart: {r.stderr.strip()}')
+    except Exception as e:
+        lines.append(f'⚠️  Service-Restart: {e}')
+
+    return ok, '\n'.join(lines)
+
+
 def run_update(name):
     """Run the project update script. Returns (ok, output)."""
     import re as _re
@@ -190,6 +279,12 @@ def run_update(name):
             )
         ok = result.returncode == 0
         if ok:
+            # Run user-defined extra update commands (if any), then restart.
+            extra_ok, extra_out = _run_custom_update_commands(name, conf)
+            if extra_out:
+                output += '\n' + extra_out
+            if not extra_ok:
+                ok = False
             _record_version(name)
         return ok, output
     except Exception as e:

@@ -4,7 +4,7 @@ from unittest import mock
 from django.contrib.auth.models import User
 from django.test import TestCase, Client
 
-from control.models import UserProfile, HealthSample, NotificationSettings
+from control.models import UserProfile, HealthSample, NotificationSettings, UpdateCommand
 from control.utils.validators import is_valid_hostname
 from control.utils import notify
 
@@ -103,3 +103,112 @@ class NotificationSettingsViewTests(TestCase):
         c.force_login(viewer)
         r = c.get('/notifications/')
         self.assertEqual(r.status_code, 403)
+
+
+class UpdateCommandViewTests(TestCase):
+    """CRUD + permission tests for the configurable update pipeline."""
+
+    URL = '/project/demo/update-commands/'
+
+    def setUp(self):
+        admin = User.objects.create_user('admin', password='Corr3ct-Horse-99')
+        admin.userprofile.role = UserProfile.ROLE_ADMIN
+        admin.userprofile.save()
+        self.client.force_login(admin)
+
+    def test_add_list_toggle_delete(self):
+        # add
+        r = self.client.post(self.URL, {'action': 'add', 'label': 'Glossar',
+                                         'command': 'load_glossary'})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()['ok'])
+        obj = UpdateCommand.objects.get(project_name='demo')
+        self.assertEqual(obj.command, 'load_glossary')
+        self.assertTrue(obj.enabled)
+
+        # leading 'python manage.py' is stripped on add
+        r = self.client.post(self.URL, {'action': 'add', 'label': 'Seed',
+                                         'command': 'python manage.py loaddata seed.json'})
+        self.assertEqual(UpdateCommand.objects.get(label='Seed').command, 'loaddata seed.json')
+
+        # list
+        r = self.client.get(self.URL)
+        self.assertEqual(len(r.json()['commands']), 2)
+
+        # toggle off
+        r = self.client.post(self.URL, {'action': 'toggle', 'pk': obj.pk})
+        obj.refresh_from_db()
+        self.assertFalse(obj.enabled)
+
+        # delete
+        r = self.client.post(self.URL, {'action': 'delete', 'pk': obj.pk})
+        self.assertTrue(r.json()['ok'])
+        self.assertFalse(UpdateCommand.objects.filter(pk=obj.pk).exists())
+
+    def test_rejects_shell_metacharacters(self):
+        r = self.client.post(self.URL, {'action': 'add', 'label': 'evil',
+                                        'command': 'migrate; rm -rf /'})
+        self.assertFalse(r.json()['ok'])
+        self.assertEqual(UpdateCommand.objects.count(), 0)
+
+    def test_duplicate_rejected(self):
+        self.client.post(self.URL, {'action': 'add', 'label': 'a', 'command': 'migrate'})
+        r = self.client.post(self.URL, {'action': 'add', 'label': 'b', 'command': 'migrate'})
+        self.assertFalse(r.json()['ok'])
+        self.assertEqual(UpdateCommand.objects.count(), 1)
+
+    def test_viewer_cannot_modify(self):
+        viewer = User.objects.create_user('v', password='Corr3ct-Horse-99')
+        c = Client()
+        c.force_login(viewer)
+        r = c.post(self.URL, {'action': 'add', 'label': 'x', 'command': 'migrate'})
+        self.assertEqual(r.status_code, 403)
+
+
+class CustomUpdateCommandRunnerTests(TestCase):
+    """Unit tests for the helper that runs the configurable update steps."""
+
+    def _conf(self):
+        return {'APPDIR': '/srv/demo', 'APPUSER': 'demo'}
+
+    def test_noop_when_no_commands(self):
+        from control.utils.deployment import _run_custom_update_commands
+        with mock.patch('control.utils.deployment.subprocess.run') as m:
+            ok, out = _run_custom_update_commands('demo', self._conf())
+        self.assertTrue(ok)
+        self.assertEqual(out, '')
+        m.assert_not_called()  # not even a restart when nothing is configured
+
+    def test_runs_enabled_skips_disabled_then_restarts(self):
+        from control.utils.deployment import _run_custom_update_commands
+        UpdateCommand.objects.create(project_name='demo', label='A',
+                                     command='load_glossary', order=0, enabled=True)
+        UpdateCommand.objects.create(project_name='demo', label='B',
+                                     command='clearsessions', order=1, enabled=False)
+
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(cmd)
+            return mock.Mock(returncode=0, stdout='ok', stderr='')
+
+        with mock.patch('control.utils.deployment.subprocess.run', side_effect=fake_run):
+            ok, out = _run_custom_update_commands('demo', self._conf())
+
+        self.assertTrue(ok)
+        # one su-run for the enabled command + one systemctl restart
+        self.assertEqual(len(calls), 2)
+        joined = ' '.join(' '.join(c) for c in calls)
+        self.assertIn('load_glossary', joined)
+        self.assertNotIn('clearsessions', joined)
+        self.assertIn('restart', joined)
+
+    def test_invalid_appuser_aborts(self):
+        from control.utils.deployment import _run_custom_update_commands
+        UpdateCommand.objects.create(project_name='demo', label='A',
+                                     command='migrate', enabled=True)
+        with mock.patch('control.utils.deployment.subprocess.run') as m:
+            ok, out = _run_custom_update_commands('demo', {'APPDIR': '/srv/demo',
+                                                           'APPUSER': 'bad user!'})
+        self.assertFalse(ok)
+        m.assert_not_called()
