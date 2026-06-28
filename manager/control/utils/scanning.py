@@ -826,12 +826,26 @@ NUCLEI_SAFE_TEMPLATES = [
 ]
 
 
-def _install_nuclei():
-    """Install nuclei binary — tries system package managers first, then GitHub release."""
-    # 1. Check if already in PATH at a different location
+def _install_nuclei(force=False):
+    """
+    Install nuclei binary.
+
+    force=False (initial install): try the fastest source first — an existing
+      binary in PATH, then apt / go / snap, finally the GitHub release.
+    force=True (update): skip all of those shortcuts and download the latest
+      GitHub release directly. The shortcuts copy whatever (often older) version
+      is already on the system, which makes "update" a no-op and keeps the
+      "update available" badge showing forever.
+    """
+    if force:
+        return _download_nuclei_release()
+
+    # 1. Check if already in PATH at a different location.
+    #    Skip when it resolves to NUCLEI_BIN itself (copying a file onto itself
+    #    raises SameFileError and would otherwise still report "success").
     try:
         sys_bin = _shutil.which('nuclei')
-        if sys_bin:
+        if sys_bin and os.path.realpath(sys_bin) != os.path.realpath(NUCLEI_BIN):
             try:
                 _shutil.copy2(sys_bin, NUCLEI_BIN)
                 os.chmod(NUCLEI_BIN, 0o755)  # nosec B103
@@ -899,14 +913,23 @@ def _install_nuclei():
     except Exception:
         pass
 
-    # 5. GitHub release download (needs internet) — v3.x uses nuclei_VERSION_linux_ARCH.zip
+    # 5. GitHub release download (latest, needs internet)
+    return _download_nuclei_release()
+
+
+def _download_nuclei_release():
+    """
+    Download and install the latest nuclei binary from the GitHub releases page.
+    Always fetches the newest published version, so it actually advances the
+    installed version (unlike copying a stale apt/snap binary). Returns bool.
+    """
+    # v3.x uses nuclei_VERSION_linux_ARCH.zip
     arch_map = {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm', 'i386': '386', 'i686': '386'}
     go_arch = arch_map.get(_platform.machine(), 'amd64')
 
     # Resolve latest version tag via GitHub API (so URL includes version number)
     version = 'v3.8.0'  # safe fallback
     try:
-        import urllib.request as _ureq2
         with _safe_urlopen(
             'https://api.github.com/repos/projectdiscovery/nuclei/releases/latest',
             timeout=10
@@ -933,7 +956,6 @@ def _install_nuclei():
                     timeout=120, capture_output=True,
                 )
             else:
-                import urllib.request as _req
                 import ssl as _ssl
                 ctx = _ssl.create_default_context()
                 ctx.check_hostname = False
@@ -1009,8 +1031,14 @@ def nuclei_version_info():
 
 
 def update_nuclei():
-    """Download and install the latest nuclei release. Returns {'ok': bool, 'version': str, 'error': str}."""
-    ok = _install_nuclei()
+    """
+    Download and install the latest nuclei release.
+    Uses force=True so the GitHub release is fetched directly instead of
+    re-copying the existing (possibly older) binary — otherwise the update
+    is a no-op and the "update available" badge never clears.
+    Returns {'ok': bool, 'version': str, 'error': str}.
+    """
+    ok = _install_nuclei(force=True)
     if ok:
         ver = _nuclei_installed_version()
         return {'ok': True, 'version': ver, 'error': ''}
@@ -1283,13 +1311,29 @@ def _zap_stop():
 
 
 def _zap_api(path, params=None):
-    """Call ZAP JSON API. Returns parsed JSON or raises."""
+    """
+    Call the ZAP JSON API. Returns parsed JSON.
+
+    On an HTTP error, raise with the failing endpoint *and* ZAP's error body
+    (e.g. ``{"code":"illegal_parameter",...}`` or ``url_not_found``) instead of
+    a bare "HTTP Error 400: Bad Request" — so the actual cause is visible in the
+    scan result instead of an opaque 400.
+    """
     import urllib.parse as _up
-    import urllib.request as _ureq
+    import urllib.error as _uerr
     qs = _up.urlencode({**(params or {}), 'apikey': ZAP_API_KEY})
     url = f'http://127.0.0.1:{ZAP_PORT}/JSON/{path}/?{qs}'
-    with _safe_urlopen(url, timeout=30) as r:
-        return _json.loads(r.read())
+    try:
+        with _safe_urlopen(url, timeout=30) as r:
+            return _json.loads(r.read())
+    except _uerr.HTTPError as e:
+        body = ''
+        try:
+            body = e.read().decode('utf-8', 'replace').strip()[:300]
+        except Exception:
+            pass
+        detail = f'{e.code} {e.reason}' + (f': {body}' if body else '')
+        raise RuntimeError(f'ZAP-API {path} → HTTP {detail}') from None
 
 
 def _zap_setup_auth(ctx_id, target_url, auth):
@@ -1308,16 +1352,34 @@ def _zap_setup_auth(ctx_id, target_url, auth):
         'regex': target_url.rstrip('/') + '.*',
     })
 
-    # Form-based auth config (ZAP URL-encodes the field names)
+    # Form-based auth config. The POST body template uses ZAP's {%username%} and
+    # {%password%} placeholders and must be URL-encoded *exactly once* when
+    # embedded as the loginRequestData sub-parameter. The previous code
+    # pre-encoded the percent signs to "%25", so quoting them again produced
+    # "%2525" — ZAP then saw "{%2525username%2525}" and never substituted the
+    # credentials, so every authenticated scan failed at login.
+    inner = f'{user_field}={{%username%}}&{pass_field}={{%password%}}'
     login_data = (
         f'loginUrl={_up.quote(login_url, safe="")}'
-        f'&loginRequestData={_up.quote(user_field + "={%25username%25}&" + pass_field + "={%25password%25}", safe="")}'
+        f'&loginRequestData={_up.quote(inner, safe="")}'
     )
     _zap_api('authentication/action/setAuthenticationMethod', {
         'contextId': ctx_id,
         'authMethodName': 'formBasedAuthentication',
         'authMethodConfigParams': login_data,
     })
+
+    # Django protects its login form with a per-request CSRF token
+    # (csrfmiddlewaretoken). Register it as an anti-CSRF token so ZAP fetches a
+    # fresh value from the login page before each authentication POST — without
+    # this Django answers 403 and the login never succeeds. Configurable via
+    # auth['csrf_field']; defaults to Django's standard field name.
+    csrf_field = auth.get('csrf_field', 'csrfmiddlewaretoken')
+    if csrf_field:
+        try:
+            _zap_api('acsrf/action/addOptionToken', {'String': csrf_field})
+        except Exception:
+            pass
 
     if logged_in_indicator:
         _zap_api('authentication/action/setLoggedInIndicator', {
@@ -1375,8 +1437,14 @@ def run_zap_scan(target_url, scan_type='baseline', auth=None):
             ctx_id = str(ctx.get('contextId', '1'))
             ctx_id, user_id = _zap_setup_auth(ctx_id, target_url, auth)
 
-        # Open target URL to seed the session
-        _zap_api('core/action/accessUrl', {'url': target_url, 'followRedirects': 'true'})
+        # Open target URL to seed the session. Non-fatal: if ZAP cannot fetch it
+        # directly (e.g. a WAF/Cloudflare in front returns 400/403 for the
+        # access request) we still let the spider try and surface its — more
+        # specific — error rather than aborting the whole scan here.
+        try:
+            _zap_api('core/action/accessUrl', {'url': target_url, 'followRedirects': 'true'})
+        except Exception as e:
+            logger.warning('ZAP accessUrl fehlgeschlagen für %s: %s', target_url, e)
 
         # Spider (auto-crawl), optionally with auth context
         spider_params = {'url': target_url, 'recurse': 'true'}

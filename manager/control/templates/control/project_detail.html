@@ -687,6 +687,9 @@
               <p class="text-muted small mb-2">
                 Wenn angegeben, meldet sich ZAP vor dem Spider an und scannt als eingeloggter Nutzer.
                 <strong>Passwörter werden nicht gespeichert</strong> — nur für diese Scan-Session.
+                Djangos CSRF-Token (<code>csrfmiddlewaretoken</code>) wird automatisch vor jedem
+                Login frisch geholt. Login-URL inkl. Pfad angeben (z.B. <code>/login/</code>);
+                als Eingeloggt-Indikator eignet sich <code>/logout/</code> (erscheint nur eingeloggt).
               </p>
               <div class="row g-2">
                 <div class="col-12 col-md-6">

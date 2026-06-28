@@ -514,6 +514,11 @@ def project_zap_scan(request, name):
     auth = None
     if request.method == 'POST':
         login_url = request.POST.get('login_url', '').strip()
+        # Normalise: a value like "gps.example.com" or "gps.example.com/login/"
+        # (no scheme) makes ZAP POST to a bare host and Django answers 400.
+        # Default to https:// when the scheme is missing.
+        if login_url and not login_url.lower().startswith(('http://', 'https://')):
+            login_url = 'https://' + login_url
         username  = request.POST.get('auth_username', '').strip()
         password  = request.POST.get('auth_password', '').strip()
         if login_url and username and password:
@@ -524,6 +529,7 @@ def project_zap_scan(request, name):
                 'username':           username,
                 'password':           password,
                 'logged_in_indicator': request.POST.get('logged_in_indicator', '').strip(),
+                'csrf_field':         request.POST.get('csrf_field', 'csrfmiddlewaretoken').strip(),
             }
 
     suffix = ' (authentifiziert)' if auth else ''
