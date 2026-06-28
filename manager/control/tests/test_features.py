@@ -242,6 +242,11 @@ class ZapAuthEncodingTests(TestCase):
         self.assertEqual(inc.get('contextName'), 'djmanager')
         self.assertNotIn('contextId', inc)
 
+        # A logged-out indicator (the login form's password field) is set so ZAP
+        # re-authenticates mid-crawl instead of falling back to anonymous.
+        out = captured['authentication/action/setLoggedOutIndicator']
+        self.assertIn('password', out.get('loggedOutIndicatorRegex', ''))
+
         cfg = captured['authentication/action/setAuthenticationMethod']
         params = cfg['authMethodConfigParams']
         # Pull loginRequestData out and decode once (as ZAP does)

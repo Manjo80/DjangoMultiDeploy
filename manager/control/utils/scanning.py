@@ -1389,6 +1389,22 @@ def _zap_setup_auth(ctx_id, ctx_name, target_url, auth):
             'loggedInIndicatorRegex': logged_in_indicator,
         })
 
+    # Tell ZAP how to recognise the *logged-out* state so it re-authenticates
+    # mid-crawl instead of silently falling back to anonymous (which is why an
+    # authenticated scan otherwise only finds public pages like /login/ and
+    # /static/). On a Django app the login form — i.e. the password input — is
+    # exactly what you get when the session is gone, so default to matching it.
+    # Configurable via auth['logged_out_indicator'].
+    logged_out_indicator = (auth.get('logged_out_indicator', '') or
+                            'name=["\']' + pass_field + '["\']')
+    try:
+        _zap_api('authentication/action/setLoggedOutIndicator', {
+            'contextId': ctx_id,
+            'loggedOutIndicatorRegex': logged_out_indicator,
+        })
+    except Exception:
+        pass
+
     # Create user
     user = _zap_api('users/action/newUser', {'contextId': ctx_id, 'name': 'djmanager-user'})
     user_id = str(user.get('userId', '0'))
