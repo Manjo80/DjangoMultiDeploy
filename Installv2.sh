@@ -2239,11 +2239,9 @@ su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && py
 echo "📊 Führe (committete) Migrationen aus..."
 su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py migrate"
 
-# Hinweis: collectstatic ist bewusst NICHT fest in diese Pipeline eingebaut.
-# Es wird bei Bedarf (geänderte Static-Dateien) über die "Eigenen Update-Befehle"
-# im Web-Manager vor dem Neustart eingefügt:
-#   Projektdetail → Update & Backup → Eigene Update-Befehle → "collectstatic --noinput"
-# Diese laufen automatisch nach diesem Script und vor dem abschließenden Neustart.
+# Statische Dateien sammeln
+echo "📦 Sammle statische Dateien..."
+su - "\$APPUSER" -s /bin/bash -c "cd \$APPDIR && source .venv/bin/activate && python manage.py collectstatic --noinput"
 
 # Glossar neu einlesen (optional — wird übersprungen wenn Command nicht vorhanden)
 echo "📖 Lade Glossar (falls vorhanden)..."
@@ -2644,7 +2642,7 @@ for _conf in "$CONF_DIR"/*.conf; do
   if [ -n "$_GITHUB" ]; then
     echo "  │  🔄 Git Pull:    su - $_USER -s /bin/bash -c \"cd $_APPDIR && git pull\""
   fi
-  echo "  │  🚀 Update:      ${_PROJ}_update.sh          (pull+migrate+eigene Befehle+restart)"
+  echo "  │  🚀 Update:      ${_PROJ}_update.sh          (pull+migrate+static+restart)"
   echo "  │  🔁 Neustart:    systemctl restart $_PROJ"
   echo "  │  📊 Status:      systemctl status $_PROJ"
   echo "  │  📋 Logs live:   journalctl -u $_PROJ -f"

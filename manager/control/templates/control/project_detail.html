@@ -306,12 +306,10 @@
           <div class="collapse mt-2" id="upd-cmd-manage">
             <p class="text-muted small mb-2">
               Laufen automatisch beim Update — Reihenfolge:
-              <code>git pull → migrate</code> →
+              <code>git pull → migrate → collectstatic</code> →
               <strong>diese Befehle</strong> → <code>restart</code>.
-              <code>collectstatic</code> ist <strong>nicht</strong> mehr fest eingebaut:
-              bei geänderten Static-Dateien hier <code>collectstatic --noinput</code>
-              hinzufügen. Jederzeit anpassbar, werden als <code>{{ conf.APPUSER }}</code>
-              in der <code>.venv</code> ausgeführt.
+              Jederzeit anpassbar. Werden als <code>{{ conf.APPUSER }}</code> in der
+              <code>.venv</code> ausgeführt.
             </p>
             <div id="upd-cmd-list" class="mb-2">
               {% for uc in update_commands %}
@@ -338,7 +336,7 @@
               <input type="text" id="upd-label-input" class="form-control bg-dark text-light border-secondary"
                      placeholder='Label, z.B. "Glossar laden"' maxlength="80">
               <input type="text" id="upd-cmd-input" class="form-control bg-dark text-light border-secondary font-monospace"
-                     placeholder='Befehl, z.B. "collectstatic --noinput"' maxlength="500">
+                     placeholder='Befehl, z.B. "load_glossary"' maxlength="500">
               <button class="btn btn-outline-primary" data-action="addUpdateCommand">
                 <i class="bi bi-plus-lg"></i>
               </button>
