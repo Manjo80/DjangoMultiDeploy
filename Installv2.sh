@@ -697,7 +697,17 @@ fi
 # Secret
 # -------------------------------------------------------------------
 _read -s -p "Django SECRET_KEY (leer = auto): " DJKEY; echo
-[ -z "${DJKEY:-}" ] && DJKEY="$(openssl rand -hex 32)"
+# Leerer SECRET_KEY → automatisch generieren. Mehrere Fallbacks, damit ein
+# fehlendes openssl nicht zu einem leeren SECRET_KEY in der .env führt.
+if [ -z "${DJKEY:-}" ]; then
+  DJKEY="$(openssl rand -hex 32 2>/dev/null || true)"
+  [ -z "$DJKEY" ] && DJKEY="$(head -c 32 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' || true)"
+  [ -z "$DJKEY" ] && DJKEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null || true)"
+  if [ -z "$DJKEY" ]; then
+    echo "❌ FEHLER: SECRET_KEY konnte nicht generiert werden (openssl/urandom/python3 fehlen)."
+    exit 1
+  fi
+fi
 
 # -------------------------------------------------------------------
 # SSH-Key für App-User erstellen

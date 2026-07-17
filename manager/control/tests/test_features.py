@@ -354,6 +354,65 @@ class InterruptedInstallTests(TestCase):
             self.assertFalse(opts['remove_db'])    # 'shareddb' belongs to 'real'
 
 
+class SecretKeyAutogenTests(TestCase):
+    """An empty SECRET_KEY field must be auto-filled with a strong key."""
+
+    def setUp(self):
+        admin = User.objects.create_user('admin', password='Corr3ct-Horse-99')
+        admin.userprofile.role = UserProfile.ROLE_ADMIN
+        admin.userprofile.save()
+        self.client.force_login(admin)
+
+    def test_empty_secret_key_is_generated(self):
+        import tempfile
+        from control.views import install as install_view
+
+        captured = {}
+
+        class _Proc:
+            pid = 4321
+
+        def fake_popen(cmd, env=None, **kw):
+            captured['env'] = env or {}
+            return _Proc()
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             self.settings(INSTALL_LOG_DIR=tmp), \
+             mock.patch.object(install_view.subprocess, 'Popen', side_effect=fake_popen):
+            r = self.client.post('/install/run/', {
+                'projectname': 'demoproj', 'appuser': 'demoproj',
+                'source_type': 'new', 'djkey': '',
+                'dbtype_sel': '1', 'appuser_pass': 'x', 'django_admin_pass': 'y',
+            })
+
+        self.assertEqual(r.status_code, 302)          # redirect to progress page
+        djkey = captured['env'].get('DJKEY', '')
+        self.assertTrue(djkey)                         # generated, not empty
+        self.assertGreaterEqual(len(djkey), 40)        # strong length
+        # .env/shell-safe characters only
+        import re
+        self.assertRegex(djkey, r'^[A-Za-z0-9_\-]+$')
+
+    def test_provided_secret_key_is_kept(self):
+        import tempfile
+        from control.views import install as install_view
+        captured = {}
+
+        def fake_popen(cmd, env=None, **kw):
+            captured['env'] = env or {}
+            return type('P', (), {'pid': 1})()
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             self.settings(INSTALL_LOG_DIR=tmp), \
+             mock.patch.object(install_view.subprocess, 'Popen', side_effect=fake_popen):
+            self.client.post('/install/run/', {
+                'projectname': 'demoproj2', 'appuser': 'demoproj2',
+                'source_type': 'new', 'djkey': 'my-own-key-123',
+                'dbtype_sel': '1',
+            })
+        self.assertEqual(captured['env'].get('DJKEY'), 'my-own-key-123')
+
+
 class ProjectNotFoundPageTests(TestCase):
     def setUp(self):
         admin = User.objects.create_user('admin', password='Corr3ct-Horse-99')
