@@ -109,36 +109,56 @@ done
 # Unterbrochene Installationen suchen (nur im root-only State-Verzeichnis)
 mapfile -t _STATES < <(compgen -G "$STATE_DIR/django_install_*.state" 2>/dev/null || true)
 if [ "${#_STATES[@]}" -gt 0 ] && [ -f "${_STATES[0]}" ]; then
-  echo
-  echo "┌──────────────────────────────────────────────────────────────────┐"
-  echo "│       ⚠️  Unterbrochene Installation(en) gefunden               │"
-  echo "└──────────────────────────────────────────────────────────────────┘"
-  _IDX=1
-  for _sf in "${_STATES[@]}"; do
-    _proj=$(grep "^PROJECTNAME=" "$_sf" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "?")
-    _lstep=$(grep "^LAST_STEP=" "$_sf" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "noch keiner")
-    echo "  ${_IDX}) Projekt: ${_proj}  |  Letzter Schritt: ${_lstep}"
-    _IDX=$((_IDX + 1))
-  done
-  echo
-  _RC="${_RC:-}"
-  [ "$NONINTERACTIVE" != "true" ] && read -p "Installation fortsetzen? [J/n]: " _RC
-  _RC="${_RC:-J}"
-  if [[ "$_RC" =~ ^[Jj]$ ]]; then
-    if [ "${#_STATES[@]}" -gt 1 ]; then
-      _RN="${_RN:-}"
-      [ "$NONINTERACTIVE" != "true" ] && read -p "Welche Installation fortsetzen? (Nummer): " _RN
-      _RESUME_FILE="${_STATES[$((_RN - 1))]}"
-    else
-      _RESUME_FILE="${_STATES[0]}"
+  if [ "$NONINTERACTIVE" = "true" ]; then
+    # NONINTERACTIVE (z.B. vom Web-Manager): es wird gezielt EIN Projekt über
+    # die Umgebungsvariable PROJECTNAME installiert. Nur eine unterbrochene
+    # Installation fortsetzen, die GENAU zu diesem Projekt gehört — niemals eine
+    # fremde/alte Installation an sich reißen (das würde neue Installs kapern).
+    if [ -n "${PROJECTNAME:-}" ]; then
+      for _sf in "${_STATES[@]}"; do
+        _p=$(grep "^PROJECTNAME=" "$_sf" 2>/dev/null | cut -d= -f2 | tr -d '"')
+        if [ "$_p" = "$PROJECTNAME" ]; then
+          # shellcheck disable=SC1090
+          source "$_sf"
+          STATE_FILE="$_sf"
+          _RESUME=true
+          echo "✅ Fortsetze Installation: $PROJECTNAME"
+          echo "   Abgeschlossene Schritte werden übersprungen..."
+          break
+        fi
+      done
     fi
-    # shellcheck disable=SC1090
-    source "$_RESUME_FILE"
-    STATE_FILE="$_RESUME_FILE"
-    _RESUME=true
-    echo "✅ Fortsetze Installation: $PROJECTNAME"
-    echo "   Abgeschlossene Schritte werden übersprungen..."
+    # Kein passender Checkpoint → frische Installation für PROJECTNAME.
+  else
     echo
+    echo "┌──────────────────────────────────────────────────────────────────┐"
+    echo "│       ⚠️  Unterbrochene Installation(en) gefunden               │"
+    echo "└──────────────────────────────────────────────────────────────────┘"
+    _IDX=1
+    for _sf in "${_STATES[@]}"; do
+      _proj=$(grep "^PROJECTNAME=" "$_sf" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "?")
+      _lstep=$(grep "^LAST_STEP=" "$_sf" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "noch keiner")
+      echo "  ${_IDX}) Projekt: ${_proj}  |  Letzter Schritt: ${_lstep}"
+      _IDX=$((_IDX + 1))
+    done
+    echo
+    read -p "Installation fortsetzen? [J/n]: " _RC
+    _RC="${_RC:-J}"
+    if [[ "$_RC" =~ ^[Jj]$ ]]; then
+      if [ "${#_STATES[@]}" -gt 1 ]; then
+        read -p "Welche Installation fortsetzen? (Nummer): " _RN
+        _RESUME_FILE="${_STATES[$((_RN - 1))]}"
+      else
+        _RESUME_FILE="${_STATES[0]}"
+      fi
+      # shellcheck disable=SC1090
+      source "$_RESUME_FILE"
+      STATE_FILE="$_RESUME_FILE"
+      _RESUME=true
+      echo "✅ Fortsetze Installation: $PROJECTNAME"
+      echo "   Abgeschlossene Schritte werden übersprungen..."
+      echo
+    fi
   fi
 fi
 

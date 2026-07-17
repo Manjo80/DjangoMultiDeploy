@@ -275,6 +275,47 @@ class ZapAuthEncodingTests(TestCase):
         self.assertEqual(acsrf, [{'String': 'csrfmiddlewaretoken'}])
 
 
+class InterruptedInstallTests(TestCase):
+    """Listing and clearing leftover installer checkpoints."""
+
+    def _make_state(self, tmp, name, last_step='logdir_done'):
+        import os
+        path = os.path.join(tmp, f'django_install_{name}.state')
+        with open(path, 'w') as f:
+            f.write(f'PROJECTNAME="{name}"\nLAST_STEP="{last_step}"\n')
+        return path
+
+    def test_list_and_clear(self):
+        import tempfile
+        from control.utils import deployment
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_state(tmp, 'rfidclaude', 'logdir_done')
+            self._make_state(tmp, 'other', 'db_setup')
+            with mock.patch.object(deployment, '_INSTALL_STATE_DIR', tmp):
+                items = deployment.list_interrupted_installs()
+                names = {i['name'] for i in items}
+                self.assertEqual(names, {'rfidclaude', 'other'})
+                self.assertTrue(any(i['last_step'] == 'logdir_done' for i in items))
+
+                ok, _ = deployment.clear_interrupted_install('rfidclaude')
+                self.assertTrue(ok)
+                self.assertEqual({i['name'] for i in deployment.list_interrupted_installs()},
+                                 {'other'})
+
+                # already gone / invalid name
+                ok2, _ = deployment.clear_interrupted_install('rfidclaude')
+                self.assertFalse(ok2)
+                ok3, _ = deployment.clear_interrupted_install('bad;name')
+                self.assertFalse(ok3)
+
+    def test_clear_endpoint_requires_admin(self):
+        viewer = User.objects.create_user('v3', password='Corr3ct-Horse-99')
+        c = Client()
+        c.force_login(viewer)
+        r = c.post('/install/clear-interrupted/', {'name': 'x'})
+        self.assertEqual(r.status_code, 403)
+
+
 class DatabaseInventoryTests(TestCase):
     """list_databases cross-references projects; drop_database is guarded."""
 

@@ -19,6 +19,9 @@ _USERDEL   = shutil.which('userdel')   or '/usr/sbin/userdel'
 
 _INSTALL_DIR = os.path.join(tempfile.gettempdir(), 'djmanager_installs')
 
+# Installer checkpoint/resume state files (see Installv2.sh: STATE_DIR).
+_INSTALL_STATE_DIR = '/var/lib/djmd-install'
+
 from .registry import get_project, set_project_conf_value
 from .deploy_keys import KEYS_DIR
 from .validators import (
@@ -221,6 +224,57 @@ def _run_custom_update_commands(name, conf):
         lines.append(f'⚠️  Service-Restart: {e}')
 
     return ok, '\n'.join(lines)
+
+
+def list_interrupted_installs():
+    """
+    Return leftover installer checkpoints (interrupted installs) as a list of
+    dicts: {name, last_step, mtime}. These are state files the installer left
+    behind because an install never finished; a matching one causes the next
+    install of that project to resume instead of starting fresh.
+    """
+    import glob
+    from datetime import datetime
+    out = []
+    pattern = os.path.join(_INSTALL_STATE_DIR, 'django_install_*.state')
+    for path in sorted(glob.glob(pattern)):
+        name, last_step = '', ''
+        try:
+            with open(path, errors='ignore') as f:
+                for line in f:
+                    if line.startswith('PROJECTNAME='):
+                        name = line.split('=', 1)[1].strip().strip('"')
+                    elif line.startswith('LAST_STEP='):
+                        last_step = line.split('=', 1)[1].strip().strip('"')
+        except OSError:
+            continue
+        if not name:
+            base = os.path.basename(path)
+            name = base[len('django_install_'):-len('.state')]
+        mtime = ''
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M')
+        except OSError:
+            pass
+        out.append({'name': name, 'last_step': last_step or '—', 'mtime': mtime})
+    return out
+
+
+def clear_interrupted_install(name):
+    """
+    Delete the installer checkpoint for a project so it is no longer offered as
+    "resume" and no longer hijacks a fresh install. Returns (ok, message).
+    """
+    if not is_valid_project_name(name):
+        return False, 'Ungültiger Projektname'
+    path = os.path.join(_INSTALL_STATE_DIR, f'django_install_{name}.state')
+    if not os.path.exists(path):
+        return False, f'Kein Checkpoint für "{name}" gefunden.'
+    try:
+        os.remove(path)
+        return True, f'Checkpoint für "{name}" entfernt.'
+    except OSError as e:
+        return False, str(e)
 
 
 def run_update(name):
@@ -796,6 +850,11 @@ def remove_project(name, opts):
         f'/usr/local/bin/{name}_remove.sh',
     ]:
         _rm(script)
+
+    # ── Installer checkpoint ──────────────────────────────────────────────────
+    # Remove any leftover install state so the project isn't offered as a
+    # "resume" and can't hijack a future fresh install of the same name.
+    _rm(os.path.join(_INSTALL_STATE_DIR, f'django_install_{name}.state'))
 
     log.append('✅ Fertig')
     return ok, '\n'.join(log)

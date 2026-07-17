@@ -34,6 +34,7 @@ from ..utils import (
     assign_project_deploy_key, KEYS_DIR, GLOBAL_DEPLOY_KEY,
     get_global_deploy_key,
     is_valid_project_name, is_valid_linux_user,
+    list_interrupted_installs, clear_interrupted_install,
 )
 from ._helpers import admin_required
 
@@ -70,7 +71,19 @@ def install_form(request):
         'server_ips':              all_ips,
         'allowed_hosts_suggestion': allowed_suggestion,
         'unused_keys':             unused_keys,
+        'interrupted_installs':    list_interrupted_installs(),
     })
+
+
+@require_POST
+@admin_required
+def install_clear_interrupted(request):
+    """Discard a leftover installer checkpoint (interrupted install)."""
+    name = request.POST.get('name', '').strip()
+    ok, msg = clear_interrupted_install(name)
+    AuditLog.log(request, f'Unterbrochene Installation verworfen: {name}', success=ok)
+    return JsonResponse({'ok': ok, 'message': msg,
+                         'interrupted': list_interrupted_installs()})
 
 
 @require_POST

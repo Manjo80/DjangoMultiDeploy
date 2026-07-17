@@ -21,7 +21,7 @@ from .admin_views import (
 from .dashboard import dashboard, health_history
 from .install import (
     install_form, install_run, install_progress, install_poll,
-    install_manager, install_kill,
+    install_manager, install_kill, install_clear_interrupted,
     ssh_key_display, ssh_key_download, ssh_key_confirm,
     global_deploy_key, global_deploy_key_download,
 )
@@ -64,7 +64,7 @@ __all__ = [
     'dashboard',
     # install
     'install_form', 'install_run', 'install_progress', 'install_poll',
-    'install_manager', 'install_kill',
+    'install_manager', 'install_kill', 'install_clear_interrupted',
     'ssh_key_display', 'ssh_key_download', 'ssh_key_confirm',
     'global_deploy_key', 'global_deploy_key_download',
     # deploy keys
