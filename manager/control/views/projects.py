@@ -44,6 +44,7 @@ from ..utils import (
     start_job,
     get_project_nginx_config, save_project_nginx_config, _CSP_DEFAULT,
     certbot_available, cert_status, obtain_certificate, is_valid_hostname,
+    is_valid_project_name,
 )
 from ._helpers import (
     admin_required, operator_required, _get_role,
@@ -63,7 +64,23 @@ def project_detail(request, name):
         return render(request, 'control/403.html', status=403)
     conf = get_project(name)
     if not conf:
-        raise Http404(f'Projekt "{name}" nicht gefunden.')
+        # Not a registered project — most often a begun/interrupted install
+        # (e.g. the "Projekt verwalten" button on the progress page). Show a
+        # helpful page instead of a bare 404, and offer to clean up leftovers.
+        from ..utils import list_interrupted_installs
+        if not is_valid_project_name(name):
+            raise Http404('Ungültiger Projektname.')
+        appdir = f'/srv/{name}'
+        has_appdir     = os.path.isdir(appdir)
+        has_checkpoint = any(i['name'] == name for i in list_interrupted_installs())
+        return render(request, 'control/project_not_found.html', {
+            'name':         name,
+            'appdir':       appdir,
+            'has_appdir':   has_appdir,
+            'has_checkpoint': has_checkpoint,
+            'has_leftover': has_appdir or has_checkpoint,
+            'role':         _get_role(request.user),
+        }, status=404)
     backups           = list_backups(name)
     allowed_hosts     = get_allowed_hosts(name)
     nginx_names       = get_nginx_server_names(name)
