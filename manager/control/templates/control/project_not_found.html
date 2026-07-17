@@ -1,0 +1,94 @@
+{% extends "control/base.html" %}
+{% block title %}Projekt nicht gefunden — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-7">
+
+<div class="card border-warning">
+  <div class="card-header">
+    <h4 class="mb-0"><i class="bi bi-exclamation-triangle me-2 text-warning"></i>Projekt „{{ name }}" nicht gefunden</h4>
+  </div>
+  <div class="card-body">
+
+    {% if has_leftover %}
+    <p>
+      Für <strong class="font-monospace">{{ name }}</strong> gibt es keinen vollständigen
+      Registry-Eintrag — das sieht nach einer <strong>abgebrochenen / unfertigen Installation</strong> aus.
+      Deshalb lässt es sich nicht regulär verwalten.
+    </p>
+    <ul class="small text-muted">
+      {% if has_appdir %}<li>Verzeichnis vorhanden: <code>{{ appdir }}</code></li>{% endif %}
+      {% if has_checkpoint %}<li>Installer-Checkpoint vorhanden (Resume-Marker)</li>{% endif %}
+    </ul>
+    <p class="small">
+      Solange diese Reste liegen, blockieren sie eine Neuinstallation unter demselben Namen
+      (<code>… existiert bereits</code>). Du kannst sie hier vollständig aufräumen.
+    </p>
+
+    {% if role == 'admin' %}
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <button class="btn btn-danger" id="purge-btn" data-name="{{ name }}">
+        <i class="bi bi-trash me-1"></i> Reste entfernen &amp; aufräumen
+      </button>
+      <a href="{% url 'install_form' %}" class="btn btn-outline-secondary">
+        <i class="bi bi-plus-circle me-1"></i> Neue Installation
+      </a>
+      <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary">← Dashboard</a>
+    </div>
+    <div id="purge-msg" class="small mt-2 d-none"></div>
+    <p class="small text-muted mt-2">
+      Entfernt <code>{{ appdir }}</code>, zugehörige Datenbank + DB-User und den Linux-User
+      (sofern nicht von einem anderen Projekt genutzt). Das kann nicht rückgängig gemacht werden.
+    </p>
+    {% else %}
+    <p class="text-muted small mt-3">Zum Aufräumen sind Admin-Rechte nötig.</p>
+    <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary">← Dashboard</a>
+    {% endif %}
+
+    {% else %}
+    <p>Ein Projekt mit dem Namen <strong class="font-monospace">{{ name }}</strong> existiert nicht.</p>
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <a href="{% url 'install_form' %}" class="btn btn-outline-primary">
+        <i class="bi bi-plus-circle me-1"></i> Neue Installation
+      </a>
+      <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary">← Dashboard</a>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+</div>
+</div>
+
+{% if has_leftover and role == 'admin' %}
+<script nonce="{{ csp_nonce }}">
+document.getElementById('purge-btn').addEventListener('click', function () {
+  const btn = this;
+  const name = btn.dataset.name;
+  if (!confirm('Installation "' + name + '" vollständig entfernen?\n\n' +
+               'Löscht /srv/' + name + ', Datenbank + DB-User und den Linux-User ' +
+               '(sofern nicht von einem anderen Projekt genutzt). Das kann nicht ' +
+               'rückgängig gemacht werden.')) return;
+  btn.disabled = true;
+  const msg = document.getElementById('purge-msg');
+  msg.classList.remove('d-none');
+  msg.className = 'small mt-2 text-muted';
+  msg.textContent = '⏳ Räume auf …';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+  fd.append('name', name);
+  fd.append('cleanup', '1');
+  fetch("{% url 'install_clear_interrupted' %}", {method: 'POST', body: fd})
+    .then(r => r.json())
+    .then(d => {
+      msg.className = 'small mt-2 ' + (d.ok ? 'text-success' : 'text-danger');
+      msg.textContent = d.message || (d.ok ? 'Fertig.' : 'Fehler.');
+      if (d.ok) setTimeout(() => { window.location.href = "{% url 'dashboard' %}"; }, 1200);
+      else btn.disabled = false;
+    })
+    .catch(() => { msg.className = 'small mt-2 text-danger'; msg.textContent = 'Verbindungsfehler'; btn.disabled = false; });
+});
+</script>
+{% endif %}
+{% endblock %}

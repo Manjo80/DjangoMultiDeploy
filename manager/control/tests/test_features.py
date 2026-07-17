@@ -354,6 +354,21 @@ class InterruptedInstallTests(TestCase):
             self.assertFalse(opts['remove_db'])    # 'shareddb' belongs to 'real'
 
 
+class ProjectNotFoundPageTests(TestCase):
+    def setUp(self):
+        admin = User.objects.create_user('admin', password='Corr3ct-Horse-99')
+        admin.userprofile.role = UserProfile.ROLE_ADMIN
+        admin.userprofile.save()
+        self.client.force_login(admin)
+
+    def test_unknown_project_shows_friendly_404(self):
+        r = self.client.get('/project/nonexistentproj/')
+        self.assertEqual(r.status_code, 404)
+        body = r.content.decode()
+        self.assertIn('nicht gefunden', body)
+        self.assertNotIn('The requested resource was not found', body)
+
+
 class DatabaseInventoryTests(TestCase):
     """list_databases cross-references projects; drop_database is guarded."""
 
