@@ -1,11 +1,11 @@
 {% extends "control/base.html" %}
-{% block title %}Datenbanken — DjangoMultiDeploy{% endblock %}
+{% block title %}Datenbanken & Benutzer — DjangoMultiDeploy{% endblock %}
 {% block content %}
 <div class="row">
 <div class="col-lg-10">
 
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0"><i class="bi bi-database me-2"></i>Datenbanken</h4>
+  <h4 class="mb-0"><i class="bi bi-database me-2"></i>Datenbanken &amp; Benutzer</h4>
   <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
 </div>
 
@@ -76,11 +76,101 @@
   </div>
 </div>
 
+<!-- ── DB users / roles ─────────────────────────────────────────────────── -->
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-person-badge me-2"></i>DB-Benutzer / Rollen</span>
+    <span class="badge" style="background:#9e6a03">{{ summary.dbuser_orphans }} verwaist</span>
+  </div>
+  <div class="card-body p-0">
+    {% if db_users %}
+    <table class="table table-sm table-dark mb-0 align-middle">
+      <thead>
+        <tr><th>Benutzer</th><th>Typ</th><th>Eigene DB</th><th>Status</th><th class="text-end pe-3">Aktion</th></tr>
+      </thead>
+      <tbody>
+        {% for u in db_users %}
+        <tr>
+          <td class="font-monospace">{{ u.name }}</td>
+          <td class="text-uppercase small text-muted">{{ u.engine }}</td>
+          <td>{% if u.owns_db %}<span class="badge bg-secondary">ja</span>{% else %}<span class="text-muted small">—</span>{% endif %}</td>
+          <td>
+            {% if u.is_system %}<span class="badge" style="background:#6e7681">System</span>
+            {% elif u.in_use %}<span class="badge" style="background:#238636">Projekt: {{ u.project|default:"?" }}</span>
+            {% else %}<span class="badge" style="background:#9e6a03">verwaist</span>{% endif %}
+          </td>
+          <td class="text-end pe-3">
+            {% if u.deletable %}
+            <form method="post" class="d-inline js-drop-confirm" data-label="DB-Benutzer &quot;{{ u.name }}&quot;">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="drop_dbuser">
+              <input type="hidden" name="dbtype" value="{{ u.engine }}">
+              <input type="hidden" name="dbuser" value="{{ u.name }}">
+              <button class="btn btn-sm btn-outline-danger py-0 px-2" type="submit"><i class="bi bi-trash"></i> Löschen</button>
+            </form>
+            {% else %}<span class="text-muted small">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="card-body text-muted small">Keine DB-Benutzer gefunden.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Linux (app) users ────────────────────────────────────────────────── -->
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-people me-2"></i>Linux-Benutzer (App-User)</span>
+    <span class="badge" style="background:#9e6a03">{{ summary.linux_orphans }} verwaist</span>
+  </div>
+  <div class="card-body p-0">
+    {% if linux_users %}
+    <table class="table table-sm table-dark mb-0 align-middle">
+      <thead>
+        <tr><th>Benutzer</th><th>UID</th><th>Home</th><th>Status</th><th class="text-end pe-3">Aktion</th></tr>
+      </thead>
+      <tbody>
+        {% for u in linux_users %}
+        <tr>
+          <td class="font-monospace">{{ u.name }}</td>
+          <td class="small text-muted">{{ u.uid }}</td>
+          <td class="small text-muted font-monospace">{{ u.home }}</td>
+          <td>
+            {% if u.protected %}<span class="badge" style="background:#6e7681">geschützt</span>
+            {% elif u.in_use %}<span class="badge" style="background:#238636">Projekt: {{ u.project|default:"?" }}</span>
+            {% elif u.deletable %}<span class="badge" style="background:#9e6a03">verwaist (App-User)</span>
+            {% else %}<span class="badge" style="background:#6e7681">kein App-User</span>{% endif %}
+          </td>
+          <td class="text-end pe-3">
+            {% if u.deletable %}
+            <form method="post" class="d-inline js-drop-type" data-user="{{ u.name }}">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="drop_linuxuser">
+              <input type="hidden" name="linuxuser" value="{{ u.name }}">
+              <button class="btn btn-sm btn-outline-danger py-0 px-2" type="submit"><i class="bi bi-trash"></i> Entfernen</button>
+            </form>
+            {% else %}<span class="text-muted small">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="card-body text-muted small">Keine regulären Linux-Benutzer gefunden.</div>
+    {% endif %}
+  </div>
+</div>
+
 <div class="alert alert-secondary small">
   <i class="bi bi-info-circle me-1"></i>
-  Nur <strong>verwaiste</strong> Datenbanken (von keinem Projekt genutzt) lassen sich
-  löschen. System-Datenbanken und aktiv genutzte Datenbanken sind geschützt.
-  <strong>Löschen ist endgültig</strong> — vorher ggf. ein Backup ziehen.
+  Nur <strong>verwaiste</strong> Ressourcen (von keinem Projekt genutzt) lassen sich löschen.
+  System-DBs/-Benutzer und aktiv genutzte Objekte sind geschützt. <strong>Löschen ist endgültig</strong> —
+  vorher ggf. ein Backup ziehen. Bei <strong>Linux-Benutzern</strong> wird nur gelöscht, wenn es sich
+  eindeutig um einen tool-erzeugten App-User handelt (Deploy-Key vorhanden) — echte Login-Konten
+  ohne Deploy-Key sind bewusst nicht löschbar. DB-Rollen mit eigener Datenbank müssen erst ihre DB verlieren.
   SQLite ist dateibasiert pro Projekt und erscheint hier nicht.
 </div>
 
@@ -89,11 +179,35 @@
 
 <script nonce="{{ csp_nonce }}">
 document.addEventListener('submit', function (e) {
-  const form = e.target.closest('.js-drop-db');
-  if (!form) return;
-  const name = form.dataset.dbname || '';
-  if (!confirm('Datenbank "' + name + '" endgültig löschen? Das kann nicht rückgängig gemacht werden.')) {
-    e.preventDefault();
+  // Simple confirm: databases
+  const dbForm = e.target.closest('.js-drop-db');
+  if (dbForm) {
+    const name = dbForm.dataset.dbname || '';
+    if (!confirm('Datenbank "' + name + '" endgültig löschen? Das kann nicht rückgängig gemacht werden.')) {
+      e.preventDefault();
+    }
+    return;
+  }
+  // Simple confirm: DB users/roles
+  const cForm = e.target.closest('.js-drop-confirm');
+  if (cForm) {
+    const label = cForm.dataset.label || 'Objekt';
+    if (!confirm(label + ' endgültig löschen? Das kann nicht rückgängig gemacht werden.')) {
+      e.preventDefault();
+    }
+    return;
+  }
+  // Typed confirm: Linux users (delete home too — require typing the name)
+  const tForm = e.target.closest('.js-drop-type');
+  if (tForm) {
+    const user = tForm.dataset.user || '';
+    const answer = prompt(
+      'Linux-Benutzer "' + user + '" inkl. Home-Verzeichnis endgültig entfernen?\n' +
+      'Zur Bestätigung den Benutzernamen exakt eingeben:');
+    if (answer !== user) {
+      e.preventDefault();
+    }
+    return;
   }
 });
 </script>
