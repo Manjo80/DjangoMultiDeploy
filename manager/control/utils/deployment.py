@@ -22,7 +22,7 @@ _INSTALL_DIR = os.path.join(tempfile.gettempdir(), 'djmanager_installs')
 # Installer checkpoint/resume state files (see Installv2.sh: STATE_DIR).
 _INSTALL_STATE_DIR = '/var/lib/djmd-install'
 
-from .registry import get_project, set_project_conf_value
+from .registry import get_project, get_all_projects, set_project_conf_value
 from .deploy_keys import KEYS_DIR
 from .validators import (
     is_valid_project_name,
@@ -275,6 +275,48 @@ def clear_interrupted_install(name):
         return True, f'Checkpoint für "{name}" entfernt.'
     except OSError as e:
         return False, str(e)
+
+
+def purge_interrupted_install(name):
+    """
+    Fully clean up a leftover/interrupted install. Reads the installer
+    checkpoint for the artifacts it created (APPDIR, APPUSER, DB…) and removes
+    the app directory, database, DB user, Linux user, nginx/systemd/scripts and
+    the checkpoint itself — so the name is free for a fresh install.
+
+    Resources that belong to a *different* registered project (same APPUSER or
+    DBNAME) are left untouched. Returns (ok, output).
+    """
+    from .registry import _parse_conf
+    if not is_valid_project_name(name):
+        return False, 'Ungültiger Projektname'
+
+    state_path = os.path.join(_INSTALL_STATE_DIR, f'django_install_{name}.state')
+    conf = _parse_conf(state_path) if os.path.exists(state_path) else {}
+    conf.setdefault('PROJECTNAME', name)
+    conf.setdefault('APPDIR', f'/srv/{name}')
+    conf.setdefault('APPUSER', name)
+
+    others = [p for p in get_all_projects() if p.get('PROJECTNAME') != name]
+    other_users = {p.get('APPUSER') for p in others if p.get('APPUSER')}
+    other_dbs   = {p.get('DBNAME') for p in others if p.get('DBNAME')}
+
+    opts = {
+        'remove_appdir':  True,
+        'remove_backups': True,
+        'remove_logs':    True,
+        'remove_db':      bool(conf.get('DBNAME') and conf.get('DBNAME') not in other_dbs),
+        'remove_user':    bool(conf.get('APPUSER') and conf.get('APPUSER') not in other_users),
+    }
+    ok, output = remove_project(name, opts, conf=conf)
+    # remove_project already deletes the checkpoint; make sure it's gone even if
+    # the registry path short-circuited.
+    try:
+        if os.path.exists(state_path):
+            os.remove(state_path)
+    except OSError:
+        pass
+    return ok, output
 
 
 def run_update(name):
@@ -707,16 +749,19 @@ def reset_project(name, admin_user=None, admin_pass=None):
     return ok, '\n'.join(log)
 
 
-def remove_project(name, opts):
+def remove_project(name, opts, conf=None):
     """
     Remove a project directly (no shell script) so NONINTERACTIVE handling
     is reliable. opts keys: remove_appdir, remove_db, remove_user,
     remove_backups, remove_logs.  Returns (ok, output).
+
+    conf: optional pre-parsed config (e.g. from an installer checkpoint) used
+    to clean up interrupted installs that never made it into the registry.
     """
     import shutil
     if not is_valid_project_name(name):
         return False, 'Ungültiger Projektname'
-    conf    = get_project(name) or {}
+    conf    = conf if conf is not None else (get_project(name) or {})
     appdir  = conf.get('APPDIR', f'/srv/{name}')
     appuser = conf.get('APPUSER', '')
     dbtype  = conf.get('DBTYPE', '')
@@ -802,7 +847,8 @@ def remove_project(name, opts):
         log.append(f'⚠️  Ungültiger DB-Name {dbname!r} — DB-Entfernung übersprungen')
         dbname = ''
     if opts.get('remove_db') and dbname:
-        # Try to read DBUSER from the project .env
+        # Try to read DBUSER from the project .env, fall back to the supplied
+        # conf (e.g. an installer checkpoint for an interrupted install).
         dbuser = ''
         env_path = os.path.join(appdir, '.env')
         if os.path.exists(env_path):
@@ -810,6 +856,8 @@ def remove_project(name, opts):
                 if line.startswith('DB_USER=') or line.startswith('DATABASE_USER='):
                     dbuser = line.split('=', 1)[1].strip().strip('"\'')
                     break
+        if not dbuser:
+            dbuser = (conf.get('DBUSER') or '').strip()
         if dbuser and not is_valid_db_identifier(dbuser):
             log.append(f'⚠️  Ungültiger DB-User {dbuser!r} — DROP USER übersprungen')
             dbuser = ''

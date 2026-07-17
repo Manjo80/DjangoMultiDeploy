@@ -33,6 +33,7 @@ from .deployment import (
     run_management_command,
     list_interrupted_installs,
     clear_interrupted_install,
+    purge_interrupted_install,
 )
 
 from .deploy_keys import (
@@ -155,6 +156,7 @@ __all__ = [
     'run_update', 'extract_project_zip', 'update_project_from_zip',
     'reset_project', 'remove_project', 'start_install', 'run_management_command',
     'list_interrupted_installs', 'clear_interrupted_install',
+    'purge_interrupted_install',
     # deploy_keys
     'KEYS_DIR', 'GLOBAL_DEPLOY_KEY', '_load_key_registry',
     'create_deploy_key', 'list_deploy_keys', 'get_deploy_key_pubkey',
