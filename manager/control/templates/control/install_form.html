@@ -24,20 +24,29 @@
       <p class="small mb-2">
         Diese Checkpoints stammen von abgebrochenen Installationen. Solange ein
         Checkpoint existiert, wird eine erneute Installation dieses Projekts
-        <em>fortgesetzt</em> statt neu gestartet. Nicht mehr benötigte hier verwerfen.
+        <em>fortgesetzt</em> statt neu gestartet — und liegengebliebene Reste
+        (z.&nbsp;B. <code>/srv/&lt;name&gt;</code>) blockieren sonst eine Neuinstallation.
+        „Reste entfernen" räumt App-Verzeichnis, DB, DB-User und Linux-User mit auf.
       </p>
       <ul class="list-group" id="interrupted-list">
         {% for it in interrupted_installs %}
-        <li class="list-group-item bg-dark text-light border-secondary d-flex justify-content-between align-items-center"
+        <li class="list-group-item bg-dark text-light border-secondary d-flex justify-content-between align-items-center gap-2"
             data-name="{{ it.name }}">
           <span class="small">
             <strong class="font-monospace">{{ it.name }}</strong>
             <span class="text-muted">· letzter Schritt: {{ it.last_step }}{% if it.mtime %} · {{ it.mtime }}{% endif %}</span>
           </span>
-          <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2"
-                  data-action="clearInterrupted" data-name="{{ it.name }}">
-            <i class="bi bi-trash"></i> Verwerfen
-          </button>
+          <span class="text-nowrap">
+            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                    data-action="clearInterrupted" data-name="{{ it.name }}" data-cleanup="0"
+                    title="Nur den Checkpoint löschen, Dateien behalten">
+              nur Checkpoint
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2"
+                    data-action="clearInterrupted" data-name="{{ it.name }}" data-cleanup="1">
+              <i class="bi bi-trash"></i> Reste entfernen
+            </button>
+          </span>
         </li>
         {% endfor %}
       </ul>
@@ -48,11 +57,17 @@
       const btn = e.target.closest('[data-action="clearInterrupted"]');
       if (!btn) return;
       const name = btn.dataset.name || '';
-      if (!confirm('Checkpoint für "' + name + '" verwerfen?')) return;
+      const cleanup = btn.dataset.cleanup === '1';
+      const question = cleanup
+        ? 'Installation "' + name + '" vollständig entfernen?\n\n' +
+          'Löscht /srv/' + name + ', Datenbank + DB-User und den Linux-User (sofern nicht von einem anderen Projekt genutzt). Das kann nicht rückgängig gemacht werden.'
+        : 'Nur den Checkpoint für "' + name + '" löschen (Dateien bleiben erhalten)?';
+      if (!confirm(question)) return;
       btn.disabled = true;
       const fd = new FormData();
       fd.append('csrfmiddlewaretoken', '{{ csrf_token }}');
       fd.append('name', name);
+      fd.append('cleanup', cleanup ? '1' : '0');
       fetch("{% url 'install_clear_interrupted' %}", {method: 'POST', body: fd})
         .then(r => r.json())
         .then(d => {

@@ -35,6 +35,7 @@ from ..utils import (
     get_global_deploy_key,
     is_valid_project_name, is_valid_linux_user,
     list_interrupted_installs, clear_interrupted_install,
+    purge_interrupted_install,
 )
 from ._helpers import admin_required
 
@@ -78,11 +79,21 @@ def install_form(request):
 @require_POST
 @admin_required
 def install_clear_interrupted(request):
-    """Discard a leftover installer checkpoint (interrupted install)."""
+    """
+    Discard a leftover installer checkpoint. With cleanup=1 also remove the
+    partial artifacts (app directory, DB, DB user, Linux user, nginx/systemd),
+    so a fresh install of the same name isn't blocked by "… existiert bereits".
+    """
     name = request.POST.get('name', '').strip()
-    ok, msg = clear_interrupted_install(name)
-    AuditLog.log(request, f'Unterbrochene Installation verworfen: {name}', success=ok)
-    return JsonResponse({'ok': ok, 'message': msg,
+    cleanup = request.POST.get('cleanup') in ('1', 'true', 'on', 'yes')
+    if cleanup:
+        ok, msg = purge_interrupted_install(name)
+    else:
+        ok, msg = clear_interrupted_install(name)
+    AuditLog.log(request,
+                 f'Unterbrochene Installation {"bereinigt" if cleanup else "verworfen"}: {name}',
+                 success=ok)
+    return JsonResponse({'ok': ok, 'message': (msg or '')[:2000],
                          'interrupted': list_interrupted_installs()})
 
 

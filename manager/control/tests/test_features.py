@@ -315,6 +315,44 @@ class InterruptedInstallTests(TestCase):
         r = c.post('/install/clear-interrupted/', {'name': 'x'})
         self.assertEqual(r.status_code, 403)
 
+    def test_purge_reads_state_and_removes_artifacts(self):
+        import tempfile, os
+        from control.utils import deployment
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'django_install_rfidclaude.state')
+            with open(path, 'w') as f:
+                f.write('PROJECTNAME="rfidclaude"\nAPPDIR="/srv/rfidclaude"\n'
+                        'APPUSER="rfidclaude"\nDBTYPE="postgresql"\n'
+                        'DBNAME="rfidclaude"\nDBUSER="rfidclaude"\n')
+            with mock.patch.object(deployment, '_INSTALL_STATE_DIR', tmp), \
+                 mock.patch.object(deployment, 'get_all_projects', return_value=[]), \
+                 mock.patch.object(deployment, 'remove_project', return_value=(True, 'ok')) as m:
+                ok, _ = deployment.purge_interrupted_install('rfidclaude')
+            self.assertTrue(ok)
+            m.assert_called_once()
+            args, kwargs = m.call_args
+            self.assertEqual(args[0], 'rfidclaude')
+            opts = args[1]
+            self.assertTrue(opts['remove_appdir'])
+            self.assertTrue(opts['remove_db'])
+            self.assertTrue(opts['remove_user'])
+            self.assertEqual(kwargs['conf'].get('DBNAME'), 'rfidclaude')
+
+    def test_purge_spares_resources_of_other_project(self):
+        import tempfile, os
+        from control.utils import deployment
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, 'django_install_dup.state'), 'w') as f:
+                f.write('PROJECTNAME="dup"\nAPPUSER="shared"\nDBNAME="shareddb"\n')
+            others = [{'PROJECTNAME': 'real', 'APPUSER': 'shared', 'DBNAME': 'shareddb'}]
+            with mock.patch.object(deployment, '_INSTALL_STATE_DIR', tmp), \
+                 mock.patch.object(deployment, 'get_all_projects', return_value=others), \
+                 mock.patch.object(deployment, 'remove_project', return_value=(True, 'ok')) as m:
+                deployment.purge_interrupted_install('dup')
+            opts = m.call_args[0][1]
+            self.assertFalse(opts['remove_user'])  # 'shared' belongs to 'real'
+            self.assertFalse(opts['remove_db'])    # 'shareddb' belongs to 'real'
+
 
 class DatabaseInventoryTests(TestCase):
     """list_databases cross-references projects; drop_database is guarded."""
