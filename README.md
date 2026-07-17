@@ -92,6 +92,7 @@ und verwaltet alle installierten Projekte im Browser.
 - **Eigene Update-Befehle** — zusätzliche `manage.py`-Schritte (z. B. `load_glossary`, `loaddata seed.json`, `clearsessions`), die automatisch beim „Git Pull + Update" laufen — pro Projekt frei zusammenstellbar, einzeln aktivierbar/deaktivierbar und jederzeit anpassbar
 - **.env-Editor** — Umgebungsvariablen pro Projekt und für den Manager direkt im Browser bearbeiten (Secrets maskiert)
 - **Firewall** — ufw-Status und Portverwaltung im Browser
+- **Datenbank-Übersicht** — alle PostgreSQL-/MySQL-Datenbanken auf dem Server mit Größe, Owner und Zuordnung zum Projekt; **verwaiste** (von keinem Projekt genutzte) Datenbanken werden markiert und lassen sich gezielt löschen. System-DBs und aktiv genutzte DBs sind geschützt.
 
 ### TLS & Benachrichtigungen
 

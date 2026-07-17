@@ -1,0 +1,100 @@
+{% extends "control/base.html" %}
+{% block title %}Datenbanken — DjangoMultiDeploy{% endblock %}
+{% block content %}
+<div class="row">
+<div class="col-lg-10">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0"><i class="bi bi-database me-2"></i>Datenbanken</h4>
+  <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary btn-sm">← Dashboard</a>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if success_msg %}<div class="alert alert-success">{{ success_msg }}</div>{% endif %}
+
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-hdd-stack me-2"></i>Übersicht ({{ summary.total }})</span>
+    <span class="small">
+      <span class="badge" style="background:#9e6a03">{{ summary.orphans }} verwaist</span>
+      <span class="badge" style="background:#238636">{{ summary.in_use }} in Benutzung</span>
+      <span class="badge" style="background:#6e7681">{{ summary.system }} System</span>
+    </span>
+  </div>
+  <div class="card-body p-0">
+    {% if databases %}
+    <table class="table table-sm table-dark mb-0 align-middle">
+      <thead>
+        <tr>
+          <th>Datenbank</th><th>Typ</th><th>Größe</th><th>Owner</th>
+          <th>Status</th><th class="text-end pe-3">Aktion</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for db in databases %}
+        <tr>
+          <td class="font-monospace">{{ db.name }}</td>
+          <td class="text-uppercase small text-muted">{{ db.engine }}</td>
+          <td class="text-nowrap">{{ db.size_human }}</td>
+          <td class="small text-muted">{{ db.owner|default:"—" }}</td>
+          <td>
+            {% if db.is_system %}
+              <span class="badge" style="background:#6e7681">System</span>
+            {% elif db.in_use %}
+              <span class="badge" style="background:#238636">Projekt: {{ db.project }}</span>
+            {% else %}
+              <span class="badge" style="background:#9e6a03">verwaist</span>
+            {% endif %}
+          </td>
+          <td class="text-end pe-3">
+            {% if db.deletable %}
+            <form method="post" class="d-inline js-drop-db"
+                  data-dbname="{{ db.name }}">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="drop">
+              <input type="hidden" name="dbtype" value="{{ db.engine }}">
+              <input type="hidden" name="dbname" value="{{ db.name }}">
+              <button class="btn btn-sm btn-outline-danger py-0 px-2" type="submit">
+                <i class="bi bi-trash"></i> Löschen
+              </button>
+            </form>
+            {% else %}
+            <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="card-body text-muted small">
+      Keine Datenbanken gefunden — oder es ist kein PostgreSQL-/MySQL-Server
+      erreichbar. SQLite-Datenbanken sind projektinterne Dateien und werden mit
+      dem Projekt entfernt.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="alert alert-secondary small">
+  <i class="bi bi-info-circle me-1"></i>
+  Nur <strong>verwaiste</strong> Datenbanken (von keinem Projekt genutzt) lassen sich
+  löschen. System-Datenbanken und aktiv genutzte Datenbanken sind geschützt.
+  <strong>Löschen ist endgültig</strong> — vorher ggf. ein Backup ziehen.
+  SQLite ist dateibasiert pro Projekt und erscheint hier nicht.
+</div>
+
+</div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+document.addEventListener('submit', function (e) {
+  const form = e.target.closest('.js-drop-db');
+  if (!form) return;
+  const name = form.dataset.dbname || '';
+  if (!confirm('Datenbank "' + name + '" endgültig löschen? Das kann nicht rückgängig gemacht werden.')) {
+    e.preventDefault();
+  }
+});
+</script>
+{% endblock %}

@@ -33,6 +33,7 @@ from ..utils import (
     run_bandit,
     patch_manager_nginx_config,
     start_job, get_job,
+    list_databases, drop_database,
 )
 from ._helpers import admin_required, operator_required, _check_project_access, is_admin
 
@@ -437,6 +438,39 @@ def firewall_view(request):
         'ufw_status':  ufw_status,
         'port_rules':  port_rules,
         'known_ports': known_ports,
+        'error':       error,
+        'success_msg': success_msg,
+    })
+
+
+# ── Database inventory + cleanup ──────────────────────────────────────────────
+
+@admin_required
+def database_admin_view(request):
+    """List server databases and allow dropping orphaned (unused) ones."""
+    error = None
+    success_msg = None
+
+    if request.method == 'POST' and request.POST.get('action') == 'drop':
+        dbtype = request.POST.get('dbtype', '').strip()
+        dbname = request.POST.get('dbname', '').strip()
+        ok, msg = drop_database(dbtype, dbname)
+        AuditLog.log(request, f'Datenbank gelöscht: {dbtype}/{dbname}', success=ok)
+        if ok:
+            success_msg = msg
+        else:
+            error = msg
+
+    databases = list_databases()
+    summary = {
+        'total':   len(databases),
+        'orphans': sum(1 for d in databases if d['deletable']),
+        'in_use':  sum(1 for d in databases if d['in_use']),
+        'system':  sum(1 for d in databases if d['is_system']),
+    }
+    return render(request, 'control/database_admin.html', {
+        'databases':   databases,
+        'summary':     summary,
         'error':       error,
         'success_msg': success_msg,
     })
