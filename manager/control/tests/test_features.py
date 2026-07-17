@@ -330,6 +330,106 @@ class DatabaseInventoryTests(TestCase):
         self.assertIn('old_stg', ' '.join(m.call_args[0]))
 
 
+class DbUserInventoryTests(TestCase):
+    """list_db_users flags orphans; drop_db_user is guarded."""
+
+    def test_list_flags_and_orphan_user_without_db(self):
+        from control.utils import db_admin
+        roles = [
+            {'engine': 'postgresql', 'name': 'gps_user', 'is_super': False, 'can_login': True, 'owns_db': True},
+            {'engine': 'postgresql', 'name': 'ghost_user', 'is_super': False, 'can_login': True, 'owns_db': False},
+            {'engine': 'postgresql', 'name': 'postgres', 'is_super': True, 'can_login': True, 'owns_db': True},
+        ]
+        with mock.patch.object(db_admin, '_list_pg_roles', return_value=roles), \
+             mock.patch.object(db_admin, '_list_mysql_users', return_value=[]), \
+             mock.patch.object(db_admin, 'get_all_projects', return_value=[]), \
+             mock.patch.object(db_admin, '_project_db_users', return_value={'gps_user'}):
+            users = db_admin.list_db_users()
+        by = {u['name']: u for u in users}
+        self.assertFalse(by['gps_user']['deletable'])   # used by a project
+        self.assertTrue(by['ghost_user']['deletable'])  # orphan, even without a DB
+        self.assertTrue(by['postgres']['is_system'])
+        self.assertFalse(by['postgres']['deletable'])
+
+    def test_drop_dbuser_guards(self):
+        from control.utils import db_admin
+        with mock.patch.object(db_admin, '_run') as m, \
+             mock.patch.object(db_admin, '_project_db_users', return_value={'gps_user'}):
+            ok_sys, _ = db_admin.drop_db_user('postgresql', 'postgres')
+            ok_used, _ = db_admin.drop_db_user('postgresql', 'gps_user')
+            ok_bad, _ = db_admin.drop_db_user('postgresql', 'no; DROP')
+        self.assertFalse(ok_sys or ok_used or ok_bad)
+        m.assert_not_called()
+
+    def test_drop_dbuser_refuses_role_owning_db(self):
+        from control.utils import db_admin
+        # count query returns "1" → role still owns a database → refuse
+        with mock.patch.object(db_admin, '_run', return_value=(0, '1', '')) as m, \
+             mock.patch.object(db_admin, '_project_db_users', return_value=set()):
+            ok, msg = db_admin.drop_db_user('postgresql', 'ghost_user')
+        self.assertFalse(ok)
+        self.assertEqual(m.call_count, 1)  # only the ownership check ran, no DROP
+
+
+class LinuxUserInventoryTests(TestCase):
+    """list_linux_users only marks tool app users deletable; removal is guarded."""
+
+    def _pw(self, name, uid, home):
+        import pwd as _pwd
+        return _pwd.struct_passwd((name, 'x', uid, uid, '', home, '/bin/bash'))
+
+    def test_only_tool_appuser_orphan_is_deletable(self):
+        from control.utils import system_users
+        entries = [
+            self._pw('gps', 1001, '/home/gps'),      # in use
+            self._pw('oldproj', 1002, '/home/oldproj'),  # orphan app user (has key)
+            self._pw('manjo', 1000, '/home/manjo'),  # human account (no key)
+        ]
+        has_key = {'/home/gps', '/home/oldproj'}
+        with mock.patch.object(system_users.pwd, 'getpwall', return_value=entries), \
+             mock.patch.object(system_users, '_appuser_project_map', return_value={'gps': 'gps'}), \
+             mock.patch.object(system_users.os.path, 'exists',
+                               side_effect=lambda p: any(p.startswith(h) for h in has_key)):
+            users = system_users.list_linux_users()
+        by = {u['name']: u for u in users}
+        self.assertFalse(by['gps']['deletable'])       # in use
+        self.assertTrue(by['oldproj']['deletable'])    # orphan tool app user
+        self.assertFalse(by['manjo']['deletable'])     # human account, no deploy key
+
+    def test_remove_refuses_human_account_without_key(self):
+        from control.utils import system_users
+        pw = self._pw('manjo', 1000, '/home/manjo')
+        with mock.patch.object(system_users.pwd, 'getpwnam', return_value=pw), \
+             mock.patch.object(system_users, '_appuser_project_map', return_value={}), \
+             mock.patch.object(system_users.os.path, 'exists', return_value=False), \
+             mock.patch.object(system_users.subprocess, 'run') as m:
+            ok, msg = system_users.remove_linux_user('manjo')
+        self.assertFalse(ok)
+        m.assert_not_called()
+
+    def test_remove_refuses_root_and_in_use(self):
+        from control.utils import system_users
+        with mock.patch.object(system_users, '_appuser_project_map', return_value={'gps': 'gps'}), \
+             mock.patch.object(system_users.subprocess, 'run') as m:
+            ok_root, _ = system_users.remove_linux_user('root')
+            ok_used, _ = system_users.remove_linux_user('gps')
+        self.assertFalse(ok_root or ok_used)
+        m.assert_not_called()
+
+    def test_remove_orphan_appuser_runs_deluser(self):
+        from control.utils import system_users
+        pw = self._pw('oldproj', 1002, '/home/oldproj')
+        with mock.patch.object(system_users.pwd, 'getpwnam', return_value=pw), \
+             mock.patch.object(system_users, '_appuser_project_map', return_value={}), \
+             mock.patch.object(system_users.os.path, 'exists', return_value=True), \
+             mock.patch.object(system_users.subprocess, 'run',
+                               return_value=mock.Mock(returncode=0, stderr='', stdout='')) as m:
+            ok, msg = system_users.remove_linux_user('oldproj')
+        self.assertTrue(ok)
+        m.assert_called_once()
+        self.assertIn('oldproj', ' '.join(m.call_args[0][0]))
+
+
 class DatabaseAdminViewTests(TestCase):
     def setUp(self):
         admin = User.objects.create_user('admin', password='Corr3ct-Horse-99')
@@ -339,7 +439,9 @@ class DatabaseAdminViewTests(TestCase):
 
     def test_admin_can_view(self):
         from control.views import admin_views
-        with mock.patch.object(admin_views, 'list_databases', return_value=[]):
+        with mock.patch.object(admin_views, 'list_databases', return_value=[]), \
+             mock.patch.object(admin_views, 'list_db_users', return_value=[]), \
+             mock.patch.object(admin_views, 'list_linux_users', return_value=[]):
             r = self.client.get('/databases/')
         self.assertEqual(r.status_code, 200)
 

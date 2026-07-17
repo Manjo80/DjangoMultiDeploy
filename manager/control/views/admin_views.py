@@ -34,6 +34,8 @@ from ..utils import (
     patch_manager_nginx_config,
     start_job, get_job,
     list_databases, drop_database,
+    list_db_users, drop_db_user,
+    list_linux_users, remove_linux_user,
 )
 from ._helpers import admin_required, operator_required, _check_project_access, is_admin
 
@@ -447,29 +449,48 @@ def firewall_view(request):
 
 @admin_required
 def database_admin_view(request):
-    """List server databases and allow dropping orphaned (unused) ones."""
+    """
+    Inventory + cleanup of orphaned server resources: databases, DB users/roles
+    and tool-created Linux app users.
+    """
     error = None
     success_msg = None
 
-    if request.method == 'POST' and request.POST.get('action') == 'drop':
-        dbtype = request.POST.get('dbtype', '').strip()
-        dbname = request.POST.get('dbname', '').strip()
-        ok, msg = drop_database(dbtype, dbname)
-        AuditLog.log(request, f'Datenbank gelöscht: {dbtype}/{dbname}', success=ok)
-        if ok:
-            success_msg = msg
-        else:
-            error = msg
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+        if action == 'drop':
+            dbtype = request.POST.get('dbtype', '').strip()
+            dbname = request.POST.get('dbname', '').strip()
+            ok, msg = drop_database(dbtype, dbname)
+            AuditLog.log(request, f'Datenbank gelöscht: {dbtype}/{dbname}', success=ok)
+            success_msg, error = (msg, None) if ok else (None, msg)
+        elif action == 'drop_dbuser':
+            dbtype = request.POST.get('dbtype', '').strip()
+            dbuser = request.POST.get('dbuser', '').strip()
+            ok, msg = drop_db_user(dbtype, dbuser)
+            AuditLog.log(request, f'DB-Benutzer gelöscht: {dbtype}/{dbuser}', success=ok)
+            success_msg, error = (msg, None) if ok else (None, msg)
+        elif action == 'drop_linuxuser':
+            linuxuser = request.POST.get('linuxuser', '').strip()
+            ok, msg = remove_linux_user(linuxuser)
+            AuditLog.log(request, f'Linux-Benutzer entfernt: {linuxuser}', success=ok)
+            success_msg, error = (msg, None) if ok else (None, msg)
 
-    databases = list_databases()
+    databases   = list_databases()
+    db_users    = list_db_users()
+    linux_users = list_linux_users()
     summary = {
-        'total':   len(databases),
-        'orphans': sum(1 for d in databases if d['deletable']),
-        'in_use':  sum(1 for d in databases if d['in_use']),
-        'system':  sum(1 for d in databases if d['is_system']),
+        'total':          len(databases),
+        'orphans':        sum(1 for d in databases if d['deletable']),
+        'in_use':         sum(1 for d in databases if d['in_use']),
+        'system':         sum(1 for d in databases if d['is_system']),
+        'dbuser_orphans': sum(1 for u in db_users if u['deletable']),
+        'linux_orphans':  sum(1 for u in linux_users if u['deletable']),
     }
     return render(request, 'control/database_admin.html', {
         'databases':   databases,
+        'db_users':    db_users,
+        'linux_users': linux_users,
         'summary':     summary,
         'error':       error,
         'success_msg': success_msg,

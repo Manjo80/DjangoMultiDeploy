@@ -92,7 +92,7 @@ und verwaltet alle installierten Projekte im Browser.
 - **Eigene Update-Befehle** — zusätzliche `manage.py`-Schritte (z. B. `load_glossary`, `loaddata seed.json`, `clearsessions`), die automatisch beim „Git Pull + Update" laufen — pro Projekt frei zusammenstellbar, einzeln aktivierbar/deaktivierbar und jederzeit anpassbar
 - **.env-Editor** — Umgebungsvariablen pro Projekt und für den Manager direkt im Browser bearbeiten (Secrets maskiert)
 - **Firewall** — ufw-Status und Portverwaltung im Browser
-- **Datenbank-Übersicht** — alle PostgreSQL-/MySQL-Datenbanken auf dem Server mit Größe, Owner und Zuordnung zum Projekt; **verwaiste** (von keinem Projekt genutzte) Datenbanken werden markiert und lassen sich gezielt löschen. System-DBs und aktiv genutzte DBs sind geschützt.
+- **Datenbanken & Benutzer** — Übersicht aller PostgreSQL-/MySQL-**Datenbanken** (Größe, Owner, Projektzuordnung), aller **DB-Benutzer/Rollen** (auch solche ohne eigene DB) und aller **Linux-App-User**. Alles wird gegen die Projekt-Registry abgeglichen und als *in Benutzung*, *verwaist* oder *System* markiert; **verwaiste** Objekte lassen sich gezielt aufräumen. Schutzregeln: System-DBs/-Benutzer und aktiv genutzte Objekte sind gesperrt, DB-Rollen mit eigener DB müssen diese erst verlieren, und Linux-User werden nur gelöscht, wenn sie eindeutig tool-erzeugte App-User sind (Deploy-Key vorhanden) — echte Login-Konten nie.
 
 ### TLS & Benachrichtigungen
 

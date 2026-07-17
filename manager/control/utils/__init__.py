@@ -121,6 +121,13 @@ from .validators import (
 from .db_admin import (
     list_databases,
     drop_database,
+    list_db_users,
+    drop_db_user,
+)
+
+from .system_users import (
+    list_linux_users,
+    remove_linux_user,
 )
 
 __all__ = [
@@ -128,7 +135,8 @@ __all__ = [
     'is_valid_project_name', 'is_valid_db_identifier', 'is_valid_linux_user',
     'is_valid_hostname',
     # db admin
-    'list_databases', 'drop_database',
+    'list_databases', 'drop_database', 'list_db_users', 'drop_db_user',
+    'list_linux_users', 'remove_linux_user',
     # notify
     'send_notification', 'EVENT_BACKUP_FAILURE', 'EVENT_SERVICE_DOWN',
     'EVENT_VULNERABILITY',
