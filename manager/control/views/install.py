@@ -139,6 +139,15 @@ def install_run(request):
     }
     params = {k: v for k, v in params.items() if v != ''}
 
+    # SECRET_KEY: if the field was left empty, generate a strong key here so it
+    # is guaranteed to be set — even if the installer can't (e.g. openssl
+    # missing, or an interrupted install skipped the input phase on resume) and
+    # never ends up empty in the project's .env. token_urlsafe uses only
+    # .env/shell-safe characters (A-Za-z0-9_-).
+    if not params.get('DJKEY'):
+        import secrets
+        params['DJKEY'] = secrets.token_urlsafe(64)
+
     project = params.get('PROJECTNAME', '')
     if not project:
         return render(request, 'control/install_form.html',
