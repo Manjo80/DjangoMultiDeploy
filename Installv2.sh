@@ -1244,6 +1244,50 @@ fi
 # -------------------------------------------------------------------
 # PostgreSQL / MySQL Installation (lokal)
 # -------------------------------------------------------------------
+
+# _pg_create_db_role: legt DB + Rolle idempotent an. Wird sowohl für
+# "Lokal installieren" als auch für "Remote-Verbindung" genutzt, wenn
+# Remote in Wirklichkeit denselben bereits laufenden lokalen Server
+# wiederverwendet (siehe Aufrufer weiter unten).
+_pg_create_db_role() {
+  echo "🔐 Erstelle PostgreSQL Benutzer und Datenbank..."
+  # Single-Quotes im Passwort für das SQL-Literal verdoppeln (kein Breakout).
+  local _dbpass_sql="${DBPASS//\'/\'\'}"
+  su -s /bin/bash postgres <<PGEOF
+psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
+  psql -c "CREATE DATABASE \"$DBNAME\";"
+
+psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DBUSER'" | grep -q 1 || \
+  psql -c "CREATE ROLE \"$DBUSER\" LOGIN;"
+
+# Passwort über stdin setzen — NICHT als psql -c Argument (sonst in ps /
+# /proc/<pid>/cmdline sichtbar).
+psql <<EOSQL
+ALTER ROLE "$DBUSER" WITH ENCRYPTED PASSWORD '$_dbpass_sql';
+EOSQL
+
+psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DBNAME\" TO \"$DBUSER\";"
+
+# PostgreSQL 15+ compatibility
+psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null || true
+PGEOF
+}
+
+# _mysql_create_db_role: siehe _pg_create_db_role, für MariaDB/MySQL.
+_mysql_create_db_role() {
+  echo "🔐 Erstelle MySQL/MariaDB Benutzer und Datenbank..."
+  # Backslash und Single-Quote im Passwort für das SQL-Literal escapen.
+  local _dbpass_my="${DBPASS//\\/\\\\}"
+  _dbpass_my="${_dbpass_my//\'/\\\'}"
+  # Passwort via stdin (Heredoc) — nicht als -p Argument (kein ps-Leak).
+  mysql -u root <<SQL
+CREATE DATABASE IF NOT EXISTS \`$DBNAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$DBUSER'@'localhost' IDENTIFIED BY '$_dbpass_my';
+GRANT ALL PRIVILEGES ON \`$DBNAME\`.* TO '$DBUSER'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+}
+
 if ! is_done "db_setup"; then
 cd /tmp
 
@@ -1254,7 +1298,7 @@ if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
     echo "📦 Installiere PostgreSQL..."
     _apt_install $DB_PACKAGE_LOCAL
     systemctl enable --now postgresql
-    
+
     # Warten bis PostgreSQL läuft
     for i in {1..10}; do
       if systemctl is-active --quiet postgresql; then
@@ -1263,35 +1307,14 @@ if [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "1" ]; then
       echo "Warte auf PostgreSQL..."
       sleep 2
     done
-    
-    echo "🔐 Erstelle PostgreSQL Benutzer und Datenbank..."
-    # Single-Quotes im Passwort für das SQL-Literal verdoppeln (kein Breakout).
-    _DBPASS_SQL="${DBPASS//\'/\'\'}"
-    su -s /bin/bash postgres <<PGEOF
-psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 || \
-  psql -c "CREATE DATABASE \"$DBNAME\";"
 
-psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DBUSER'" | grep -q 1 || \
-  psql -c "CREATE ROLE \"$DBUSER\" LOGIN;"
+    _pg_create_db_role
 
-# Passwort über stdin setzen — NICHT als psql -c Argument (sonst in ps /
-# /proc/<pid>/cmdline sichtbar).
-psql <<EOSQL
-ALTER ROLE "$DBUSER" WITH ENCRYPTED PASSWORD '$_DBPASS_SQL';
-EOSQL
-
-psql -c "GRANT ALL PRIVILEGES ON DATABASE \"$DBNAME\" TO \"$DBUSER\";"
-
-# PostgreSQL 15+ compatibility
-psql -d "$DBNAME" -c "GRANT ALL ON SCHEMA public TO \"$DBUSER\";" 2>/dev/null || true
-PGEOF
-    unset _DBPASS_SQL
-    
   elif [ "$DBTYPE" = "mysql" ]; then
     echo "📦 Installiere MariaDB..."
     _apt_install $DB_PACKAGE_LOCAL
     systemctl enable --now mariadb
-    
+
     # Warten bis MariaDB läuft
     for i in {1..10}; do
       if systemctl is-active --quiet mariadb; then
@@ -1300,23 +1323,30 @@ PGEOF
       echo "Warte auf MariaDB..."
       sleep 2
     done
-    
-    echo "🔐 Erstelle MySQL/MariaDB Benutzer und Datenbank..."
-    # Backslash und Single-Quote im Passwort für das SQL-Literal escapen.
-    _DBPASS_MY="${DBPASS//\\/\\\\}"
-    _DBPASS_MY="${_DBPASS_MY//\'/\\\'}"
-    # Passwort via stdin (Heredoc) — nicht als -p Argument (kein ps-Leak).
-    mysql -u root <<SQL
-CREATE DATABASE IF NOT EXISTS \`$DBNAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '$DBUSER'@'localhost' IDENTIFIED BY '$_DBPASS_MY';
-GRANT ALL PRIVILEGES ON \`$DBNAME\`.* TO '$DBUSER'@'localhost';
-FLUSH PRIVILEGES;
-SQL
-    unset _DBPASS_MY
+
+    _mysql_create_db_role
   fi
 elif [ "${DBTYPE}" != "sqlite" ] && [ "${DBMODE:-}" = "2" ]; then
   echo "🌐 Installiere ${DBTYPE^^} Client für Remote-Verbindung..."
   _apt_install $DB_PACKAGE_CLIENT
+
+  # Remote-Modus wird auch gewählt, um einen bereits vorhandenen LOKALEN
+  # DB-Server (z.B. von einem anderen Projekt auf demselben Host) weiter-
+  # zuverwenden (siehe Hinweis "Du kannst denselben PostgreSQL-Server
+  # weiterverwenden!" bei der DB-Auswahl). In diesem Fall existieren DB +
+  # Rolle für DIESES Projekt noch nicht und müssen (idempotent) angelegt
+  # werden, sonst schlägt der Verbindungstest bei den Migrationen fehl.
+  if [[ "$DBHOST" == "localhost" || "$DBHOST" == "127.0.0.1" || "$DBHOST" == "::1" ]]; then
+    if [ "$DBTYPE" = "postgresql" ] && systemctl is-active --quiet postgresql 2>/dev/null; then
+      echo "ℹ️  DB-Host zeigt auf den bereits laufenden lokalen PostgreSQL-Server."
+      echo "   Lege Datenbank/Benutzer an, falls sie noch nicht existieren..."
+      _pg_create_db_role
+    elif [ "$DBTYPE" = "mysql" ] && systemctl is-active --quiet mariadb 2>/dev/null; then
+      echo "ℹ️  DB-Host zeigt auf den bereits laufenden lokalen MariaDB-Server."
+      echo "   Lege Datenbank/Benutzer an, falls sie noch nicht existieren..."
+      _mysql_create_db_role
+    fi
+  fi
 fi
 
 mark_done "db_setup"
