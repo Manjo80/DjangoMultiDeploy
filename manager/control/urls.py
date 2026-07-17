@@ -13,6 +13,7 @@ urlpatterns = [
     path('install/poll/<str:log_name>/', views.install_poll, name='install_stream'),
     path('install/manager/', views.install_manager, name='install_manager'),
     path('install/kill/<str:project>/<str:run_id>/', views.install_kill, name='install_kill'),
+    path('install/clear-interrupted/', views.install_clear_interrupted, name='install_clear_interrupted'),
     path('install/ssh-key/<str:project>/', views.ssh_key_display, name='ssh_key_display'),
     path('install/ssh-key/<str:project>/confirm/', views.ssh_key_confirm, name='ssh_key_confirm'),
     path('install/ssh-key/<str:project>/download/', views.ssh_key_download, name='ssh_key_download'),
