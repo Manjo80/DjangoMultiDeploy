@@ -275,6 +275,82 @@ class ZapAuthEncodingTests(TestCase):
         self.assertEqual(acsrf, [{'String': 'csrfmiddlewaretoken'}])
 
 
+class DatabaseInventoryTests(TestCase):
+    """list_databases cross-references projects; drop_database is guarded."""
+
+    def test_list_flags_orphan_inuse_system(self):
+        from control.utils import db_admin
+        pg = [
+            {'engine': 'postgresql', 'name': 'gps', 'size_bytes': '1000', 'owner': 'gps_user'},
+            {'engine': 'postgresql', 'name': 'old_stg', 'size_bytes': '500', 'owner': 'x'},
+            {'engine': 'postgresql', 'name': 'postgres', 'size_bytes': '10', 'owner': 'postgres'},
+        ]
+        projects = [{'PROJECTNAME': 'gps', 'DBTYPE': 'postgresql', 'DBNAME': 'gps'}]
+        with mock.patch.object(db_admin, '_list_postgresql', return_value=pg), \
+             mock.patch.object(db_admin, '_list_mysql', return_value=[]), \
+             mock.patch.object(db_admin, 'get_all_projects', return_value=projects):
+            dbs = db_admin.list_databases()
+        by = {d['name']: d for d in dbs}
+        self.assertTrue(by['gps']['in_use'])
+        self.assertEqual(by['gps']['project'], 'gps')
+        self.assertFalse(by['gps']['deletable'])
+        self.assertTrue(by['old_stg']['deletable'])
+        self.assertTrue(by['postgres']['is_system'])
+        self.assertFalse(by['postgres']['deletable'])
+        # orphaned/deletable sorts first
+        self.assertEqual(dbs[0]['name'], 'old_stg')
+
+    def test_drop_refuses_system_and_invalid(self):
+        from control.utils import db_admin
+        with mock.patch.object(db_admin, '_run') as m, \
+             mock.patch.object(db_admin, 'get_all_projects', return_value=[]):
+            ok1, _ = db_admin.drop_database('postgresql', 'postgres')
+            ok2, _ = db_admin.drop_database('postgresql', 'bad; DROP')
+            ok3, _ = db_admin.drop_database('mongodb', 'x')
+        self.assertFalse(ok1 or ok2 or ok3)
+        m.assert_not_called()
+
+    def test_drop_refuses_in_use(self):
+        from control.utils import db_admin
+        projects = [{'PROJECTNAME': 'gps', 'DBTYPE': 'postgresql', 'DBNAME': 'gps'}]
+        with mock.patch.object(db_admin, '_run') as m, \
+             mock.patch.object(db_admin, 'get_all_projects', return_value=projects):
+            ok, msg = db_admin.drop_database('postgresql', 'gps')
+        self.assertFalse(ok)
+        self.assertIn('gps', msg)
+        m.assert_not_called()
+
+    def test_drop_orphan_runs_command(self):
+        from control.utils import db_admin
+        with mock.patch.object(db_admin, '_run', return_value=(0, '', '')) as m, \
+             mock.patch.object(db_admin, 'get_all_projects', return_value=[]):
+            ok, msg = db_admin.drop_database('postgresql', 'old_stg')
+        self.assertTrue(ok)
+        m.assert_called_once()
+        self.assertIn('old_stg', ' '.join(m.call_args[0]))
+
+
+class DatabaseAdminViewTests(TestCase):
+    def setUp(self):
+        admin = User.objects.create_user('admin', password='Corr3ct-Horse-99')
+        admin.userprofile.role = UserProfile.ROLE_ADMIN
+        admin.userprofile.save()
+        self.client.force_login(admin)
+
+    def test_admin_can_view(self):
+        from control.views import admin_views
+        with mock.patch.object(admin_views, 'list_databases', return_value=[]):
+            r = self.client.get('/databases/')
+        self.assertEqual(r.status_code, 200)
+
+    def test_viewer_forbidden(self):
+        viewer = User.objects.create_user('v2', password='Corr3ct-Horse-99')
+        c = Client()
+        c.force_login(viewer)
+        r = c.get('/databases/')
+        self.assertEqual(r.status_code, 403)
+
+
 class ZapApiErrorTests(TestCase):
     """A ZAP API HTTP error must surface the endpoint + ZAP's error body."""
 

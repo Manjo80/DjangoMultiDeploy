@@ -118,10 +118,17 @@ from .validators import (
     is_valid_hostname,
 )
 
+from .db_admin import (
+    list_databases,
+    drop_database,
+)
+
 __all__ = [
     # validators
     'is_valid_project_name', 'is_valid_db_identifier', 'is_valid_linux_user',
     'is_valid_hostname',
+    # db admin
+    'list_databases', 'drop_database',
     # notify
     'send_notification', 'EVENT_BACKUP_FAILURE', 'EVENT_SERVICE_DOWN',
     'EVENT_VULNERABILITY',
