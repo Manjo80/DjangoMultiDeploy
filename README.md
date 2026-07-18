@@ -180,6 +180,9 @@ nginx :80                       (server_name-Routing, Security-Header, gzip)
 
 ## 📋 Voraussetzungen für eigene Projekte
 
+> 📄 Ausführliche Checkliste inkl. fertigem `settings.py`-Muster, exakter Env-Variablen
+> und aller Fallstricke: **[docs/WEBAPP-COMPATIBILITY.md](docs/WEBAPP-COMPATIBILITY.md)**
+
 Damit ein bestehendes Django-Projekt (per GitHub oder ZIP) sauber deployt werden kann:
 
 | Pflicht | Details |
