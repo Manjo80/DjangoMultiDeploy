@@ -53,6 +53,7 @@
                 {% endif %}
               </td></tr>
           <tr><th class="text-muted">Worker</th><td>{{ conf.GUNICORN_WORKERS|default:"-" }}</td></tr>
+          <tr><th class="text-muted">Server-Typ</th><td>{% if conf.SERVER_TYPE == 'asgi' %}<span class="badge bg-info text-dark">ASGI (async / WebSockets)</span>{% else %}WSGI{% endif %}</td></tr>
           <tr><th class="text-muted">Datenbank</th><td>{{ conf.DBTYPE|default:"-" }}{% if conf.DBNAME %} / {{ conf.DBNAME }}{% endif %}</td></tr>
           <tr><th class="text-muted">DB-Host</th><td>{{ conf.DBHOST|default:"-" }}:{{ conf.DBPORT|default:"-" }}</td></tr>
           <tr><th class="text-muted">GitHub</th><td class="text-break">{{ conf.GITHUB_REPO_URL|default:"(kein)" }}</td></tr>

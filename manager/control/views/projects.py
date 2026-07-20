@@ -946,6 +946,7 @@ def project_clone_run(request, name):
         'MODESEL':            '1',    # DEV mode for staging
         'GUNICORN_PORT':      gunicorn_port,
         'GUNICORN_WORKERS':   '2',
+        'SERVER_TYPE':        conf.get('SERVER_TYPE', 'wsgi'),
         'ALLOWED_HOSTS':      '*',
         'DBTYPE_SEL':         {'postgresql': '2', 'mysql': '3', 'sqlite': '1'}.get(
                                   conf.get('DBTYPE', 'sqlite'), '1'),

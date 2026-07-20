@@ -393,6 +393,31 @@ class SecretKeyAutogenTests(TestCase):
         import re
         self.assertRegex(djkey, r'^[A-Za-z0-9_\-]+$')
 
+    def test_server_type_wsgi_default_and_asgi_passthrough(self):
+        import tempfile
+        from control.views import install as install_view
+        captured = {}
+
+        def fake_popen(cmd, env=None, **kw):
+            captured.setdefault('envs', []).append(env or {})
+            return type('P', (), {'pid': 1})()
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             self.settings(INSTALL_LOG_DIR=tmp), \
+             mock.patch.object(install_view.subprocess, 'Popen', side_effect=fake_popen):
+            # default → wsgi
+            self.client.post('/install/run/', {
+                'projectname': 'stw', 'appuser': 'stw',
+                'source_type': 'new', 'dbtype_sel': '1',
+            })
+            # explicit asgi
+            self.client.post('/install/run/', {
+                'projectname': 'sta', 'appuser': 'sta',
+                'source_type': 'new', 'dbtype_sel': '1', 'server_type': 'asgi',
+            })
+        self.assertEqual(captured['envs'][0].get('SERVER_TYPE'), 'wsgi')
+        self.assertEqual(captured['envs'][1].get('SERVER_TYPE'), 'asgi')
+
     def test_provided_secret_key_is_kept(self):
         import tempfile
         from control.views import install as install_view

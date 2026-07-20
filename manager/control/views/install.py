@@ -111,6 +111,7 @@ def install_run(request):
         'SOURCE_TYPE':         source_type,
         'GUNICORN_PORT':       data.get('gunicorn_port', '').strip(),
         'GUNICORN_WORKERS':    data.get('gunicorn_workers', '').strip(),
+        'SERVER_TYPE':         'asgi' if data.get('server_type', 'wsgi').strip().lower() == 'asgi' else 'wsgi',
         'ALLOWED_HOSTS':       data.get('allowed_hosts', '').strip(),
         'DBTYPE_SEL':          data.get('dbtype_sel', '1'),
         'DBMODE':              data.get('dbmode', '2'),

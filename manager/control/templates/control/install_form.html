@@ -117,12 +117,21 @@
           <input type="password" class="form-control" id="appuser_pass2_field"
                  autocomplete="new-password">
         </div>
-        <div class="col-md-6">
+        <div class="col-md-3">
           <label class="form-label">Modus</label>
           <select name="modesel" class="form-select">
             <option value="1">DEV (DEBUG=True)</option>
             <option value="2">PROD (DEBUG=False)</option>
           </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Server-Typ</label>
+          <select name="server_type" class="form-select">
+            <option value="wsgi">WSGI (Standard)</option>
+            <option value="asgi">ASGI (async / WebSockets / Channels)</option>
+          </select>
+          <div class="form-text">ASGI = Gunicorn + Uvicorn-Worker, WebSocket-fähiges nginx.
+            Channels/Daphne in <code>requirements.txt</code> aktivieren ASGI automatisch.</div>
         </div>
 
         <!-- Quellcode-Option -->
