@@ -32,6 +32,7 @@ vollautomatisch, wiederholbar und mit Checkpoint/Resume.
 | 🐍 | Python-venv pro Projekt unter `/srv/<projekt>` | 📊 | Dashboard mit Server-Ressourcen (RAM/Disk/Load) & Projektstatus |
 | 🌐 | nginx pro Projekt (server_name-Routing, gzip, Caching, Security-Header) | 🧙 | Install-Wizard mit Live-Terminal (Leer / GitHub / ZIP) |
 | ⚙️ | systemd-Service mit Autostart & Restart=always | ▶️ | Start / Stop / Restart / Git-Update / ZIP-Update per Klick |
+| 🔌 | **WSGI oder ASGI** wählbar (Gunicorn bzw. Gunicorn+Uvicorn-Worker) — WebSockets/Django Channels mit WebSocket-fähigem nginx | | |
 | 🗄️ | PostgreSQL / MySQL / SQLite — lokal oder remote | 🔑 | Deploy-Key-Verwaltung (global, pro Projekt, Registry) |
 | 🔥 | ufw-Firewall automatisch (Gunicorn-Ports nur intern) | 🧾 | Log-Viewer: systemd-Journal, nginx Access/Error |
 | 🔐 | Let's Encrypt optional (certbot, opt-in) | 📈 | Zugriffsstatistiken + Ressourcen-Verlauf (RAM/Disk-Sparkline) |
@@ -297,6 +298,7 @@ sudo ./Installv2.sh
 | `UPLOAD_ZIP_PATH` | Pfad zur ZIP (bei `zip`) | — |
 | `GUNICORN_PORT` | Port (leer = automatisch ab 8000) | auto |
 | `GUNICORN_WORKERS` | Worker-Anzahl | 2×CPU+1 |
+| `SERVER_TYPE` | `wsgi` oder `asgi` (async/WebSockets/Channels) | `wsgi` |
 | `ALLOWED_HOSTS` | kommasepariert | auto |
 | `DBTYPE_SEL` / `DBMODE` | DB-Typ / lokal-remote | — |
 | `DBNAME` / `DBUSER` / `DBPASS` / `DBHOST` / `DBPORT` | DB-Zugang | — |

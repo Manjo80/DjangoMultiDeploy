@@ -785,8 +785,26 @@ BACKUP_CRON_HOUR="${BACKUP_CRON_HOUR:-2}"
 BACKUP_CRON_MIN="${BACKUP_CRON_MIN:-0}"
 echo "✅ Backup täglich um $(printf '%02d:%02d' "$BACKUP_CRON_HOUR" "$BACKUP_CRON_MIN")"
 
+# -------------------------------------------------------------------
+# Server-Typ: WSGI (Standard) oder ASGI (async / WebSockets / Django Channels)
+# -------------------------------------------------------------------
+SERVER_TYPE="$(echo "${SERVER_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+if [ "$SERVER_TYPE" != "asgi" ] && [ "$SERVER_TYPE" != "wsgi" ]; then
+  echo
+  echo "🌐 Server-Typ:"
+  echo "   1) WSGI  — Standard (synchron, Gunicorn)"
+  echo "   2) ASGI  — async, WebSockets, Django Channels (Gunicorn + Uvicorn-Worker)"
+  _read -p "Auswahl (1/2) [1]: " _ST_SEL
+  case "${_ST_SEL:-1}" in
+    2) SERVER_TYPE="asgi" ;;
+    *) SERVER_TYPE="wsgi" ;;
+  esac
+fi
+echo "✅ Server-Typ: $SERVER_TYPE"
+
   # ---- Alle Eingaben in State-Datei speichern (für Resume) ----
   cat >> "$STATE_FILE" << STATEEOF
+SERVER_TYPE="${SERVER_TYPE}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL}"
 USE_GITHUB="${USE_GITHUB}"
 SOURCE_TYPE="${SOURCE_TYPE}"
@@ -1390,7 +1408,7 @@ if [[ "$SOURCE_TYPE" == "zip" ]]; then
   echo "✅ ZIP entpackt nach $APPDIR"
 
   # Django-Modul erkennen
-  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 -name "wsgi.py" ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null)
+  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 \( -name "wsgi.py" -o -name "asgi.py" \) ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null)
   [ -z "$DJANGO_MODULE" ] && DJANGO_MODULE="core"
   echo "📌 Django-Modul erkannt: $DJANGO_MODULE"
 
@@ -1435,7 +1453,7 @@ elif [[ "$USE_GITHUB" == "true" ]]; then
   echo "✅ Repository geklont nach $APPDIR"
 
   # Django-Modul automatisch erkennen (Verzeichnis das wsgi.py enthält)
-  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 -name "wsgi.py" ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null)
+  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 \( -name "wsgi.py" -o -name "asgi.py" \) ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null)
   if [ -z "$DJANGO_MODULE" ]; then
     echo "⚠️  WARNUNG: wsgi.py nicht gefunden, verwende 'core' als Standard"
     DJANGO_MODULE="core"
@@ -1504,11 +1522,43 @@ EOF
 DJANGO_MODULE="core"
 fi
 
+# -------------------------------------------------------------------
+# ASGI/Channels-Setup (nur wenn Server-Typ = asgi oder auto-erkannt)
+# -------------------------------------------------------------------
+# Auto-Erkennung: Channels/Daphne/Uvicorn in requirements.txt → ASGI erzwingen
+if [ "$SERVER_TYPE" != "asgi" ] && [ -f "$APPDIR/requirements.txt" ] \
+   && grep -Eiq '^[[:space:]]*(channels|daphne|uvicorn)([[:space:]<>=!~]|$)' "$APPDIR/requirements.txt"; then
+  SERVER_TYPE="asgi"
+  echo "📡 ASGI erkannt (channels/daphne/uvicorn in requirements.txt) — ASGI-Modus aktiv"
+  sed -i '/^SERVER_TYPE=/d' "$STATE_FILE" 2>/dev/null || true
+  echo 'SERVER_TYPE="asgi"' >> "$STATE_FILE"
+fi
+
+if [ "$SERVER_TYPE" = "asgi" ]; then
+  echo "📦 Installiere ASGI-Server (uvicorn)..."
+  su - "$APPUSER" -s /bin/bash -c "cd '$APPDIR' && source .venv/bin/activate && pip install --no-cache-dir --prefer-binary 'uvicorn[standard]>=0.25'" \
+    && echo "✅ uvicorn installiert" || echo "⚠️  uvicorn-Installation fehlgeschlagen"
+  # asgi.py sicherstellen (im Django-Modul-Verzeichnis)
+  if [ ! -f "$APPDIR/$DJANGO_MODULE/asgi.py" ]; then
+    cat > "$APPDIR/$DJANGO_MODULE/asgi.py" <<ASGIEOF
+import os
+from django.core.asgi import get_asgi_application
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "$DJANGO_MODULE.settings")
+application = get_asgi_application()
+ASGIEOF
+    chown "$APPUSER:$APPUSER" "$APPDIR/$DJANGO_MODULE/asgi.py"
+    echo "✅ asgi.py erzeugt ($DJANGO_MODULE/asgi.py)"
+    echo "   ℹ️  Für Django Channels: eigene asgi.py mit ProtocolTypeRouter im Repo mitliefern"
+    echo "       (überschreibt diese Standard-Datei) und channels(-redis) in requirements.txt."
+  fi
+fi
+
 mark_done "project_setup"
 else
   echo "⏭️  Projekt bereits eingerichtet - überspringe"
   # Django-Modul erkennen (für nachfolgende Schritte)
-  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 -name "wsgi.py" ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null || echo "core")
+  DJANGO_MODULE=$(find "$APPDIR" -maxdepth 2 \( -name "wsgi.py" -o -name "asgi.py" \) ! -path "*/.venv/*" 2>/dev/null | head -1 | xargs -I{} dirname {} | xargs -I{} basename {} 2>/dev/null || echo "core")
 fi  # end project_setup
 
 # -------------------------------------------------------------------
@@ -1825,6 +1875,14 @@ fi  # end superuser_done
 # -------------------------------------------------------------------
 if ! is_done "systemd_done"; then
 echo "🔧 Erstelle systemd Service..."
+# ExecStart je nach Server-Typ: WSGI (Standard) oder ASGI (Uvicorn-Worker).
+_LOGDIR="/var/log/${PROJECTNAME}"
+if [ "$SERVER_TYPE" = "asgi" ]; then
+  _EXECSTART="$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.asgi:application -k uvicorn.workers.UvicornWorker --bind ${GUNICORN_BIND_HOST}:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile ${_LOGDIR}/access.log --error-logfile ${_LOGDIR}/error.log"
+  echo "   → ASGI-Modus: $DJANGO_MODULE.asgi:application (Uvicorn-Worker)"
+else
+  _EXECSTART="$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind ${GUNICORN_BIND_HOST}:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile ${_LOGDIR}/access.log --error-logfile ${_LOGDIR}/error.log"
+fi
 cat > /etc/systemd/system/${PROJECTNAME}.service <<EOF
 [Unit]
 Description=$PROJECTNAME Django Application
@@ -1835,7 +1893,7 @@ User=$APPUSER
 Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
-ExecStart=$APPDIR/.venv/bin/gunicorn $DJANGO_MODULE.wsgi:application --bind ${GUNICORN_BIND_HOST}:${GUNICORN_PORT} --workers ${GUNICORN_WORKERS} --timeout 120 --access-logfile /var/log/${PROJECTNAME}/access.log --error-logfile /var/log/${PROJECTNAME}/error.log
+ExecStart=${_EXECSTART}
 Restart=always
 RestartSec=10
 
@@ -1953,6 +2011,24 @@ _generate_selfsigned_cert
 
 # NGINX_PORT: HTTPS-Port für diese App (Gunicorn auf ${LOCAL_IP}:GUNICORN_PORT)
 _NGINX_SERVER_NAMES="$(echo "$ALLOWED_HOSTS" | tr ',' ' ')"
+
+# ASGI/WebSockets: Upgrade-Header + $connection_upgrade-Map (http-Kontext, geteilt).
+# Nur im ASGI-Modus nötig; für WSGI bleibt die Location unverändert.
+_WS_PROXY=""
+_PROXY_READ_TIMEOUT="60s"
+if [ "$SERVER_TYPE" = "asgi" ]; then
+  cat > /etc/nginx/conf.d/dmd_websocket.conf <<'WSMAPEOF'
+# DjangoMultiDeploy: WebSocket-Upgrade-Map für ASGI-Projekte
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+WSMAPEOF
+  # ANSI-C-Quoting: $http_upgrade/$connection_upgrade bleiben literal (nginx-Vars)
+  _WS_PROXY=$'\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection $connection_upgrade;'
+  _PROXY_READ_TIMEOUT="3600s"   # lange WebSocket-Verbindungen nicht abschneiden
+fi
+
 cat > /etc/nginx/sites-available/$PROJECTNAME <<EOF
 server {
     listen ${NGINX_PORT} ssl;
@@ -2044,10 +2120,10 @@ server {
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Proto https;${_WS_PROXY}
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+        proxy_read_timeout ${_PROXY_READ_TIMEOUT};
     }
 }
 EOF
@@ -2152,6 +2228,7 @@ PRIMARY_HOST="${LOCAL_IP}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-}"
 DEPLOY_KEY_ID="${DEPLOY_KEY_ID:-}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS}"
+SERVER_TYPE="${SERVER_TYPE:-wsgi}"
 LANGUAGE_CODE="${LANGUAGE_CODE}"
 TIME_ZONE="${TIME_ZONE}"
 EMAIL_HOST="${EMAIL_HOST:-}"

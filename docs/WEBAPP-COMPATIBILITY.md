@@ -244,6 +244,55 @@ Praktisch, wenn deine App eigene Deploy-Schritte braucht — kein Code-Zwang.
 
 ---
 
+## 11b. ASGI / WebSockets / Django Channels
+
+Das Tool kann das Projekt wahlweise als **WSGI** (Standard) oder **ASGI**
+betreiben (Server-Typ im Install-Formular bzw. `SERVER_TYPE=asgi`). Im
+ASGI-Modus läuft die App unter **Gunicorn mit Uvicorn-Worker**
+(`<modul>.asgi:application -k uvicorn.workers.UvicornWorker`), und nginx wird
+WebSocket-fähig konfiguriert (`Upgrade`/`Connection`-Header, langer
+`proxy_read_timeout`).
+
+Damit ASGI/Channels sauber läuft, muss dein Projekt:
+
+- eine **`asgi.py`** im Modul-Verzeichnis mitbringen (bei Channels mit
+  `ProtocolTypeRouter`/`URLRouter`). Fehlt sie, erzeugt das Tool eine
+  Standard-`asgi.py` (nur HTTP, kein WebSocket-Routing).
+- **`channels`** (und für Produktion **`channels-redis`**) in
+  `requirements.txt` listen. Steht dort `channels`/`daphne`/`uvicorn`, schaltet
+  das Tool **automatisch** in den ASGI-Modus.
+- einen **Channel Layer** konfigurieren. In-Memory funktioniert nur
+  single-worker/zum Testen; für mehrere Worker/Prozesse brauchst du **Redis**:
+
+  ```python
+  CHANNEL_LAYERS = {
+      "default": {
+          "BACKEND": "channels_redis.core.RedisChannelLayer",
+          "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
+      }
+  }
+  ```
+  Redis ist **nicht** Teil des Tools — bei Bedarf separat installieren
+  (`apt install redis-server`).
+
+> Beispiel `asgi.py` mit Channels:
+> ```python
+> import os
+> from django.core.asgi import get_asgi_application
+> os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
+> django_asgi_app = get_asgi_application()
+>
+> from channels.routing import ProtocolTypeRouter, URLRouter
+> from channels.auth import AuthMiddlewareStack
+> import myapp.routing
+> application = ProtocolTypeRouter({
+>     "http": django_asgi_app,
+>     "websocket": AuthMiddlewareStack(URLRouter(myapp.routing.websocket_urlpatterns)),
+> })
+> ```
+
+---
+
 ## 12. ZIP-Deployment (Alternative zu GitHub)
 
 Beide Strukturen werden erkannt (auch der GitHub-Button „Code → Download ZIP"):
