@@ -202,6 +202,16 @@ for config_file in "$NGINX_SITES"/*; do
   patch_config "$config_file"
 done
 
+# Weitere Härtung bestehender Installationen (TLS, static/media-Schutz,
+# sudoers, server_tokens). Läuft VOR dem nginx-Test, damit dessen Rollback
+# auch diese Änderungen an den Site-Dateien abdeckt.
+_HARDEN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harden_server.sh"
+if [ -f "$_HARDEN" ]; then
+  echo ""
+  echo "🔐 Härtung bestehender Installationen..."
+  NGINX_SITES="$NGINX_SITES" bash "$_HARDEN" || true
+fi
+
 echo ""
 echo "🧪 Teste nginx-Konfiguration..."
 if nginx -t 2>&1; then

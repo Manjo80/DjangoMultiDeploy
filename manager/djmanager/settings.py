@@ -36,6 +36,29 @@ TRUSTED_PROXIES = [
     p.strip() for p in os.getenv('TRUSTED_PROXIES', '127.0.0.1,::1').split(',') if p.strip()
 ]
 
+
+def _own_addresses():
+    """All IP addresses of this machine.
+
+    Older installs bind gunicorn to the LAN IP, so nginx reaches it *from* the
+    LAN IP instead of 127.0.0.1. A TCP peer carrying one of our own addresses
+    is always a local process, so it is as trustworthy as loopback. Without
+    this every visitor appeared as the server itself: one shared login
+    throttle for the whole world and a useless IP whitelist.
+    """
+    try:
+        import psutil
+        return sorted({
+            addr.address.split('%')[0]
+            for addrs in psutil.net_if_addrs().values() for addr in addrs
+            if addr.family.name in ('AF_INET', 'AF_INET6')
+        })
+    except Exception:
+        return []
+
+
+TRUSTED_PROXIES = sorted(set(TRUSTED_PROXIES) | set(_own_addresses()))
+
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.staticfiles',

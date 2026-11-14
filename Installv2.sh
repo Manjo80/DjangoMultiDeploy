@@ -1259,9 +1259,13 @@ if [[ "$USE_GITHUB" == "true" ]]; then
     fi
 
     echo "⚠️  SSH Port 22 nicht erreichbar — teste Port 443 (ssh.github.com)..."
-    ssh-keyscan -H -p 443 ssh.github.com >> /root/.ssh/known_hosts 2>/dev/null || true
+    # Gleicher gepinnter GitHub-Hostkey wie oben — kein blindes Vertrauen
+    # (StrictHostKeyChecking=no erlaubte einem MITM, fremden Code einzuschleusen).
+    _GH_ED25519_443="[ssh.github.com]:443 ${_GH_ED25519#github.com }"
+    grep -qF "$_GH_ED25519_443" /root/.ssh/known_hosts 2>/dev/null \
+      || echo "$_GH_ED25519_443" >> /root/.ssh/known_hosts
     SSH_TEST_443=$(timeout 15 ssh -i "$GITHUB_DEPLOY_KEY" -o IdentitiesOnly=yes \
-      -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 443 -T git@ssh.github.com 2>&1 || true)
+      -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -p 443 -T git@ssh.github.com 2>&1 || true)
 
     if echo "$SSH_TEST_443" | grep -q "successfully authenticated"; then
       echo "✅ GitHub SSH über Port 443 erreichbar - erstelle SSH-Config..."
@@ -1881,16 +1885,25 @@ else
   done
 fi
 
-su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
-  DJANGO_SUPERUSER_PASSWORD='$DJANGO_ADMIN_PASS' \
+# Benutzername/E-Mail landen in einem Shell-Befehl → nur harmlose Zeichen.
+if ! [[ "$DJANGO_ADMIN_USER" =~ ^[A-Za-z0-9_.@+-]+$ ]] \
+   || ! [[ "${DJANGO_ADMIN_EMAIL:-}" =~ ^[A-Za-z0-9_.@+-]*$ ]]; then
+  echo "❌ Ungültiger Admin-Benutzername oder E-Mail (erlaubt: A-Z a-z 0-9 _ . @ + -)"
+  exit 1
+fi
+# Passwort NIE auf der Kommandozeile (für alle lokalen Nutzer in `ps` lesbar,
+# und ein ' im Passwort wäre Shell-Injection): Übergabe per stdin.
+printf '%s\n' "$DJANGO_ADMIN_PASS" | su - "$APPUSER" -s /bin/bash -c "cd '$APPDIR' && source .venv/bin/activate && \
+  IFS= read -r DJANGO_SUPERUSER_PASSWORD && export DJANGO_SUPERUSER_PASSWORD && \
   python manage.py createsuperuser --noinput \
     --username '$DJANGO_ADMIN_USER' \
     --email '$DJANGO_ADMIN_EMAIL'" 2>/dev/null || \
-su - "$APPUSER" -s /bin/bash -c "cd $APPDIR && source .venv/bin/activate && \
+printf '%s\n' "$DJANGO_ADMIN_PASS" | su - "$APPUSER" -s /bin/bash -c "cd '$APPDIR' && source .venv/bin/activate && \
+  IFS= read -r _DMD_PW && export _DMD_PW && \
   python manage.py shell -c \
-  \"from django.contrib.auth.models import User; \
-  User.objects.filter(username='$DJANGO_ADMIN_USER').delete(); \
-  User.objects.create_superuser('$DJANGO_ADMIN_USER','$DJANGO_ADMIN_EMAIL','$DJANGO_ADMIN_PASS')\""
+  \"import os; from django.contrib.auth import get_user_model; U = get_user_model(); \
+  u, _ = U.objects.get_or_create(username='$DJANGO_ADMIN_USER', defaults={'email': '$DJANGO_ADMIN_EMAIL'}); \
+  u.is_staff = u.is_superuser = True; u.set_password(os.environ['_DMD_PW']); u.save()\""
 
 echo "✅ Django Superuser '$DJANGO_ADMIN_USER' erstellt"
 echo "   Login unter: http://${LOCAL_IP}/djadmin/"
@@ -1924,8 +1937,16 @@ Group=$APPUSER
 WorkingDirectory=$APPDIR
 EnvironmentFile=$APPDIR/.env
 ExecStart=${_EXECSTART}
+ExecReload=/bin/kill -s HUP \$MAINPID
 Restart=always
 RestartSec=10
+# Härtung: kein Rechtegewinn über setuid/sudo aus dem Web-Prozess heraus.
+# (Bewusst nur Optionen ohne Mount-Namespace — die scheitern in
+# unprivilegierten LXC-Containern mit 226/NAMESPACE.)
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
@@ -1996,8 +2017,21 @@ RATELIMIT
   echo "✅ Nginx Rate-Limit-Zonen angelegt"
 fi
 
+# Versions-Banner abschalten (Server: nginx statt nginx/1.x.y) — nur wenn
+# server_tokens noch nirgends aktiv gesetzt ist (doppelte Direktive = Fehler).
+if [ ! -f /etc/nginx/conf.d/dmd_hardening.conf ] \
+   && ! grep -rqsE '^[[:space:]]*server_tokens[[:space:]]' /etc/nginx/nginx.conf /etc/nginx/conf.d/; then
+  echo 'server_tokens off;' > /etc/nginx/conf.d/dmd_hardening.conf
+  echo "✅ Nginx server_tokens off"
+fi
+
 # Real-IP: lokaler Reverse Proxy (Zoraxy etc.) + Cloudflare
-if [ ! -f /etc/nginx/conf.d/realip.conf ]; then
+# cloudflare_realip.conf (ältere Manager-Updates) setzt real_ip_header ein
+# zweites Mal → "directive is duplicate", nginx startet nicht mehr.
+if [ -f /etc/nginx/conf.d/realip.conf ] && [ -f /etc/nginx/conf.d/cloudflare_realip.conf ]; then
+  rm -f /etc/nginx/conf.d/cloudflare_realip.conf
+fi
+if [ ! -f /etc/nginx/conf.d/realip.conf ] && [ ! -f /etc/nginx/conf.d/cloudflare_realip.conf ]; then
   cat > /etc/nginx/conf.d/realip.conf <<'REALIP'
 # Lokaler Reverse Proxy (Zoraxy, Traefik, etc.).
 # WICHTIG: NICHT blanket allen privaten Netzen vertrauen — sonst kann jeder
@@ -2068,8 +2102,11 @@ server {
     ssl_certificate     ${_SSL_CERT};
     ssl_certificate_key ${_SSL_KEY};
     ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
     ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
 
     # Per-Projekt Access- und Error-Log
     access_log /var/log/nginx/${PROJECTNAME}.access.log reqtime;
@@ -2097,14 +2134,25 @@ server {
     add_header Cross-Origin-Resource-Policy "same-origin" always;
 
     # Bekannte Angriffspfade blockieren
-    location ~* ^/(wp-admin|wp-login\.php|xmlrpc\.php|phpmyadmin|\.env|\.git|shell\.php|eval\.php) {
+    location ~* ^/(wp-admin|wp-login\.php|xmlrpc\.php|phpmyadmin|shell\.php|eval\.php) {
+        return 404;
+    }
+
+    # Punkt-Dateien (.env, .git, .htpasswd …) in JEDEM Verzeichnis sperren
+    location ~ /\.(?!well-known/) {
+        return 404;
+    }
+
+    # Backups, Dumps und Quelltext nie direkt aus static/media ausliefern
+    location ~* ^/(static|media)/(.*/)?(backups?/|[^/]+\.(sql|sqlite3?|dump|bak|old|orig|swp|env|ini|log|pyc?|sh)\$) {
         return 404;
     }
 
     # Rate Limiting nur für Login-Endpunkte (nicht ganzen Admin-Bereich)
     location ~* ^/(login|djadmin/login|accounts/login|api/auth) {
         limit_req zone=django_login burst=10 nodelay;
-        add_header Retry-After 60 always;
+        # KEIN add_header hier: ein add_header in einer location verwirft ALLE
+        # Security-Header des server-Blocks (HSTS, CSP, X-Frame-Options …).
         proxy_pass http://${GUNICORN_BIND_HOST}:${GUNICORN_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -2118,16 +2166,28 @@ server {
     # Static Files
     location /static/ {
         alias $APPDIR/staticfiles/;
-        expires 1y;
-        add_header Cache-Control "public, immutable";
+        expires 1y;   # setzt Cache-Control; kein add_header (würde Security-Header verwerfen)
         access_log off;
     }
 
-    # Media Files
+    # Media Files — ÖFFENTLICH und ohne Login erreichbar. Vertrauliche Uploads
+    # gehören NICHT nach media/, sondern hinter eine Django-View mit Login.
     location /media/ {
         alias $APPDIR/media/;
         expires 30d;
         access_log off;
+
+        # Hochgeladenes HTML/SVG/JS darf nie als aktiver Inhalt im Origin der
+        # App laufen (Stored XSS): nur als Download, mit Sandbox-CSP.
+        location ~* \.(html?|xhtml|svgz?|xml|js|mjs|css)\$ {
+            add_header Content-Disposition "attachment" always;
+            add_header Content-Security-Policy "default-src 'none'; sandbox" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-Frame-Options "DENY" always;
+            add_header Referrer-Policy "no-referrer" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+            add_header Cross-Origin-Resource-Policy "same-origin" always;
+        }
     }
 
     # Scanner-Endpunkte — längerer Timeout wegen HTTP/Port-Scans (max. 90s Django-Timeout)
@@ -2161,8 +2221,13 @@ EOF
 ln -sf /etc/nginx/sites-available/$PROJECTNAME /etc/nginx/sites-enabled/$PROJECTNAME
 # Default-Site nur entfernen wenn es die einzige aktive Site ist
 # (mehrere Projekte auf einem Server — andere Sites nicht anfassen)
-_ACTIVE_SITES=$(ls /etc/nginx/sites-enabled/ 2>/dev/null | grep -v "^default$" | wc -l)
-[ "$_ACTIVE_SITES" -eq 0 ] && rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+# Gemeint ist die unveränderte Distro-Default-Site ("Welcome to nginx!" mit
+# Versions-Banner auf Port 80). Die alte Prüfung zählte die eben verlinkte
+# Projekt-Site mit und hat die Default-Site deshalb nie entfernt.
+if [ -L /etc/nginx/sites-enabled/default ] \
+   && grep -qs 'root /var/www/html;' /etc/nginx/sites-available/default; then
+  rm -f /etc/nginx/sites-enabled/default
+fi
 
 if ! nginx -t; then
   echo "❌ FEHLER: Nginx Konfiguration ungültig!"
@@ -2300,9 +2365,17 @@ if ! is_done "scripts_done"; then
 if command -v sudo >/dev/null 2>&1 && [ -d /etc/sudoers.d ]; then
   echo "🔐 Konfiguriere sudoers für $APPUSER..."
   cat > /etc/sudoers.d/${PROJECTNAME}-service <<EOF
-$APPUSER ALL=NOPASSWD: /bin/systemctl restart $PROJECTNAME, /bin/systemctl status $PROJECTNAME, /bin/systemctl reload $PROJECTNAME, /bin/journalctl -u $PROJECTNAME*
+$APPUSER ALL=(root) NOPASSWD: /bin/systemctl restart $PROJECTNAME, /bin/systemctl reload $PROJECTNAME
 EOF
   chmod 440 /etc/sudoers.d/${PROJECTNAME}-service
+  # "systemctl status" und "journalctl" öffnen als root den Pager less — daraus
+  # lässt sich mit "!sh" eine Root-Shell starten. Beide brauchen kein sudo:
+  # Lesezugriff auf das Journal kommt über die Gruppe systemd-journal.
+  if ! visudo -cf /etc/sudoers.d/${PROJECTNAME}-service >/dev/null 2>&1; then
+    rm -f /etc/sudoers.d/${PROJECTNAME}-service
+    echo "⚠️  sudoers-Eintrag ungültig — entfernt"
+  fi
+  getent group systemd-journal >/dev/null 2>&1 && usermod -aG systemd-journal "$APPUSER" || true
 else
   echo "ℹ️  sudo nicht verfügbar (LXC?) — sudoers-Eintrag übersprungen"
 fi
@@ -2417,6 +2490,8 @@ DBTYPE="$DBTYPE"
 DBNAME="$DBNAME"
 BACKUP_DIR="$BACKUP_DIR"
 TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
+# DB-Dumps und .env-Kopien enthalten Geheimnisse → nur für root lesbar anlegen
+umask 077
 
 echo "📦 Backup startet für \$PROJECT..."
 
@@ -2440,7 +2515,11 @@ tar --exclude='.env' --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc'
 chmod 600 "\$BACKUP_DIR/project_\${TIMESTAMP}.tar.gz" 2>/dev/null || true
 
 # Maximal 5 Backups behalten (älteste löschen)
-ls -t "\$BACKUP_DIR"/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+# Gilt für JEDE Backup-Art: früher blieben DB-Dumps und .env-Kopien
+# (Klartext-Geheimnisse) für immer liegen.
+for _pat in 'project_*.tar.gz' 'db_*' 'env_*.backup'; do
+  ls -t "\$BACKUP_DIR"/\$_pat 2>/dev/null | tail -n +6 | xargs -r rm -f
+done
 
 echo "✅ Backup fertig in \$BACKUP_DIR"
 BACKUPEOF
@@ -2924,7 +3003,7 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
   _MANAGER_DOMAIN="$(echo "${_MANAGER_DOMAIN:-}" | tr ' ' ',' | tr ',' '\n' | grep -v '^$' | sort -u | paste -sd, -)"
 
   echo "📁 Manager-Verzeichnis:  $_MANAGER_DIR"
-  echo "🔌 Manager-Gunicorn:     ${_MGR_DEFAULT_IP}:$_MANAGER_PORT"
+  echo "🔌 Manager-Gunicorn:     127.0.0.1:$_MANAGER_PORT (nur lokal, hinter nginx)"
   echo "🔒 nginx HTTPS:          https://${_MGR_DEFAULT_IP}:443/"
   echo "👤 Manager-User:         $_MANAGER_USER"
   [ -n "${_MANAGER_DOMAIN:-}" ] && echo "🌐 Manager-Domain:       ${_MANAGER_DOMAIN}"
@@ -3037,8 +3116,14 @@ if [ "${INSTALL_MANAGER:-false}" = "true" ]; then
     [ "$_ADMIN_PASS" = "$_ADMIN_PASS2" ] && break
     echo "❌ Passwörter stimmen nicht überein."
   done
-  "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" shell -c \
-    "from django.contrib.auth.models import User; User.objects.filter(username='${_ADMIN_USER}').delete(); User.objects.create_superuser('${_ADMIN_USER}', '', '${_ADMIN_PASS}')"
+  if ! [[ "$_ADMIN_USER" =~ ^[A-Za-z0-9_.@+-]+$ ]]; then
+    echo "❌ Ungültiger Admin-Benutzername (erlaubt: A-Z a-z 0-9 _ . @ + -)"
+    exit 1
+  fi
+  # Passwort per Umgebungsvariable des Kindprozesses, nicht als Argument
+  # (Argumente sind für alle lokalen Nutzer in `ps` sichtbar).
+  _DMD_PW="$_ADMIN_PASS" "$_MANAGER_DIR/venv/bin/python" "$_MANAGER_DIR/manage.py" shell -c \
+    "import os; from django.contrib.auth.models import User; User.objects.filter(username='${_ADMIN_USER}').delete(); User.objects.create_superuser('${_ADMIN_USER}', '', os.environ['_DMD_PW'])"
   echo "✅ Admin-Benutzer '${_ADMIN_USER}' angelegt (is_staff=True)"
 
   # Statische Dateien
@@ -3172,7 +3257,11 @@ if [ -f "/etc/nginx/sites-available/djmanager" ] && [ -f "\$_ENV_FILE_NG" ]; the
   _NG_DOMAIN="\$(grep '^MANAGER_DOMAIN=' "\$_ENV_FILE_NG" | cut -d= -f2- | tr -d '\"')"
   _NG_PORT="\$(grep '^MANAGER_PORT='    "\$_ENV_FILE_NG" | cut -d= -f2- | tr -d '\"')"
   _NG_PORT="\${_NG_PORT:-8888}"
-  _NG_IP="\$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print \$7;exit}')"
+  # Upstream = die Adresse, auf der Gunicorn laut Service-Unit wirklich lauscht
+  # (neu: 127.0.0.1; ältere Installationen: LAN-IP). 0.0.0.0 → Loopback.
+  _NG_IP="\$(grep -oE -- '--bind[[:space:]]+[0-9.]+' /etc/systemd/system/djmanager.service 2>/dev/null | awk '{print \$2}' | head -1)"
+  [ "\${_NG_IP:-}" = "0.0.0.0" ] && _NG_IP="127.0.0.1"
+  [ -z "\${_NG_IP:-}" ] && _NG_IP="\$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print \$7;exit}')"
   [ -z "\${_NG_IP:-}" ] && _NG_IP="\$(hostname -I 2>/dev/null | awk '{print \$1}')"
   _NG_SN="\$(echo "\${_NG_DOMAIN:-_}" | tr ',' ' ')"
   {
@@ -3195,8 +3284,11 @@ if [ -f "/etc/nginx/sites-available/djmanager" ] && [ -f "\$_ENV_FILE_NG" ]; the
     printf '    ssl_certificate     ${_SSL_CERT};\n'
     printf '    ssl_certificate_key ${_SSL_KEY};\n'
     printf '    ssl_protocols       TLSv1.2 TLSv1.3;\n'
-    printf '    ssl_ciphers         HIGH:!aNULL:!MD5;\n'
+    printf '    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;\n'
+    printf '    ssl_prefer_server_ciphers off;\n'
     printf '    ssl_session_cache   shared:SSL:10m;\n'
+    printf '    ssl_session_timeout 1d;\n'
+    printf '    ssl_session_tickets off;\n'
     printf '\n'
     printf '    # Security headers are set by Django'\''s SecurityHeadersMiddleware.\n'
     printf '    # Setting them here too would cause duplicate headers (ZAP/scanner warning).\n'
@@ -3280,7 +3372,12 @@ systemctl restart "\$SERVICE"
 sleep 2
 systemctl is-active --quiet "\$SERVICE" && echo "✅ Manager läuft" || echo "❌ Manager-Start fehlgeschlagen"
 
-# Cloudflare Real-IP Config aktuell halten (für bestehende Installationen)
+# Cloudflare Real-IP Config aktuell halten (für bestehende Installationen).
+# realip.conf (Projekt-Installation) enthält dieselben Netze bereits; eine
+# zweite Datei mit real_ip_header macht die GESAMTE nginx-Config ungültig.
+if [ -f /etc/nginx/conf.d/realip.conf ]; then
+  rm -f /etc/nginx/conf.d/cloudflare_realip.conf
+else
 cat > /etc/nginx/conf.d/cloudflare_realip.conf <<'CFREALIP'
 # Cloudflare IPv4
 set_real_ip_from 103.21.244.0/22;
@@ -3310,6 +3407,7 @@ set_real_ip_from 2c0f:f248::/32;
 real_ip_header CF-Connecting-IP;
 real_ip_recursive on;
 CFREALIP
+fi
 echo "✅ Cloudflare Real-IP-Config aktualisiert"
 
 # nginx neu laden (statische Dateien könnten sich geändert haben)
@@ -3344,7 +3442,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${_MANAGER_DIR}
-ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind ${_MGR_DEFAULT_IP}:${_MANAGER_PORT} --workers 1 --timeout 360
+ExecStart=${_MANAGER_DIR}/venv/bin/gunicorn djmanager.wsgi:application --bind 127.0.0.1:${_MANAGER_PORT} --workers 1 --timeout 360
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
@@ -3355,10 +3453,10 @@ MANSERVEOF
 
   systemctl daemon-reload
   systemctl enable --now djmanager
-  echo "✅ Manager-Service gestartet (${_MGR_DEFAULT_IP}:${_MANAGER_PORT} + nginx Port 80)"
+  echo "✅ Manager-Service gestartet (127.0.0.1:${_MANAGER_PORT}, erreichbar nur über nginx)"
 
   # nginx Reverse Proxy für Manager
-  # Manager ist über nginx (Port 80) und direkt über Port 8888 erreichbar
+  # Manager ist NUR über nginx (HTTPS) erreichbar — Gunicorn lauscht auf 127.0.0.1
   echo "🌐 Erstelle nginx-Konfiguration für Manager..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 
@@ -3410,8 +3508,11 @@ server {
     ssl_certificate     ${_SSL_CERT};
     ssl_certificate_key ${_SSL_KEY};
     ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
     ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
 
     # Security Headers
     add_header X-Frame-Options "DENY" always;
@@ -3437,9 +3538,9 @@ server {
         access_log off;
     }
 
-    # Manager-App (Gunicorn auf ${_MGR_DEFAULT_IP}:PORT)
+    # Manager-App (Gunicorn nur auf 127.0.0.1 — läuft als root, nie direkt erreichbar)
     location / {
-        proxy_pass http://${_MGR_DEFAULT_IP}:${_MANAGER_PORT};
+        proxy_pass http://127.0.0.1:${_MANAGER_PORT};
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -3507,7 +3608,7 @@ MGNGINXEOF
   echo "║              Manager erfolgreich installiert ✅                    ║"
   echo "╚════════════════════════════════════════════════════════════════════╝"
   echo "🔒 Manager-URL:    https://${_MGR_IP}/"
-  echo "   (nginx Port 443/SSL → ${_MGR_DEFAULT_IP}:${_MANAGER_PORT})"
+  echo "   (nginx Port 443/SSL → 127.0.0.1:${_MANAGER_PORT})"
   echo "   HTTP Port 80 leitet automatisch auf HTTPS weiter."
   echo
   echo "🔀 Externer Reverse Proxy → Ziel:"
