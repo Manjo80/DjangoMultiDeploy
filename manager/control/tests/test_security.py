@@ -36,6 +36,8 @@ class InstallPollTraversalTests(TestCase):
 
     def setUp(self):
         self.user = User.objects.create_user('bob', password='Corr3ct-Horse-99')
+        self.user.userprofile.role = UserProfile.ROLE_ADMIN
+        self.user.userprofile.save()
         self.client.force_login(self.user)
 
     def test_traversal_name_rejected(self):
