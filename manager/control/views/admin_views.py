@@ -500,7 +500,7 @@ def database_admin_view(request):
 # ── Manager Service Control ───────────────────────────────────────────────────
 
 @require_POST
-@operator_required
+@admin_required
 def manager_action(request):
     """Start / stop / restart the djmanager service itself."""
     action = request.POST.get('action', '')

@@ -12,6 +12,49 @@ _BASH = shutil.which('bash') or '/bin/bash'
 from django.conf import settings
 
 from .registry import get_project, _parse_conf
+from .validators import is_valid_linux_user
+
+# Minimal, secret-free environment for commands run inside a project.
+_CLEAN_ENV = 'env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8'
+
+# Bootstrap for `manage.py check --deploy`: loads the project's .env itself so
+# no secret ever appears on a command line (visible in `ps`).
+_DEPLOY_CHECK_BOOTSTRAP = (
+    "import os,sys,runpy\n"
+    "if os.path.exists('.env'):\n"
+    "    for line in open('.env'):\n"
+    "        line=line.strip()\n"
+    "        if line and not line.startswith('#') and '=' in line:\n"
+    "            k,_,v=line.partition('=')\n"
+    "            os.environ[k.strip()]=v.strip().strip('\"\\'')\n"
+    "sys.path.insert(0, os.getcwd())\n"
+    "sys.argv=['manage.py','check','--deploy']\n"
+    "runpy.run_path('manage.py', run_name='__main__')\n"
+)
+
+
+class ProjectUserError(Exception):
+    """The project has no usable unprivileged account to run its code as."""
+
+
+def _run_as_project_user(project, command, timeout):
+    """Run *command* (shell string) in the project dir as its app user.
+
+    The manager runs as root, while /srv/<project> (code, .venv) is writable
+    by the app user. Executing anything from there as root would hand root to
+    whoever controls the project code — so drop privileges and the manager's
+    environment (which holds its SECRET_KEY) first.
+    """
+    conf = get_project(project) or {}
+    appuser = (conf.get('APPUSER') or '').strip()
+    if not is_valid_linux_user(appuser) or appuser == 'root':
+        raise ProjectUserError('Kein gültiger App-Benutzer für dieses Projekt konfiguriert')
+    appdir = conf.get('APPDIR') or f'/srv/{project}'
+    full_cmd = f'cd {shlex.quote(appdir)} && exec {_CLEAN_ENV} {command}'
+    return subprocess.run(
+        ['su', appuser, '-s', '/bin/bash', '-c', full_cmd],
+        capture_output=True, text=True, timeout=timeout,
+    )
 
 
 def run_pip_audit(project):
@@ -24,9 +67,10 @@ def run_pip_audit(project):
         return {'ok': False, 'vulnerabilities': [], 'error': 'venv nicht gefunden'}
 
     try:
-        result = subprocess.run(
-            [venv_python, '-m', 'pip_audit', '--format=json', '--progress-spinner=off'],
-            capture_output=True, text=True, timeout=120,
+        result = _run_as_project_user(
+            project,
+            f'{shlex.quote(venv_python)} -m pip_audit --format=json --progress-spinner=off',
+            timeout=120,
         )
         # pip_audit exits with 1 when vulnerabilities are found — not an error
         output = result.stdout.strip()
@@ -82,17 +126,21 @@ def run_bandit(project):
     # Install bandit into the project venv if missing
     bandit_bin = f'{appdir}/.venv/bin/bandit'
     if not os.path.exists(bandit_bin):
-        subprocess.run([venv_pip, 'install', '--quiet', 'bandit'],
-                       capture_output=True, timeout=60)
+        try:
+            _run_as_project_user(
+                project, f'{shlex.quote(venv_pip)} install --quiet bandit', timeout=60)
+        except (ProjectUserError, subprocess.TimeoutExpired) as e:
+            return {'ok': False, 'findings': [], 'metrics': {}, 'error': str(e)}
 
     if not os.path.exists(bandit_bin):
         return {'ok': False, 'findings': [], 'metrics': {}, 'error': 'bandit konnte nicht installiert werden'}
 
     try:
-        result = subprocess.run(
-            [bandit_bin, '-r', appdir, '--exclude', f'{appdir}/.venv',
-             '-f', 'json', '-q'],
-            capture_output=True, text=True, timeout=120,
+        result = _run_as_project_user(
+            project,
+            f'{shlex.quote(bandit_bin)} -r {shlex.quote(appdir)} '
+            f'--exclude {shlex.quote(appdir + "/.venv")} -f json -q',
+            timeout=120,
         )
         output = result.stdout.strip()
         if not output:
@@ -136,12 +184,9 @@ def run_django_deploy_check(project):
     env_file = f'/srv/{project}/.env'
 
     try:
-        env = os.environ.copy()
-        # Remove manager's DJANGO_SETTINGS_MODULE so manage.py sets its own
-        env.pop('DJANGO_SETTINGS_MODULE', None)
-        env['PYTHONPATH'] = f'/srv/{project}'
-        # Load env from .env file — direct assignment so project values always win
-        # over anything the manager process may have inherited (e.g. DEBUG, MODE)
+        # Parsed here only to display MODE; the check itself runs as the app
+        # user with a clean environment and loads .env on its own.
+        env = {}
         if os.path.exists(env_file):
             with open(env_file) as f:
                 for line in f:
@@ -150,10 +195,10 @@ def run_django_deploy_check(project):
                         k, _, v = line.partition('=')
                         env[k.strip()] = v.strip().strip('"\'')  # overwrite, not setdefault
 
-        result = subprocess.run(
-            [venv_python, manage_py, 'check', '--deploy'],
-            capture_output=True, text=True, timeout=30,
-            cwd=f'/srv/{project}', env=env,
+        result = _run_as_project_user(
+            project,
+            f'{shlex.quote(venv_python)} -c {shlex.quote(_DEPLOY_CHECK_BOOTSTRAP)}',
+            timeout=30,
         )
         mode_used = env.get('MODE', '?')
         output = (result.stdout + result.stderr).strip()

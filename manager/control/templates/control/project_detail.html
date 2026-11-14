@@ -1087,13 +1087,13 @@ async function loadStats() {
     // ── Top URLs ──────────────────────────────────────────────────────────
     document.querySelector('#top-urls tbody').innerHTML =
       (d.nginx.top_urls || []).map(([url, cnt]) =>
-        `<tr><td class="font-monospace small text-truncate" style="max-width:220px" title="${url}">${url}</td><td class="text-end">${cnt}</td></tr>`
+        `<tr><td class="font-monospace small text-truncate" style="max-width:220px" title="${escHtml(url)}">${escHtml(url)}</td><td class="text-end">${escHtml(cnt)}</td></tr>`
       ).join('') || '<tr><td colspan="2" class="text-muted small">Keine Daten</td></tr>';
 
     // ── Top IPs ───────────────────────────────────────────────────────────
     document.querySelector('#top-ips tbody').innerHTML =
       (d.nginx.top_ips || []).map(([ip, cnt]) =>
-        `<tr><td class="font-monospace small">${ip}</td><td class="text-end">${cnt}</td></tr>`
+        `<tr><td class="font-monospace small">${escHtml(ip)}</td><td class="text-end">${escHtml(cnt)}</td></tr>`
       ).join('') || '<tr><td colspan="2" class="text-muted small">Keine Daten</td></tr>';
 
     // ── Service events ────────────────────────────────────────────────────

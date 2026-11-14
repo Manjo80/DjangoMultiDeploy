@@ -30,15 +30,16 @@ def get_client_ip(request):
     remote = (request.META.get('REMOTE_ADDR') or '').strip()
     trusted = getattr(settings, 'TRUSTED_PROXIES', ['127.0.0.1', '::1'])
     if remote in trusted:
-        ip = (
-            request.META.get('HTTP_CF_CONNECTING_IP')
-            or request.META.get('HTTP_X_REAL_IP')
-            or request.META.get('HTTP_X_FORWARDED_FOR', '')
-            or remote
-        )
-        if ip and ',' in ip:
-            ip = ip.split(',')[0].strip()
-        return ip.strip()
+        # Only X-Real-IP: our nginx always overwrites it with $remote_addr
+        # (already resolved through realip for Cloudflare / listed proxies).
+        # CF-Connecting-IP and the first X-Forwarded-For entry are passed
+        # through from the client unchanged and could be forged to bypass the
+        # IP whitelist and the per-IP login throttle.
+        ip = (request.META.get('HTTP_X_REAL_IP') or '').strip()
+        try:
+            return str(ipaddress.ip_address(ip))
+        except ValueError:
+            return remote
     return remote
 
 

@@ -143,6 +143,11 @@ def two_factor_setup(request):
     from io import BytesIO
 
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    # /2fa/setup/ is exempt from the 2FA gate (first enrolment). Once TOTP is
+    # active, a session that has not passed the second factor must not be
+    # able to disable or re-enrol it.
+    if profile.totp_enabled and not request.session.get('2fa_verified'):
+        return redirect('two_factor_verify')
     error = None
     backup_codes = None
     tmp_secret = None
@@ -240,6 +245,14 @@ def two_factor_verify(request):
         except Exception:
             return redirect('login')
 
+        # Second factor is rate-limited like the password (5 tries / 15 min);
+        # otherwise a 6-digit code can simply be brute-forced.
+        if profile.is_locked():
+            request.session.pop('2fa_user_id', None)
+            AuditLog.log(request, '2FA blockiert (Rate Limit)', success=False,
+                         details=verify_user.username)
+            return redirect('login')
+
         # Fail closed: never verify against a disabled or empty TOTP config.
         secret = profile.get_totp_secret()
         if not profile.totp_enabled or (not use_backup and not secret):
@@ -254,6 +267,7 @@ def two_factor_verify(request):
         )
 
         if verified:
+            profile.record_successful_login()
             request.session['2fa_verified'] = True
             if user_id:
                 login(request, verify_user,
@@ -264,6 +278,7 @@ def two_factor_verify(request):
             return redirect(next_url)
 
         error = 'Ungültiger Code. Bitte erneut versuchen.'
+        profile.record_failed_login()
         AuditLog.log(request, '2FA fehlgeschlagen', success=False,
                      details=verify_user.username if user_id else '')
 

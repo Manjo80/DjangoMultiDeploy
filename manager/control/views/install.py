@@ -243,7 +243,7 @@ def install_run(request):
     return redirect('install_progress', project=project, run_id=run_id)
 
 
-@login_required
+@admin_required
 def install_progress(request, project, run_id):
     log_name = f'{project}_{run_id}.log'
     return render(request, 'control/install_progress.html', {
@@ -253,7 +253,7 @@ def install_progress(request, project, run_id):
     })
 
 
-@login_required
+@admin_required
 def install_poll(request, log_name):
     # Nur Dateinamen im erwarteten Format <projekt>_<run_id>.log zulassen —
     # verhindert Zugriff auf beliebige Dateien über manipulierte Namen.
@@ -429,7 +429,7 @@ def install_kill(request, project, run_id):
 # SSH Key
 # ──────────────────────────────────────────────────────────────────────────────
 
-@login_required
+@admin_required
 def ssh_key_display(request, project):
     key_content, error = get_ssh_key(project)
     conf = get_project(project)
@@ -441,7 +441,7 @@ def ssh_key_display(request, project):
     })
 
 
-@login_required
+@admin_required
 def ssh_key_download(request, project):
     key_content, error = get_ssh_key(project)
     if error:
@@ -452,7 +452,7 @@ def ssh_key_download(request, project):
 
 
 @require_POST
-@login_required
+@admin_required
 def ssh_key_confirm(request, project):
     confirm_file = os.path.join(_INSTALL_DIR, f'{project}_github_confirm')
     os.makedirs(_INSTALL_DIR, exist_ok=True)

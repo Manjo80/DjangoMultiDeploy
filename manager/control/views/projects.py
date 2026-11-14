@@ -48,7 +48,7 @@ from ..utils import (
 )
 from ._helpers import (
     admin_required, operator_required, _get_role,
-    _check_project_access, _build_extern_scan_hosts, is_admin,
+    _check_project_access, _build_extern_scan_hosts, is_admin, _is_ip_address,
 )
 
 logger = logging.getLogger('djmanager.views.projects')
@@ -103,6 +103,26 @@ def project_detail(request, name):
     })
 
 
+def _is_safe_allowed_host(host):
+    """True for a hostname, '.domain' suffix, 'localhost', '*' or an IP address."""
+    if host in ('*', 'localhost'):
+        return True
+    if _is_ip_address(host):
+        return True
+    return is_valid_hostname(host[1:] if host.startswith('.') else host)
+
+
+def _may_run_active_scan(user):
+    """nuclei / ZAP send attack traffic — not for read-only viewers."""
+    return _get_role(user) in (UserProfile.ROLE_ADMIN, UserProfile.ROLE_OPERATOR)
+
+
+def _scan_target_allowed(name, hostname):
+    """Scans may only hit hosts that belong to the project (no SSRF / third parties)."""
+    return hostname in _build_extern_scan_hosts(
+        get_nginx_server_names(name), get_allowed_hosts(name))
+
+
 @require_POST
 @operator_required
 def project_allowed_hosts(request, name):
@@ -123,6 +143,12 @@ def project_allowed_hosts(request, name):
     elif action == 'save':
         raw     = request.POST.get('hosts', '')
         current = [h.strip() for h in raw.split(',') if h.strip()]
+
+    # The list is written verbatim into the nginx server_name directive, .env
+    # and the registry — anything but plain hosts would be config injection.
+    bad = [h for h in current if not _is_safe_allowed_host(h)]
+    if bad:
+        return JsonResponse({'ok': False, 'error': f'Ungültiger Host: {bad[0][:80]}'})
 
     ok, msg = update_allowed_hosts(name, current)
     AuditLog.log(request, f'ALLOWED_HOSTS geändert', project=name,
@@ -346,6 +372,8 @@ def project_http_scan(request, name):
     else:
         # target is a hostname or IP — use the project's configured nginx port
         hostname = target.lower()  # normalise: DNS is case-insensitive
+        if not _scan_target_allowed(name, hostname):
+            return JsonResponse({'error': 'Scan-Ziel gehört nicht zu diesem Projekt'}, status=400)
         # IPv6 addresses must be wrapped in brackets in URLs
         try:
             addr = ipaddress.ip_address(hostname)
@@ -434,6 +462,10 @@ def project_nuclei_scan(request, name):
     hostname = request.GET.get('target', '').strip().lower()
     if not hostname:
         return JsonResponse({'error': 'Kein Scan-Ziel angegeben'}, status=400)
+    if not _may_run_active_scan(request.user):
+        return JsonResponse({'error': 'Nur Operatoren/Admins'}, status=403)
+    if not _scan_target_allowed(name, hostname):
+        return JsonResponse({'error': 'Scan-Ziel gehört nicht zu diesem Projekt'}, status=400)
 
     try:
         addr = ipaddress.ip_address(hostname)
@@ -518,6 +550,10 @@ def project_zap_scan(request, name):
         scan_type = 'baseline'
     if not hostname:
         return JsonResponse({'error': 'Kein Scan-Ziel angegeben'}, status=400)
+    if not _may_run_active_scan(request.user):
+        return JsonResponse({'error': 'Nur Operatoren/Admins'}, status=403)
+    if not _scan_target_allowed(name, hostname):
+        return JsonResponse({'error': 'Scan-Ziel gehört nicht zu diesem Projekt'}, status=400)
 
     try:
         addr = ipaddress.ip_address(hostname)
@@ -577,7 +613,10 @@ def log_viewer(request, name):
             raise Http404(f'Projekt "{name}" nicht gefunden.')
 
     log_type = request.GET.get('type', 'journal')
-    lines    = int(request.GET.get('lines', 200))
+    try:
+        lines = max(1, min(int(request.GET.get('lines', 200)), 5000))
+    except (TypeError, ValueError):
+        lines = 200
 
     if log_type == 'journal':
         logs = get_journal_logs(name, lines)
@@ -988,7 +1027,8 @@ def project_clone_run(request, name):
         zip_path = os.path.join(tempfile.gettempdir(), f'djmanager_clone_{staging_name}.zip')
         try:
             import zipfile
-            excludes = {'.venv', 'venv', '__pycache__', 'staticfiles', 'media', '.git'}
+            excludes = {'.venv', 'venv', '__pycache__', 'staticfiles', 'media',
+                        'private_media', 'backups', '.git'}
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 base = Path(appdir)
                 for fpath in base.rglob('*'):
